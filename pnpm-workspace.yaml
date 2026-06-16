@@ -1,0 +1,4 @@
+# pnpm 11+ moved per-project settings here from package.json's "pnpm" field.
+# Allow esbuild's postinstall (downloads / verifies its native binary).
+allowBuilds:
+  esbuild: true
