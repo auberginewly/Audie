@@ -1,0 +1,20 @@
+[package]
+name = "audie"
+version = "0.0.0"
+description = "Cross-platform voice input tool — typeless open-source alternative"
+authors = ["aubergine"]
+edition = "2021"
+
+[lib]
+# `_lib` suffix avoids a name collision with the bin target on Windows.
+# See https://github.com/rust-lang/cargo/issues/8519
+name = "audie_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

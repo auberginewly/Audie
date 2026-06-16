@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: nord --default;
+  /* Keep the kit tight — early UI is disposable, no need to ship every theme. */
+}
