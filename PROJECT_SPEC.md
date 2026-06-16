@@ -26,7 +26,7 @@
 ### 1.2 典型用户旅程
 
 1. 用户在任意 App 的输入框（VS Code / 微信 / Notion / 浏览器地址栏）光标停住。
-2. 按下全局快捷键（默认 `Alt+Space`）→ 屏幕底部胶囊浮现，开始录音。
+2. 按下全局快捷键（默认 `Ctrl+Shift+Space`）→ 屏幕底部胶囊浮现，开始录音。
 3. 边说边在胶囊里看到实时字幕（partial transcript，P2 才有；P0 只显示「录音中…」）。
 4. 松开快捷键 → 胶囊变「处理中」→ 转写 + 润色 → 文字注入到光标处 → 胶囊淡出。
 5. 用户继续做他原来的事，整个过程 < 1.5s（P2 目标），手不离主键盘区。
@@ -67,7 +67,7 @@
 
 | 阶段 | 一句话目标 | 验收信号 |
 |---|---|---|
-| **P0** | 跑通核心链路（复刻 Handy 最小集） | 按 `Alt+Space` 说话，松手后正确文字出现在任意输入框 |
+| **P0** | 跑通核心链路（复刻 Handy 最小集） | 按 `Ctrl+Shift+Space` 说话，松手后正确文字出现在任意输入框 |
 | **P1** | 变成 typeless（provider 抽象 + AI 润色 + BYOK） | 填自己的 key，说一段带口水话的话，输出是润色过的干净文本 |
 | **P2** | 真流式上屏（差异化核心） | 感知延迟从松手后 2-5s 降到 ≈1s，且与说话时长无关 |
 | **P3** | 体验打磨（词典、上下文 prompt、onboarding、fn 键） | 不看 README 5 分钟能跑通；vibe coding 场景下转写偏代码风格 |
@@ -308,7 +308,7 @@ trait LlmProvider {
 - 上下文感知 prompt（抄 Voxt App Branch：IDE 偏代码、聊天偏口语）—— **vibe coding 场景的杀招**
 - 5 分钟 onboarding（默认内置免费引擎，不填 key 也能用）
 - 权限引导（Microphone / Accessibility / Input Monitoring 顺畅授权流）
-- `fn` 键支持（换 CGEventTap 方案，`tauri-plugin-macos-input-monitor`）
+- **单键触发方案（fn / 双击 Option）—— 用户最期待的触发方式**，需 CGEventTap + Accessibility + Input Monitoring；P0 用组合键过渡，P3 一次性给出 typeless 那种"按一下就出来"的丝滑感
 - Overlay 动效精修（这时候才该出设计稿）
 
 ### P4 — 跨平台 + 分发
