@@ -1,4 +1,91 @@
-// TODO P0.1 — `trait Platform` (register_hotkey / inject_text / store_secret / read_secret)
-// + factory that picks macos / windows impl. PROJECT_SPEC.md §3.4 / §6.3.
+// Platform abstraction (PROJECT_SPEC.md §3.4 / §6.3).
 //
-// Strict rule: all `#[cfg(target_os)]` lives behind this trait — never in managers/.
+// All `#[cfg(target_os)]` lives behind this trait. Managers MUST go through
+// `current_platform()` — they must never import macos.rs / windows.rs directly.
+//
+// P0.1 only uses `register_hotkey` / `unregister_all_hotkeys`. inject_text and
+// keychain methods are stubbed until P0.5 / P1.
+
+use std::{collections::HashMap, sync::Arc};
+
+use parking_lot::Mutex;
+use tauri::AppHandle;
+use tauri_plugin_global_shortcut::Shortcut;
+
+use crate::error::AppResult;
+
+/// Callback fired on hotkey press / release.
+pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyEvent {
+    Pressed,
+    Released,
+}
+
+/// Shared dispatch table — the global-shortcut plugin's single `with_handler`
+/// closure dispatches into this registry by looking up the parsed `Shortcut`.
+/// `MacosPlatform::register_hotkey` inserts; the plugin handler reads.
+#[derive(Default)]
+pub struct HotkeyRegistry {
+    callbacks: Mutex<HashMap<Shortcut, HotkeyCallback>>,
+}
+
+impl HotkeyRegistry {
+    pub fn insert(&self, shortcut: Shortcut, callback: HotkeyCallback) {
+        self.callbacks.lock().insert(shortcut, callback);
+    }
+
+    pub fn dispatch(&self, shortcut: &Shortcut, event: HotkeyEvent) {
+        if let Some(callback) = self.callbacks.lock().get(shortcut) {
+            callback(event);
+        }
+    }
+
+    #[allow(dead_code)] // Used by Platform::unregister_all_hotkeys in later slices.
+    pub fn clear(&self) {
+        self.callbacks.lock().clear();
+    }
+}
+
+#[allow(dead_code)] // Trait surface defined whole per SPEC §3.4; later slices fill in callers.
+pub trait Platform: Send + Sync {
+    /// Register a global hotkey combo (e.g. "Ctrl+Shift+Space"). The callback
+    /// fires on both press and release so press-to-talk works.
+    fn register_hotkey(
+        &self,
+        app: &AppHandle,
+        combo: &str,
+        callback: HotkeyCallback,
+    ) -> AppResult<()>;
+
+    fn unregister_all_hotkeys(&self, app: &AppHandle) -> AppResult<()>;
+
+    /// P0.5 — clipboard-based text injection at the current caret.
+    fn inject_text(&self, text: &str) -> AppResult<()>;
+
+    /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
+    fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
+    fn read_secret(&self, key: &str) -> AppResult<String>;
+}
+
+#[cfg(target_os = "macos")]
+pub fn current_platform(registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
+    Box::new(macos::MacosPlatform::new(registry))
+}
+
+#[cfg(target_os = "windows")]
+pub fn current_platform(_registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
+    Box::new(windows::WindowsPlatform::new())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn current_platform(_registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
+    panic!("unsupported platform — Audie targets macOS (P0–P3) and Windows (P4).")
+}
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+#[cfg(target_os = "windows")]
+pub mod windows;

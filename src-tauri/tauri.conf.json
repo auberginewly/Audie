@@ -10,12 +10,30 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
         "title": "Audie",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "url": "index.html"
+      },
+      {
+        "label": "overlay",
+        "title": "Audie Overlay",
+        "url": "overlay.html",
+        "width": 320,
+        "height": 56,
+        "visible": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "focus": false,
+        "shadow": false,
+        "acceptFirstMouse": false
       }
     ],
     "security": {
