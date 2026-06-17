@@ -29,7 +29,7 @@ export function HotkeySettings() {
 
   const onChange = async (next: Hotkey) => {
     try {
-      const raw = await invoke("update_settings", { hotkey: next });
+      const raw = await invoke("update_settings", { patch: { hotkey: next } });
       const parsed = SettingsSchema.safeParse(raw);
       if (parsed.success) setHotkey(parsed.data.hotkey);
     } catch (err) {

@@ -6,10 +6,28 @@ import { z } from "zod";
 
 export const SettingsSchema = z.object({
   hotkey: z.enum(["Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"]),
+  asr_provider: z.enum(["groq", "openai", "whisper_cpp"]),
+  llm_provider: z.enum(["openai_compatible"]),
+  enhance_enabled: z.boolean(),
+  enhance_prompt: z.string().min(1),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
 export type Hotkey = Settings["hotkey"];
+export type AsrProviderId = Settings["asr_provider"];
+export type LlmProviderId = Settings["llm_provider"];
+
+export const ProviderMetadataSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.enum(["asr", "llm"]),
+  engine: z.string(),
+  default_model: z.string().nullable(),
+  requires_key: z.boolean(),
+  tags: z.array(z.string()),
+});
+
+export type ProviderMetadata = z.infer<typeof ProviderMetadataSchema>;
 
 // Single source for the dropdown — derived from the schema so they can't drift.
 export const HOTKEY_PRESETS = SettingsSchema.shape.hotkey.options;

@@ -76,6 +76,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::update_settings,
+            commands::list_asr_providers,
+            commands::list_llm_providers,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
