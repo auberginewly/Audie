@@ -22,6 +22,7 @@ function barHeight(level: number): number {
 export function Capsule() {
   const state = useRecordingStore((s) => s.state);
   const error = useRecordingStore((s) => s.error);
+  const enhanceProgress = useRecordingStore((s) => s.enhanceProgress);
   const levels = useAudioLevels();
 
   // CANCEL and IDLE fade out; everything else keeps the capsule on screen.
@@ -50,7 +51,9 @@ export function Capsule() {
         ))}
 
       {state === "PROCESSING" && (
-        <span className="text-sm text-base-content/70">处理中…</span>
+        <span className="text-sm text-base-content/70">
+          {enhanceProgress?.message ?? "处理中…"}
+        </span>
       )}
 
       {state === "SUCCESS" && (

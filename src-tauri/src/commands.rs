@@ -21,10 +21,14 @@ const KEY_LLM_PROVIDER: &str = "llm_provider";
 const KEY_ENHANCE_ENABLED: &str = "enhance_enabled";
 const KEY_ENHANCE_PROMPT: &str = "enhance_prompt";
 const KEY_WHISPER_CPP_MODEL_PATH: &str = "whisper_cpp_model_path";
+const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
+const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
 pub const DEFAULT_ASR_PROVIDER: &str = "groq";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
+pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_ENHANCE_PROMPT: &str =
     "去掉口水话，修正明显口误，补充标点和换行；不要改原意，不要添加信息，不要翻译。";
 
@@ -41,6 +45,8 @@ pub struct Settings {
     pub enhance_enabled: bool,
     pub enhance_prompt: String,
     pub whisper_cpp_model_path: Option<String>,
+    pub openai_compatible_base_url: String,
+    pub openai_compatible_model: String,
 }
 
 impl Default for Settings {
@@ -52,6 +58,8 @@ impl Default for Settings {
             enhance_enabled: false,
             enhance_prompt: DEFAULT_ENHANCE_PROMPT.to_string(),
             whisper_cpp_model_path: None,
+            openai_compatible_base_url: DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string(),
+            openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
         }
     }
 }
@@ -64,6 +72,8 @@ pub struct SettingsPatch {
     pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
     pub whisper_cpp_model_path: Option<String>,
+    pub openai_compatible_base_url: Option<String>,
+    pub openai_compatible_model: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -128,6 +138,16 @@ pub fn load_settings(app: &AppHandle) -> Settings {
         enhance_enabled: read_bool_setting(app, KEY_ENHANCE_ENABLED, false),
         enhance_prompt: read_string_setting(app, KEY_ENHANCE_PROMPT, DEFAULT_ENHANCE_PROMPT),
         whisper_cpp_model_path: read_optional_string_setting(app, KEY_WHISPER_CPP_MODEL_PATH),
+        openai_compatible_base_url: read_string_setting(
+            app,
+            KEY_OPENAI_COMPATIBLE_BASE_URL,
+            DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
+        ),
+        openai_compatible_model: read_string_setting(
+            app,
+            KEY_OPENAI_COMPATIBLE_MODEL,
+            DEFAULT_OPENAI_COMPATIBLE_MODEL,
+        ),
     }
 }
 
@@ -240,6 +260,16 @@ pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings,
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .or(current.whisper_cpp_model_path);
+    let next_openai_compatible_base_url = patch
+        .openai_compatible_base_url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(current.openai_compatible_base_url);
+    let next_openai_compatible_model = patch
+        .openai_compatible_model
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(current.openai_compatible_model);
 
     if !HOTKEY_PRESETS.contains(&next_hotkey.as_str()) {
         return Err(AppError::Internal(format!(
@@ -277,6 +307,11 @@ pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings,
     store.set(KEY_LLM_PROVIDER, next_llm_provider);
     store.set(KEY_ENHANCE_ENABLED, next_enhance_enabled);
     store.set(KEY_ENHANCE_PROMPT, next_enhance_prompt);
+    store.set(
+        KEY_OPENAI_COMPATIBLE_BASE_URL,
+        next_openai_compatible_base_url,
+    );
+    store.set(KEY_OPENAI_COMPATIBLE_MODEL, next_openai_compatible_model);
     if let Some(model_path) = next_whisper_cpp_model_path {
         store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
     } else {
@@ -361,6 +396,14 @@ mod tests {
         assert!(!settings.enhance_enabled);
         assert!(!settings.enhance_prompt.trim().is_empty());
         assert_eq!(settings.whisper_cpp_model_path, None);
+        assert_eq!(
+            settings.openai_compatible_base_url,
+            DEFAULT_OPENAI_COMPATIBLE_BASE_URL
+        );
+        assert_eq!(
+            settings.openai_compatible_model,
+            DEFAULT_OPENAI_COMPATIBLE_MODEL
+        );
     }
 
     #[test]

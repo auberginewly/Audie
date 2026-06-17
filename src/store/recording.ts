@@ -3,19 +3,28 @@
 // render off Zustand selectors instead of subscribing to Tauri events directly.
 
 import { create } from "zustand";
-import type { AppState, AppErrorEvent } from "../types/events";
+import type { AppState, AppErrorEvent, EnhanceProgressEvent } from "../types/events";
 
 interface RecordingStore {
   state: AppState;
   error: AppErrorEvent | null;
+  enhanceProgress: EnhanceProgressEvent | null;
   setState: (next: AppState) => void;
   setError: (err: AppErrorEvent) => void;
+  setEnhanceProgress: (progress: EnhanceProgressEvent) => void;
 }
 
 export const useRecordingStore = create<RecordingStore>((set) => ({
   state: "IDLE",
   error: null,
+  enhanceProgress: null,
   // A fresh recording clears any stale error so the capsule starts clean.
-  setState: (next) => set(next === "RECORDING" ? { state: next, error: null } : { state: next }),
+  setState: (next) =>
+    set(
+      next === "RECORDING"
+        ? { state: next, error: null, enhanceProgress: null }
+        : { state: next },
+    ),
   setError: (err) => set({ error: err }),
+  setEnhanceProgress: (progress) => set({ enhanceProgress: progress }),
 }));

@@ -9,6 +9,7 @@
 mod asr;
 mod commands;
 mod error;
+mod llm;
 mod managers;
 mod platform;
 mod provider_test;
@@ -25,6 +26,7 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use crate::asr::AudioData;
 use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
+use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
 use crate::managers::inject::InjectManager;
 use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
 use crate::platform::{current_platform, HotkeyCallback, HotkeyEvent, HotkeyRegistry, Platform};
@@ -37,6 +39,12 @@ const ERROR_HOLD_MS: u64 = 2500;
 struct FinalTranscript {
     text: String,
     duration_ms: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct EnhanceProgress {
+    phase: &'static str,
+    message: String,
 }
 
 // §3.6 `error` event payload. Flattens AppError's category + message and adds
@@ -95,6 +103,7 @@ pub fn run() {
             let state_machine = Arc::new(StateMachine::new());
             let audio = Arc::new(AudioManager::new());
             let transcription = Arc::new(TranscriptionManager::new());
+            let enhance = Arc::new(EnhanceManager::new());
             let platform: Arc<dyn Platform> =
                 Arc::from(current_platform(registry_for_setup.clone()));
             let inject = Arc::new(InjectManager::new(platform.clone()));
@@ -105,6 +114,7 @@ pub fn run() {
             app.manage(state_machine);
             app.manage(audio);
             app.manage(transcription);
+            app.manage(enhance);
             app.manage(inject);
             app.manage(registry_for_setup.clone());
             app.manage(platform.clone());
@@ -134,12 +144,14 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
         let state = app.state::<Arc<StateMachine>>();
         let audio = app.state::<Arc<AudioManager>>();
         let transcription = app.state::<Arc<TranscriptionManager>>();
+        let enhance = app.state::<Arc<EnhanceManager>>();
         let inject = app.state::<Arc<InjectManager>>();
         handle_hotkey(
             &app,
             state.inner(),
             audio.inner(),
             transcription.inner(),
+            enhance.inner(),
             inject.inner(),
             event,
         );
@@ -151,6 +163,7 @@ fn handle_hotkey(
     state: &Arc<StateMachine>,
     audio: &Arc<AudioManager>,
     transcription: &Arc<TranscriptionManager>,
+    enhance: &Arc<EnhanceManager>,
     inject: &Arc<InjectManager>,
     event: HotkeyEvent,
 ) {
@@ -203,6 +216,7 @@ fn handle_hotkey(
                         app.clone(),
                         state.clone(),
                         transcription.clone(),
+                        enhance.clone(),
                         inject.clone(),
                         recorded,
                     );
@@ -224,6 +238,7 @@ fn spawn_transcription(
     app: AppHandle,
     state: Arc<StateMachine>,
     transcription: Arc<TranscriptionManager>,
+    enhance: Arc<EnhanceManager>,
     inject: Arc<InjectManager>,
     audio: AudioData,
 ) {
@@ -268,9 +283,11 @@ fn spawn_transcription(
             },
         );
 
+        let text_to_inject = maybe_enhance_text(&app, &enhance, &text);
+
         // P0.4: inject at the caret. On failure the text is still on the
         // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
-        if let Err(err) = inject.inject(&app, &text) {
+        if let Err(err) = inject.inject(&app, &text_to_inject) {
             log::error!("inject failed: {err:?}");
             enter_error(app, state, err);
             return;
@@ -282,6 +299,37 @@ fn spawn_transcription(
     });
 }
 
+fn maybe_enhance_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> String {
+    let config = enhance_config(app);
+    if !config.enhance_enabled {
+        return text.to_string();
+    }
+
+    emit_enhance_progress(app, "started", "润色中…");
+    match enhance.enhance(text, &config) {
+        Ok(enhanced) => {
+            emit_enhance_progress(app, "completed", "润色完成");
+            enhanced
+        }
+        Err(err) => {
+            log::warn!("enhance failed, injecting original transcript: {err:?}");
+            let fallback = fallback_after_enhance_failure(text, &err);
+            emit_enhance_progress(app, "failed", &fallback.message);
+            fallback.text_to_inject
+        }
+    }
+}
+
+fn emit_enhance_progress(app: &AppHandle, phase: &'static str, message: &str) {
+    let _ = app.emit(
+        "enhance-progress",
+        EnhanceProgress {
+            phase,
+            message: message.to_string(),
+        },
+    );
+}
+
 fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
@@ -291,6 +339,23 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
         groq_api_key: read_optional_secret(platform.inner().as_ref(), "groq_api_key"),
         openai_api_key: read_optional_secret(platform.inner().as_ref(), "openai_api_key"),
         whisper_cpp_model_path: settings.whisper_cpp_model_path,
+    }
+}
+
+fn enhance_config(app: &AppHandle) -> EnhanceConfig {
+    let settings = commands::load_settings(app);
+    let platform = app.state::<Arc<dyn Platform>>();
+
+    EnhanceConfig {
+        llm_provider: settings.llm_provider,
+        enhance_enabled: settings.enhance_enabled,
+        enhance_prompt: settings.enhance_prompt,
+        openai_compatible_api_key: read_optional_secret(
+            platform.inner().as_ref(),
+            "openai_compatible_api_key",
+        ),
+        openai_compatible_base_url: settings.openai_compatible_base_url,
+        openai_compatible_model: settings.openai_compatible_model,
     }
 }
 

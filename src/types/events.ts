@@ -52,3 +52,11 @@ export const AppErrorSchema = z.object({
 export type AppErrorEvent = z.infer<typeof AppErrorSchema>;
 
 export const EVENT_ERROR = "error";
+
+export const EnhanceProgressSchema = z.object({
+  phase: z.enum(["started", "completed", "failed"]),
+  message: z.string(),
+});
+export type EnhanceProgressEvent = z.infer<typeof EnhanceProgressSchema>;
+
+export const EVENT_ENHANCE_PROGRESS = "enhance-progress";
