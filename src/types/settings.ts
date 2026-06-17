@@ -10,6 +10,7 @@ export const SettingsSchema = z.object({
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
+  whisper_cpp_model_path: z.string().nullable(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

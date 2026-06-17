@@ -26,7 +26,7 @@ use crate::asr::AudioData;
 use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
 use crate::managers::inject::InjectManager;
-use crate::managers::transcription::TranscriptionManager;
+use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
 use crate::platform::{current_platform, HotkeyCallback, HotkeyEvent, HotkeyRegistry, Platform};
 use crate::state::{AppState, StateMachine};
 
@@ -247,7 +247,8 @@ fn spawn_transcription(
             return;
         }
 
-        let text = match transcription.transcribe(&audio) {
+        let config = transcription_config(&app);
+        let text = match transcription.transcribe(&audio, &config) {
             Ok(text) => text,
             Err(err) => {
                 log::error!("transcription failed: {err:?}");
@@ -279,6 +280,26 @@ fn spawn_transcription(
         thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
         settle_to_idle(&app, &state, "done");
     });
+}
+
+fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
+    let settings = commands::load_settings(app);
+    let platform = app.state::<Arc<dyn Platform>>();
+
+    TranscriptionConfig {
+        asr_provider: settings.asr_provider,
+        groq_api_key: read_optional_secret(platform.inner().as_ref(), "groq_api_key"),
+        openai_api_key: read_optional_secret(platform.inner().as_ref(), "openai_api_key"),
+        whisper_cpp_model_path: settings.whisper_cpp_model_path,
+    }
+}
+
+fn read_optional_secret(platform: &dyn Platform, key_id: &str) -> Option<String> {
+    platform
+        .read_secret(key_id)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Emit the error, flash Error, and recover to Idle after a hold. Spawns its own

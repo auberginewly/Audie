@@ -228,7 +228,7 @@ P0 全部跑通且 commit 干净后才开。
 | P1.5 | LLM 润色链路 | 关掉润色 → 注入转写原文；开润色 → 经 OpenAICompatible 去口水化后注入；润色失败 → 注入转写原文 + 提示「润色失败但已注入原文」；发 `enhance-progress` 事件 |
 | P1.6 | 配置导入导出 + P1 收尾 | `export_config` 导出的 JSON 不含 key 明文，敏感字段用 `"<keychain>"`；`import_config` 遇到占位符提示用户重新填 key；完整跑完 §4.5 验收清单 |
 
-> P1 只做批量 ASR + BYOK + 润色。豆包 / 阿里 Paraformer-realtime / Deepgram 这类流式 provider 放到 P2 接 `transcribe_stream` 时做，P1 不提前引入 WebSocket 流式复杂度。WhisperCpp 在 P1.4 只作为本地批量 adapter 接入；模型下载、onboarding 默认引擎体验放到 P3。
+> P1 只做批量 ASR + BYOK + 润色。豆包 / 阿里 Paraformer-realtime / Deepgram 这类流式 provider 放到 P2 接 `transcribe_stream` 时做，P1 不提前引入 WebSocket 流式复杂度。WhisperCpp 在 P1.4 只接入 adapter 骨架，不引入 whisper.cpp / whisper-rs 等新库，不做模型下载和本地推理；模型下载、模型选择、onboarding 默认引擎体验放到 P3。
 
 ### 4.1 Provider 抽象
 
@@ -250,6 +250,8 @@ trait LlmProvider {
 **P1 必带的 adapter**：
 
 - AsrProvider：`Groq`（whisper-large-v3-turbo）、`OpenAI`（whisper-1）、`WhisperCpp`（本地）
+  - `OpenAI`：使用 keychain 里的 `openai_api_key`，默认模型固定 `whisper-1`，P1.4 不新增模型选择 UI；缺 key 返回 `Provider`，HTTP 超时/连接失败返回 `Network`，401 返回 `Provider`，403/429/5xx 返回 `Network`。
+  - `WhisperCpp`：P1.4 只做 adapter 骨架。Settings 可新增 `whisper_cpp_model_path?: string` 可选字段，但先不做 UI 选择器；为空时选择 WhisperCpp 转写返回 `Device` 错误，文案「未配置本地 Whisper 模型」。即使用户手动配置了模型路径，P1.4 仍返回 `Device` 错误「本地 Whisper 推理将在 P3 模型管理中接入」，不得 panic。真正的 whisper.cpp 依赖、模型下载、模型选择和打包策略放到 P3 再定。
   - 中文 + 流式主力候选（P2 接流式时主推）：`豆包/火山引擎`、`阿里 Paraformer-realtime`、`Deepgram`（英文）。批量阶段先不接，到 P2 各加一个 adapter，不改其他代码。
 - LlmProvider：`OpenAICompatible`（base_url + api_key + model 三字段，覆盖 OpenAI / DeepSeek / 硅基流动 / Ollama）
 

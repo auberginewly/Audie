@@ -1,24 +1,21 @@
 // Groq adapter — whisper-large-v3-turbo over Groq's OpenAI-compatible
 // `/audio/transcriptions` endpoint. PROJECT_SPEC.md §4.1.
 //
-// P0 BYOK shortcut: the key is read from the GROQ_API_KEY env var at call time
-// (P1 moves it into the system keychain, §4.2). Nothing is persisted here.
-
 use serde::Deserialize;
 
-use crate::asr::{AsrProvider, AudioData};
+use crate::asr::{encode_wav, AsrProvider, AudioData};
 use crate::error::{AppError, AppResult};
 
 const ENDPOINT: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const MODEL: &str = "whisper-large-v3-turbo";
-const API_KEY_ENV: &str = "GROQ_API_KEY";
 
-#[derive(Default)]
-pub struct GroqProvider;
+pub struct GroqProvider {
+    api_key: String,
+}
 
 impl GroqProvider {
-    pub fn new() -> Self {
-        Self
+    pub fn new(api_key: String) -> Self {
+        Self { api_key }
     }
 }
 
@@ -33,9 +30,6 @@ impl AsrProvider for GroqProvider {
     }
 
     fn transcribe(&self, audio: &AudioData) -> AppResult<String> {
-        let api_key = std::env::var(API_KEY_ENV)
-            .map_err(|_| AppError::Provider(format!("{API_KEY_ENV} not set")))?;
-
         let wav = encode_wav(audio);
 
         let file_part = reqwest::blocking::multipart::Part::bytes(wav)
@@ -49,7 +43,7 @@ impl AsrProvider for GroqProvider {
         let client = reqwest::blocking::Client::new();
         let resp = client
             .post(ENDPOINT)
-            .bearer_auth(api_key)
+            .bearer_auth(&self.api_key)
             .multipart(form)
             .send()
             .map_err(classify_reqwest_error)?;
@@ -85,7 +79,7 @@ fn classify_reqwest_error(e: reqwest::Error) -> AppError {
 /// recoverable by enabling a proxy.
 fn classify_http_status(status: u16, body: &str) -> AppError {
     match status {
-        401 => AppError::Provider("Groq API key 无效，请检查 GROQ_API_KEY".into()),
+        401 => AppError::Provider("Groq API key 无效，请检查设置".into()),
         403 => AppError::Network("Groq 拒绝请求（可能是地区限制，中国大陆需走代理）".into()),
         429 => AppError::Network("Groq 请求过于频繁，请稍后重试".into()),
         500..=599 => AppError::Network(format!("Groq 服务端异常（{status}）")),
@@ -94,35 +88,4 @@ fn classify_http_status(status: u16, body: &str) -> AppError {
             AppError::Provider(format!("Groq 拒绝请求（{status}）：{snippet}"))
         }
     }
-}
-
-/// Encode f32 samples into a 16-bit PCM WAV (44-byte header + data).
-/// Hand-rolled to avoid pulling in a WAV crate for ~20 lines.
-fn encode_wav(audio: &AudioData) -> Vec<u8> {
-    const BITS_PER_SAMPLE: u16 = 16;
-    let channels = audio.channels.max(1);
-    let sample_rate = audio.sample_rate;
-    let byte_rate = sample_rate * channels as u32 * (BITS_PER_SAMPLE / 8) as u32;
-    let block_align = channels * (BITS_PER_SAMPLE / 8);
-    let data_len = (audio.samples.len() * 2) as u32;
-
-    let mut buf = Vec::with_capacity(44 + data_len as usize);
-    buf.extend_from_slice(b"RIFF");
-    buf.extend_from_slice(&(36 + data_len).to_le_bytes());
-    buf.extend_from_slice(b"WAVE");
-    buf.extend_from_slice(b"fmt ");
-    buf.extend_from_slice(&16u32.to_le_bytes()); // PCM fmt chunk size
-    buf.extend_from_slice(&1u16.to_le_bytes()); // audio format = PCM
-    buf.extend_from_slice(&channels.to_le_bytes());
-    buf.extend_from_slice(&sample_rate.to_le_bytes());
-    buf.extend_from_slice(&byte_rate.to_le_bytes());
-    buf.extend_from_slice(&block_align.to_le_bytes());
-    buf.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes());
-    buf.extend_from_slice(b"data");
-    buf.extend_from_slice(&data_len.to_le_bytes());
-    for &s in &audio.samples {
-        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        buf.extend_from_slice(&v.to_le_bytes());
-    }
-    buf
 }

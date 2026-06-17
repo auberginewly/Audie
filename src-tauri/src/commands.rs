@@ -20,6 +20,7 @@ const KEY_ASR_PROVIDER: &str = "asr_provider";
 const KEY_LLM_PROVIDER: &str = "llm_provider";
 const KEY_ENHANCE_ENABLED: &str = "enhance_enabled";
 const KEY_ENHANCE_PROMPT: &str = "enhance_prompt";
+const KEY_WHISPER_CPP_MODEL_PATH: &str = "whisper_cpp_model_path";
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
 pub const DEFAULT_ASR_PROVIDER: &str = "groq";
@@ -39,6 +40,7 @@ pub struct Settings {
     pub llm_provider: String,
     pub enhance_enabled: bool,
     pub enhance_prompt: String,
+    pub whisper_cpp_model_path: Option<String>,
 }
 
 impl Default for Settings {
@@ -49,6 +51,7 @@ impl Default for Settings {
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
             enhance_enabled: false,
             enhance_prompt: DEFAULT_ENHANCE_PROMPT.to_string(),
+            whisper_cpp_model_path: None,
         }
     }
 }
@@ -60,6 +63,7 @@ pub struct SettingsPatch {
     pub llm_provider: Option<String>,
     pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
+    pub whisper_cpp_model_path: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -106,7 +110,7 @@ fn read_bool_setting(app: &AppHandle, key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
-fn load_settings(app: &AppHandle) -> Settings {
+pub fn load_settings(app: &AppHandle) -> Settings {
     Settings {
         hotkey: load_hotkey(app),
         asr_provider: read_provider_setting(
@@ -123,7 +127,17 @@ fn load_settings(app: &AppHandle) -> Settings {
         ),
         enhance_enabled: read_bool_setting(app, KEY_ENHANCE_ENABLED, false),
         enhance_prompt: read_string_setting(app, KEY_ENHANCE_PROMPT, DEFAULT_ENHANCE_PROMPT),
+        whisper_cpp_model_path: read_optional_string_setting(app, KEY_WHISPER_CPP_MODEL_PATH),
     }
+}
+
+fn read_optional_string_setting(app: &AppHandle, key: &str) -> Option<String> {
+    app.store(STORE_FILE)
+        .ok()
+        .and_then(|store| store.get(key))
+        .and_then(|value| value.as_str().map(str::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn read_provider_setting(
@@ -221,6 +235,11 @@ pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings,
     let next_llm_provider = patch.llm_provider.unwrap_or(current.llm_provider);
     let next_enhance_enabled = patch.enhance_enabled.unwrap_or(current.enhance_enabled);
     let next_enhance_prompt = patch.enhance_prompt.unwrap_or(current.enhance_prompt);
+    let next_whisper_cpp_model_path = patch
+        .whisper_cpp_model_path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or(current.whisper_cpp_model_path);
 
     if !HOTKEY_PRESETS.contains(&next_hotkey.as_str()) {
         return Err(AppError::Internal(format!(
@@ -258,6 +277,11 @@ pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings,
     store.set(KEY_LLM_PROVIDER, next_llm_provider);
     store.set(KEY_ENHANCE_ENABLED, next_enhance_enabled);
     store.set(KEY_ENHANCE_PROMPT, next_enhance_prompt);
+    if let Some(model_path) = next_whisper_cpp_model_path {
+        store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
+    } else {
+        store.delete(KEY_WHISPER_CPP_MODEL_PATH);
+    }
     store
         .save()
         .map_err(|err| AppError::Internal(format!("save store: {err}")))?;
@@ -336,6 +360,7 @@ mod tests {
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
         assert!(!settings.enhance_prompt.trim().is_empty());
+        assert_eq!(settings.whisper_cpp_model_path, None);
     }
 
     #[test]
