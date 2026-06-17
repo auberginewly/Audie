@@ -7,6 +7,7 @@
 //   - Overlay window positioned bottom-center, click-through
 
 mod asr;
+mod commands;
 mod error;
 mod managers;
 mod platform;
@@ -25,7 +26,7 @@ use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
 use crate::managers::inject::InjectManager;
 use crate::managers::transcription::TranscriptionManager;
-use crate::platform::{current_platform, HotkeyEvent, HotkeyRegistry, Platform};
+use crate::platform::{current_platform, HotkeyCallback, HotkeyEvent, HotkeyRegistry, Platform};
 use crate::state::{AppState, StateMachine};
 
 const SUCCESS_HOLD_MS: u64 = 150;
@@ -37,7 +38,6 @@ struct FinalTranscript {
     duration_ms: u64,
 }
 
-const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_BOTTOM_MARGIN_PX: f64 = 16.0;
 
@@ -63,6 +63,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            commands::get_settings,
+            commands::update_settings,
+        ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
@@ -78,43 +83,51 @@ pub fn run() {
                 Arc::from(current_platform(registry_for_setup.clone()));
             let inject = Arc::new(InjectManager::new(platform.clone()));
 
-            let state_for_cb = state_machine.clone();
-            let audio_for_cb = audio.clone();
-            let transcription_for_cb = transcription.clone();
-            let inject_for_cb = inject.clone();
-            let app_for_cb = app_handle.clone();
-            if let Err(err) = platform.register_hotkey(
-                &app_handle,
-                DEFAULT_HOTKEY,
-                Box::new(move |event| {
-                    handle_hotkey(
-                        &app_for_cb,
-                        &state_for_cb,
-                        &audio_for_cb,
-                        &transcription_for_cb,
-                        &inject_for_cb,
-                        event,
-                    );
-                }),
-            ) {
-                log::error!("register hotkey {DEFAULT_HOTKEY}: {err:?}");
-                return Err(Box::new(std::io::Error::other(format!("{err:?}"))));
-            }
-
-            log::info!("registered global hotkey {DEFAULT_HOTKEY}");
-
-            // Stash for future managers / commands.
+            // Manage first so `build_hotkey_callback` can resolve managers off
+            // the app state — the same callback gets rebuilt when the hotkey
+            // changes (commands::update_settings).
             app.manage(state_machine);
             app.manage(audio);
             app.manage(transcription);
             app.manage(inject);
             app.manage(registry_for_setup.clone());
-            app.manage(platform);
+            app.manage(platform.clone());
+
+            let hotkey = commands::load_hotkey(&app_handle);
+            if let Err(err) =
+                platform.register_hotkey(&app_handle, &hotkey, build_hotkey_callback(&app_handle))
+            {
+                log::error!("register hotkey {hotkey}: {err:?}");
+                return Err(Box::new(std::io::Error::other(format!("{err:?}"))));
+            }
+
+            log::info!("registered global hotkey {hotkey}");
 
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Build the press/release callback for the global hotkey. Resolves managers
+/// off the app state instead of capturing clones, so it can be rebuilt verbatim
+/// when the hotkey changes — see `commands::update_settings`.
+pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
+    let app = app.clone();
+    Box::new(move |event| {
+        let state = app.state::<Arc<StateMachine>>();
+        let audio = app.state::<Arc<AudioManager>>();
+        let transcription = app.state::<Arc<TranscriptionManager>>();
+        let inject = app.state::<Arc<InjectManager>>();
+        handle_hotkey(
+            &app,
+            state.inner(),
+            audio.inner(),
+            transcription.inner(),
+            inject.inner(),
+            event,
+        );
+    })
 }
 
 fn handle_hotkey(
