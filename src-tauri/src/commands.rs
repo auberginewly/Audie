@@ -302,7 +302,7 @@ pub fn delete_secret(app: AppHandle, key_id: String) -> Result<(), AppError> {
     platform.delete_secret(&key_id)
 }
 
-fn validate_secret_key_id(key_id: &str) -> Result<(), AppError> {
+pub(crate) fn validate_secret_key_id(key_id: &str) -> Result<(), AppError> {
     if key_id.is_empty()
         || !key_id
             .bytes()
