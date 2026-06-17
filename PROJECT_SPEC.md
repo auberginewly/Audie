@@ -217,6 +217,19 @@ P0 只实现 macOS（`platform/macos.rs`）。`windows.rs` 留空文件 + `unimp
 
 P0 全部跑通且 commit 干净后才开。
 
+### 4.0 P1 切片清单（每个独立 commit，不收尾不开下一个）
+
+| 切片 | 内容 | 验收 |
+|---|---|---|
+| P1.1 | Provider 配置骨架 + 可用 provider 列表 | 设置持久化里有 `asr_provider` / `llm_provider` / 润色开关 / prompt 字段；`list_asr_providers` 和 `list_llm_providers` 返回 Groq / OpenAI / WhisperCpp / OpenAICompatible 的元信息；现有 Groq 默认链路还能跑 |
+| P1.2 | Keychain secret command | `set_secret` / `has_secret` / `delete_secret` 走系统 keychain；重启 App 后 key 仍可查到；store 文件里不出现 key 明文 |
+| P1.3 | BYOK 设置页 + provider test | 设置里能填 Groq / OpenAI / OpenAICompatible 的 key 并测试；测试成功/失败有明确反馈；不联网时不爆栈，给「网络失败」错误 |
+| P1.4 | ASR provider 切换 | 批量 ASR 支持 Groq / OpenAI / WhisperCpp 三个 adapter；切 ASR provider 不用重启；没有配置 key 或模型时走 `Provider` / `Device` 类错误，不 panic |
+| P1.5 | LLM 润色链路 | 关掉润色 → 注入转写原文；开润色 → 经 OpenAICompatible 去口水化后注入；润色失败 → 注入转写原文 + 提示「润色失败但已注入原文」；发 `enhance-progress` 事件 |
+| P1.6 | 配置导入导出 + P1 收尾 | `export_config` 导出的 JSON 不含 key 明文，敏感字段用 `"<keychain>"`；`import_config` 遇到占位符提示用户重新填 key；完整跑完 §4.5 验收清单 |
+
+> P1 只做批量 ASR + BYOK + 润色。豆包 / 阿里 Paraformer-realtime / Deepgram 这类流式 provider 放到 P2 接 `transcribe_stream` 时做，P1 不提前引入 WebSocket 流式复杂度。WhisperCpp 在 P1.4 只作为本地批量 adapter 接入；模型下载、onboarding 默认引擎体验放到 P3。
+
 ### 4.1 Provider 抽象
 
 两个 trait，各自一组 adapter。新增 provider = 加一个 adapter 文件，不改其他代码。
