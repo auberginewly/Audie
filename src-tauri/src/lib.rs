@@ -6,20 +6,35 @@
 //   - Release → state Recording→Idle → hide overlay window
 //   - Overlay window positioned bottom-center, click-through
 
+mod asr;
 mod error;
 mod managers;
 mod platform;
 mod state;
 
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
-use tauri::{AppHandle, Manager, PhysicalPosition};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::ShortcutState;
 
+use crate::asr::AudioData;
 use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
+use crate::managers::transcription::TranscriptionManager;
 use crate::platform::{current_platform, HotkeyEvent, HotkeyRegistry, Platform};
 use crate::state::{AppState, StateMachine};
+
+const SUCCESS_HOLD_MS: u64 = 150;
+const ERROR_HOLD_MS: u64 = 2500;
+
+#[derive(Serialize, Clone)]
+struct FinalTranscript {
+    text: String,
+    duration_ms: u64,
+}
 
 const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
@@ -56,16 +71,24 @@ pub fn run() {
 
             let state_machine = Arc::new(StateMachine::new());
             let audio = Arc::new(AudioManager::new());
+            let transcription = Arc::new(TranscriptionManager::new());
             let platform = current_platform(registry_for_setup.clone());
 
             let state_for_cb = state_machine.clone();
             let audio_for_cb = audio.clone();
+            let transcription_for_cb = transcription.clone();
             let app_for_cb = app_handle.clone();
             if let Err(err) = platform.register_hotkey(
                 &app_handle,
                 DEFAULT_HOTKEY,
                 Box::new(move |event| {
-                    handle_hotkey(&app_for_cb, &state_for_cb, &audio_for_cb, event);
+                    handle_hotkey(
+                        &app_for_cb,
+                        &state_for_cb,
+                        &audio_for_cb,
+                        &transcription_for_cb,
+                        event,
+                    );
                 }),
             ) {
                 log::error!("register hotkey {DEFAULT_HOTKEY}: {err:?}");
@@ -77,6 +100,7 @@ pub fn run() {
             // Stash for future managers / commands.
             app.manage(state_machine);
             app.manage(audio);
+            app.manage(transcription);
             app.manage(registry_for_setup.clone());
             let platform_arc: Arc<dyn Platform> = Arc::from(platform);
             app.manage(platform_arc);
@@ -87,13 +111,19 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn handle_hotkey(app: &AppHandle, state: &StateMachine, audio: &AudioManager, event: HotkeyEvent) {
+fn handle_hotkey(
+    app: &AppHandle,
+    state: &Arc<StateMachine>,
+    audio: &Arc<AudioManager>,
+    transcription: &Arc<TranscriptionManager>,
+    event: HotkeyEvent,
+) {
     match event {
         HotkeyEvent::Pressed => {
             if state.transition(app, AppState::Recording, Some("hotkey-down")) {
                 if let Err(err) = audio.start_capture(app.clone()) {
-                    // P0.7 will route this to the UI as an AppError event.
-                    // For P0.2 we just log; the overlay still shows but bars
+                    // P0.6 will route this to the UI as an AppError event.
+                    // For now we just log; the overlay still shows but bars
                     // will stay flat.
                     log::error!("start capture: {err:?}");
                 }
@@ -103,17 +133,76 @@ fn handle_hotkey(app: &AppHandle, state: &StateMachine, audio: &AudioManager, ev
             }
         }
         HotkeyEvent::Released => {
-            // P0.1 short-circuit: no transcription pipeline yet, so we go
-            // Recording → Idle directly. P0.4+ will go Recording → Processing.
-            if state.transition(app, AppState::Idle, Some("hotkey-up")) {
-                if let Err(err) = audio.stop_capture() {
-                    log::error!("stop capture: {err:?}");
+            if !state.transition(app, AppState::Processing, Some("hotkey-up")) {
+                return;
+            }
+            if let Err(err) = hide_overlay(app) {
+                log::error!("hide overlay: {err:?}");
+            }
+            match audio.stop_capture() {
+                Ok(recorded) => {
+                    spawn_transcription(
+                        app.clone(),
+                        state.clone(),
+                        transcription.clone(),
+                        recorded,
+                    );
                 }
-                if let Err(err) = hide_overlay(app) {
-                    log::error!("hide overlay: {err:?}");
+                Err(err) => {
+                    log::error!("stop capture: {err:?}");
+                    enter_error(app.clone(), state.clone(), err);
                 }
             }
         }
+    }
+}
+
+/// Run the (blocking) transcription off the hotkey thread, then drive the
+/// pipeline tail: print the text, emit `final-transcript`, flash Success and
+/// settle to Idle. Errors flash red (Error) and recover. PROJECT_SPEC.md §3.3.
+fn spawn_transcription(
+    app: AppHandle,
+    state: Arc<StateMachine>,
+    transcription: Arc<TranscriptionManager>,
+    audio: AudioData,
+) {
+    thread::spawn(move || {
+        let duration_ms = duration_ms(&audio);
+        match transcription.transcribe(&audio) {
+            Ok(text) => {
+                // P0.3 acceptance: the transcript shows up in the console.
+                println!("[transcript] {text}");
+                log::info!("transcript ({duration_ms} ms): {text}");
+                let _ = app.emit("final-transcript", FinalTranscript { text, duration_ms });
+                state.transition(&app, AppState::Success, Some("transcribed"));
+                thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
+                state.transition(&app, AppState::Idle, Some("done"));
+            }
+            Err(err) => {
+                log::error!("transcription failed: {err:?}");
+                enter_error(app, state, err);
+            }
+        }
+    });
+}
+
+/// Emit the error, flash Error, and recover to Idle after a hold. Spawns its own
+/// thread so callers on the hotkey path don't block.
+fn enter_error(app: AppHandle, state: Arc<StateMachine>, err: AppError) {
+    let _ = app.emit("error", &err);
+    state.transition(&app, AppState::Error, Some("error"));
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(ERROR_HOLD_MS));
+        state.transition(&app, AppState::Idle, Some("recovered"));
+    });
+}
+
+fn duration_ms(audio: &AudioData) -> u64 {
+    let denom = audio.sample_rate as u64 * audio.channels.max(1) as u64;
+    if denom == 0 {
+        0
+    } else {
+        audio.samples.len() as u64 * 1000 / denom
     }
 }
 
