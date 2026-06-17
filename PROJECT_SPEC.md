@@ -313,6 +313,7 @@ trait LlmProvider {
 - 权限引导（Microphone / Accessibility / Input Monitoring 顺畅授权流）
 - **单键触发方案（fn / 双击 Option）—— 用户最期待的触发方式**，需 CGEventTap + Accessibility + Input Monitoring；P0 用组合键过渡，P3 一次性给出 typeless 那种"按一下就出来"的丝滑感
 - Overlay 动效精修（这时候才该出设计稿）
+- **Overlay 交互 + 控制模型（未来方向，P0–P2 不做）**：胶囊上加可点的 ✓（确认）/ ✗（取消）按钮；触发改 toggle 模型（按一次开始、再按一次结束，对应 fn 单键方案）；取消语义升级——✗ 不再直接丢弃，而是「可撤回 + 转录文字仍显示」。代价：要放弃 §3.8 的「全窗口点击穿透」（按钮区需可点）。这是把当前「按住录音 + Esc 丢弃」过渡方案兑现成最终手感的那一步，归在本节做，进入前先更新 §3.2/§3.3/§3.8。
 
 ### P4 — 跨平台 + 分发
 
