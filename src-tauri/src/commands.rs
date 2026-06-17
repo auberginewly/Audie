@@ -275,6 +275,54 @@ pub fn list_llm_providers() -> Vec<ProviderMetadata> {
     available_llm_providers()
 }
 
+#[tauri::command]
+pub fn set_secret(app: AppHandle, key_id: String, value: String) -> Result<(), AppError> {
+    validate_secret_key_id(&key_id)?;
+    if value.is_empty() {
+        return Err(AppError::Provider("secret value cannot be empty".into()));
+    }
+
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.store_secret(&key_id, &value)
+}
+
+#[tauri::command]
+pub fn has_secret(app: AppHandle, key_id: String) -> Result<bool, AppError> {
+    validate_secret_key_id(&key_id)?;
+
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform_has_secret(platform.inner().as_ref(), &key_id)
+}
+
+#[tauri::command]
+pub fn delete_secret(app: AppHandle, key_id: String) -> Result<(), AppError> {
+    validate_secret_key_id(&key_id)?;
+
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.delete_secret(&key_id)
+}
+
+fn validate_secret_key_id(key_id: &str) -> Result<(), AppError> {
+    if key_id.is_empty()
+        || !key_id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(AppError::Internal(format!(
+            "unsupported secret key id: {key_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn platform_has_secret(platform: &dyn Platform, key_id: &str) -> Result<bool, AppError> {
+    match platform.read_secret(key_id) {
+        Ok(_) => Ok(true),
+        Err(AppError::Provider(_)) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +380,57 @@ mod tests {
         assert_eq!(openai_compatible.engine, "Remote LLM");
         assert!(openai_compatible.requires_key);
         assert!(openai_compatible.tags.contains(&"Configurable".to_string()));
+    }
+
+    #[test]
+    fn secret_key_ids_are_strict_identifiers() {
+        assert!(validate_secret_key_id("groq_api_key").is_ok());
+        assert!(validate_secret_key_id("openai_compatible_api_key").is_ok());
+        assert!(validate_secret_key_id("").is_err());
+        assert!(validate_secret_key_id("GroqApiKey").is_err());
+        assert!(validate_secret_key_id("../groq_api_key").is_err());
+        assert!(validate_secret_key_id("groq-api-key").is_err());
+    }
+
+    #[test]
+    fn has_secret_maps_missing_secret_to_false() {
+        struct MissingSecretPlatform;
+
+        impl Platform for MissingSecretPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
+                Err(AppError::Provider("secret not found".into()))
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        assert!(!platform_has_secret(&MissingSecretPlatform, "groq_api_key").unwrap());
     }
 }

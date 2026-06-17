@@ -43,4 +43,8 @@ impl Platform for WindowsPlatform {
     fn read_secret(&self, _key: &str) -> AppResult<String> {
         unimplemented!("Windows credential manager — P4")
     }
+
+    fn delete_secret(&self, _key: &str) -> AppResult<()> {
+        unimplemented!("Windows credential manager — P4")
+    }
 }
