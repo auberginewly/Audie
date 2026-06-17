@@ -11,6 +11,7 @@ mod commands;
 mod error;
 mod managers;
 mod platform;
+mod provider_test;
 mod state;
 
 use std::sync::Arc;
@@ -81,6 +82,7 @@ pub fn run() {
             commands::set_secret,
             commands::has_secret,
             commands::delete_secret,
+            provider_test::test_provider,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

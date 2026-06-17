@@ -29,5 +29,15 @@ export const ProviderMetadataSchema = z.object({
 
 export type ProviderMetadata = z.infer<typeof ProviderMetadataSchema>;
 
+export const ProviderKindSchema = z.enum(["asr", "llm"]);
+export type ProviderKind = z.infer<typeof ProviderKindSchema>;
+
+export const ProviderTestResultSchema = z.object({
+  ok: z.boolean(),
+  message: z.string(),
+});
+
+export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
+
 // Single source for the dropdown — derived from the schema so they can't drift.
 export const HOTKEY_PRESETS = SettingsSchema.shape.hotkey.options;
