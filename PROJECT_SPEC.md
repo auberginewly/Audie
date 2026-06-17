@@ -308,6 +308,7 @@ trait LlmProvider {
 - 个人词典（术语注入 prompt + 高置信度自动纠正）
 - 上下文感知 prompt（抄 Voxt App Branch：IDE 偏代码、聊天偏口语）—— **vibe coding 场景的杀招**
 - 5 分钟 onboarding（默认内置免费引擎，不填 key 也能用）
+  - TODO：零配置默认 ASR 引擎候选——macOS 用 Apple Speech framework（`SpeechAnalyzer`/`SFSpeechRecognizer`，本地、免 key、隐私好），Windows 用本地 whisper.cpp。作为 `AsrProvider` 的 adapter 加入（macOS 实现放平台相关层），不改其他代码。P0 一行不为它改。
 - 权限引导（Microphone / Accessibility / Input Monitoring 顺畅授权流）
 - **单键触发方案（fn / 双击 Option）—— 用户最期待的触发方式**，需 CGEventTap + Accessibility + Input Monitoring；P0 用组合键过渡，P3 一次性给出 typeless 那种"按一下就出来"的丝滑感
 - Overlay 动效精修（这时候才该出设计稿）
