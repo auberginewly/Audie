@@ -28,7 +28,7 @@ impl Platform for WindowsPlatform {
         unimplemented!("Windows unregister — P4")
     }
 
-    fn inject_text(&self, _text: &str) -> AppResult<()> {
+    fn inject_text(&self, _app: &AppHandle, _text: &str) -> AppResult<()> {
         unimplemented!("Windows inject — P4")
     }
 
