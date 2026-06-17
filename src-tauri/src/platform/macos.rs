@@ -4,8 +4,8 @@
 // shared HotkeyRegistry — the plugin's `with_handler` (built in lib.rs) is the
 // single entry that dispatches into the registry.
 //
-// P0.4 adds clipboard-method inject (save → write → Cmd+V → restore). P1 will
-// add Keychain Services calls.
+// P0.4 adds clipboard-method inject (save → write → Cmd+V → restore). P1 adds
+// Keychain Services for BYOK secrets.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -15,6 +15,8 @@ use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+use security_framework::os::macos::keychain::SecKeychain;
+use security_framework::os::macos::passwords::find_generic_password;
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
@@ -121,14 +123,60 @@ impl Platform for MacosPlatform {
         tauri::async_runtime::block_on(check_microphone_permission())
     }
 
-    fn store_secret(&self, _key: &str, _value: &str) -> AppResult<()> {
-        // P1 will call macOS Keychain Services via `security-framework`.
-        unimplemented!("store_secret — P1")
+    fn store_secret(&self, key: &str, value: &str) -> AppResult<()> {
+        keychain_store_secret(key, value)
     }
 
-    fn read_secret(&self, _key: &str) -> AppResult<String> {
-        unimplemented!("read_secret — P1")
+    fn read_secret(&self, key: &str) -> AppResult<String> {
+        keychain_read_secret(key)
     }
+
+    fn delete_secret(&self, key: &str) -> AppResult<()> {
+        keychain_delete_secret(key)
+    }
+}
+
+// ---- macOS Keychain Services (P1.2) -----------------------------------------
+//
+// Store API keys as generic-password items:
+//   service = "audie"
+//   account = key_id (e.g. "groq_api_key")
+//   value   = secret bytes
+//
+// Commands expose only set/has/delete. `read_secret` exists for later provider
+// adapters, but it is never exposed to the frontend.
+
+const KEYCHAIN_SERVICE: &str = "audie";
+fn keychain_store_secret(key: &str, value: &str) -> AppResult<()> {
+    let keychain = SecKeychain::default()
+        .map_err(|err| AppError::Internal(format!("open default keychain: {err}")))?;
+    // This updates an existing item in place, so repeated saves are safe for
+    // settings forms.
+    keychain
+        .set_generic_password(KEYCHAIN_SERVICE, key, value.as_bytes())
+        .map_err(|err| AppError::Internal(format!("store secret: {err}")))
+}
+
+fn keychain_read_secret(key: &str) -> AppResult<String> {
+    let (password, _item) = find_generic_password(None, KEYCHAIN_SERVICE, key).map_err(|err| {
+        if err.code() == -25300 {
+            AppError::Provider("secret not found".into())
+        } else {
+            AppError::Internal(format!("read secret: {err}"))
+        }
+    })?;
+    String::from_utf8(password.as_ref().to_vec())
+        .map_err(|_| AppError::Internal("keychain secret is not UTF-8".into()))
+}
+
+fn keychain_delete_secret(key: &str) -> AppResult<()> {
+    let (_password, item) = match find_generic_password(None, KEYCHAIN_SERVICE, key) {
+        Ok(found) => found,
+        Err(err) if err.code() == -25300 => return Ok(()),
+        Err(err) => return Err(AppError::Internal(format!("find secret for delete: {err}"))),
+    };
+    item.delete();
+    Ok(())
 }
 
 /// Probe Accessibility (post-event) access. Returns true when CGEvent::post is
@@ -415,4 +463,38 @@ fn simulate_cmd_v() -> AppResult<()> {
     key_up.post(CGEventTapLocation::HID);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "touches the user's macOS Keychain; run manually for P1.2 smoke verification"]
+    fn keychain_secret_round_trip_and_delete() {
+        let key = format!(
+            "audie_test_keychain_round_trip_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let first = "test-secret-one";
+        let second = "test-secret-two";
+
+        let _ = keychain_delete_secret(&key);
+
+        keychain_store_secret(&key, first).unwrap();
+        assert_eq!(keychain_read_secret(&key).unwrap(), first);
+
+        keychain_store_secret(&key, second).unwrap();
+        assert_eq!(keychain_read_secret(&key).unwrap(), second);
+
+        keychain_delete_secret(&key).unwrap();
+        assert!(matches!(
+            keychain_read_secret(&key),
+            Err(AppError::Provider(_))
+        ));
+    }
 }

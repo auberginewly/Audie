@@ -78,6 +78,9 @@ pub fn run() {
             commands::update_settings,
             commands::list_asr_providers,
             commands::list_llm_providers,
+            commands::set_secret,
+            commands::has_secret,
+            commands::delete_secret,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

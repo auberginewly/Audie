@@ -4,7 +4,7 @@
 // `current_platform()` — they must never import macos.rs / windows.rs directly.
 //
 // P0.1 only uses `register_hotkey` / `unregister_all_hotkeys`. inject_text lands
-// in P0.4; keychain methods stay stubbed until P1.
+// in P0.4; keychain methods are filled in during P1.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -86,6 +86,7 @@ pub trait Platform: Send + Sync {
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn read_secret(&self, key: &str) -> AppResult<String>;
+    fn delete_secret(&self, key: &str) -> AppResult<()>;
 }
 
 #[cfg(target_os = "macos")]

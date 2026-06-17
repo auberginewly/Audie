@@ -45,3 +45,4 @@ core-foundation = "0.10"
 # Microphone TCC status (AVCaptureDevice authorizationStatus under the hood),
 # same crate Handy uses. We call its `check_microphone_permission` fn directly.
 tauri-plugin-macos-permissions = "2.3.0"
+security-framework = "3.7.0"
