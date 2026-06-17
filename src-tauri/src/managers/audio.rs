@@ -20,10 +20,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::asr::AudioData;
 use crate::error::{AppError, AppResult};
+use crate::platform::Platform;
 
 const AUDIO_LEVEL_EVENT: &str = "audio-level";
 const EMIT_INTERVAL_MS: u64 = 33;
@@ -80,6 +81,13 @@ impl AudioManager {
         let accum = Arc::new(Mutex::new(LevelAccum::default()));
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
 
+        // Ask the platform layer whether to override cpal's `default_input_device`.
+        // macOS: if the system default is Bluetooth, this returns the name of a
+        // wired alternative so we sidestep the AirPods A2DP/HFP gotcha.
+        let preferred_name = app
+            .try_state::<Arc<dyn Platform>>()
+            .and_then(|p| p.inner().preferred_input_device_name());
+
         // Spawn the capture thread and wait for stream setup to either succeed
         // (reporting the stream's format) or fail. cpal's `Stream` is `!Send`,
         // so it must be created and parked on the same thread.
@@ -90,7 +98,13 @@ impl AudioManager {
         let capture_thread = thread::Builder::new()
             .name("audie-audio-capture".into())
             .spawn(move || {
-                run_capture_thread(shutdown_cap, accum_cap, buffer_cap, ready_tx);
+                run_capture_thread(
+                    shutdown_cap,
+                    accum_cap,
+                    buffer_cap,
+                    preferred_name,
+                    ready_tx,
+                );
             })
             .map_err(|e| AppError::Device(format!("spawn capture thread: {e}")))?;
 
@@ -188,10 +202,11 @@ fn run_capture_thread(
     shutdown: Arc<AtomicBool>,
     accum: Arc<Mutex<LevelAccum>>,
     buffer: Arc<Mutex<Vec<f32>>>,
+    preferred_name: Option<String>,
     ready_tx: mpsc::Sender<AppResult<AudioMeta>>,
 ) {
     let host = cpal::default_host();
-    let device = match host.default_input_device() {
+    let device = match resolve_input_device(&host, preferred_name.as_deref()) {
         Some(d) => d,
         None => {
             let _ = ready_tx.send(Err(AppError::Device("no default input device".into())));
@@ -202,8 +217,9 @@ fn run_capture_thread(
     let supported = match device.default_input_config() {
         Ok(c) => c,
         Err(e) => {
-            // cpal surfaces the macOS permission denial here as a device error.
-            // P0.6 will classify this into AppError::Permission via the system API.
+            // TCC permission is gated upstream by `ensure_microphone_permission`
+            // before we ever reach here, so anything cpal surfaces at this point
+            // is a real device problem (busy, disconnected, unsupported format).
             let _ = ready_tx.send(Err(AppError::Device(format!("default_input_config: {e}"))));
             return;
         }
@@ -343,6 +359,25 @@ fn process_u16(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[u16]
         }
     }
     merge_peak(accum, peak);
+}
+
+/// Look up `preferred_name` in the host's input device list and return it; fall
+/// back to the host default if the name doesn't resolve (device may have been
+/// unplugged between platform-layer query and capture). cpal's `name()` is
+/// fallible per device — skip the ones that error.
+fn resolve_input_device(host: &cpal::Host, preferred_name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(name) = preferred_name {
+        if let Ok(devices) = host.input_devices() {
+            for d in devices {
+                if d.name().ok().as_deref() == Some(name) {
+                    log::info!("using preferred input device: {name}");
+                    return Some(d);
+                }
+            }
+            log::warn!("preferred input device {name:?} not found via cpal; using default");
+        }
+    }
+    host.default_input_device()
 }
 
 fn merge_peak(accum: &Mutex<LevelAccum>, local: f32) {

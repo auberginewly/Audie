@@ -73,6 +73,16 @@ pub trait Platform: Send + Sync {
     /// (§3.7 Permission). SPEC §3.5 `request_permission`.
     fn ensure_microphone_permission(&self) -> bool;
 
+    /// Return the device name to prefer over the system default input. Used to
+    /// dodge Bluetooth-mic gotchas (e.g. AirPods on A2DP read literal zeros until
+    /// macOS deigns to flip to HFP, which also nukes system audio quality).
+    /// `None` means "no opinion — caller should use the system default".
+    /// The caller is expected to match cpal's `Device::name()` against this.
+    /// P3 设备选择切片会把这条逻辑搬到设置页。
+    fn preferred_input_device_name(&self) -> Option<String> {
+        None
+    }
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn read_secret(&self, key: &str) -> AppResult<String>;

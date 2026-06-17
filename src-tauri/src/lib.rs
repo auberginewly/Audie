@@ -162,14 +162,25 @@ fn handle_hotkey(
                 );
                 return;
             }
+            // Start capture BEFORE the Idle→Recording transition: a cpal failure
+            // (no input device, build_input_stream blew up, etc.) needs to surface
+            // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
+            // transition first would strand us in Recording with a dead stream.
+            if let Err(err) = audio.start_capture(app.clone()) {
+                log::error!("start capture: {err:?}");
+                let _ = show_overlay(app);
+                enter_error(app.clone(), state.clone(), err);
+                return;
+            }
             if state.transition(app, AppState::Recording, Some("hotkey-down")) {
-                if let Err(err) = audio.start_capture(app.clone()) {
-                    // Device-error routing to the UI is P0.7. For now just log;
-                    // the overlay still shows but bars stay flat.
-                    log::error!("start capture: {err:?}");
-                }
                 if let Err(err) = show_overlay(app) {
                     log::error!("show overlay: {err:?}");
+                }
+            } else {
+                // Transition rejected (shouldn't happen — we just confirmed Idle
+                // implicitly by reaching here). Tear down the capture we just opened.
+                if let Err(err) = audio.stop_capture() {
+                    log::warn!("rollback stop_capture: {err:?}");
                 }
             }
         }
@@ -211,6 +222,24 @@ fn spawn_transcription(
 ) {
     thread::spawn(move || {
         let duration_ms = duration_ms(&audio);
+
+        // AirPods on A2DP (no HFP switch yet) and a few other broken-mic states
+        // produce a buffer of literal zeros. Sending that to Whisper costs an API
+        // call and gets back "Thank you." hallucinations. Detect digital silence
+        // here and short-circuit to a friendly Device error. Threshold is "any
+        // sample exceeds 1e-4" — real mic noise floor sits well above that, so a
+        // healthy 200ms recording always passes.
+        if duration_ms >= 200 && is_digital_silence(&audio) {
+            enter_error(
+                app,
+                state,
+                AppError::Device(
+                    "麦克风没声音，请检查蓝牙耳机是否切到通话模式，或换默认输入设备".into(),
+                ),
+            );
+            return;
+        }
+
         let text = match transcription.transcribe(&audio) {
             Ok(text) => text,
             Err(err) => {
@@ -270,6 +299,11 @@ fn settle_to_idle(app: &AppHandle, state: &Arc<StateMachine>, reason: &str) {
     if let Err(err) = hide_overlay(app) {
         log::error!("hide overlay: {err:?}");
     }
+}
+
+fn is_digital_silence(audio: &AudioData) -> bool {
+    const SILENCE_EPS: f32 = 1e-4;
+    !audio.samples.iter().any(|s| s.abs() > SILENCE_EPS)
 }
 
 fn duration_ms(audio: &AudioData) -> u64 {
