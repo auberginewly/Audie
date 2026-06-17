@@ -7,6 +7,7 @@
 //   - Overlay window positioned bottom-center, click-through
 
 mod error;
+mod managers;
 mod platform;
 mod state;
 
@@ -16,6 +17,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 use crate::error::{AppError, AppResult};
+use crate::managers::audio::AudioManager;
 use crate::platform::{current_platform, HotkeyEvent, HotkeyRegistry, Platform};
 use crate::state::{AppState, StateMachine};
 
@@ -53,15 +55,17 @@ pub fn run() {
             }
 
             let state_machine = Arc::new(StateMachine::new());
+            let audio = Arc::new(AudioManager::new());
             let platform = current_platform(registry_for_setup.clone());
 
             let state_for_cb = state_machine.clone();
+            let audio_for_cb = audio.clone();
             let app_for_cb = app_handle.clone();
             if let Err(err) = platform.register_hotkey(
                 &app_handle,
                 DEFAULT_HOTKEY,
                 Box::new(move |event| {
-                    handle_hotkey(&app_for_cb, &state_for_cb, event);
+                    handle_hotkey(&app_for_cb, &state_for_cb, &audio_for_cb, event);
                 }),
             ) {
                 log::error!("register hotkey {DEFAULT_HOTKEY}: {err:?}");
@@ -72,6 +76,7 @@ pub fn run() {
 
             // Stash for future managers / commands.
             app.manage(state_machine);
+            app.manage(audio);
             app.manage(registry_for_setup.clone());
             let platform_arc: Arc<dyn Platform> = Arc::from(platform);
             app.manage(platform_arc);
@@ -82,10 +87,16 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn handle_hotkey(app: &AppHandle, state: &StateMachine, event: HotkeyEvent) {
+fn handle_hotkey(app: &AppHandle, state: &StateMachine, audio: &AudioManager, event: HotkeyEvent) {
     match event {
         HotkeyEvent::Pressed => {
             if state.transition(app, AppState::Recording, Some("hotkey-down")) {
+                if let Err(err) = audio.start_capture(app.clone()) {
+                    // P0.7 will route this to the UI as an AppError event.
+                    // For P0.2 we just log; the overlay still shows but bars
+                    // will stay flat.
+                    log::error!("start capture: {err:?}");
+                }
                 if let Err(err) = show_overlay(app) {
                     log::error!("show overlay: {err:?}");
                 }
@@ -95,6 +106,9 @@ fn handle_hotkey(app: &AppHandle, state: &StateMachine, event: HotkeyEvent) {
             // P0.1 short-circuit: no transcription pipeline yet, so we go
             // Recording → Idle directly. P0.4+ will go Recording → Processing.
             if state.transition(app, AppState::Idle, Some("hotkey-up")) {
+                if let Err(err) = audio.stop_capture() {
+                    log::error!("stop capture: {err:?}");
+                }
                 if let Err(err) = hide_overlay(app) {
                     log::error!("hide overlay: {err:?}");
                 }

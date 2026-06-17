@@ -1,1 +1,4 @@
-// TODO P0.2+ — declare submodules and `init_managers()` setup helper as slices land.
+// Manager registry. Each manager owns one chunk of the pipeline
+// (PROJECT_SPEC.md §6.1) and is stashed on the Tauri state at startup.
+
+pub mod audio;
