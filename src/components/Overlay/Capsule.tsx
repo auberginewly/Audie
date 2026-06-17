@@ -1,7 +1,8 @@
 // The recording capsule. Pure mirror of Rust events — no business logic here
 // (PROJECT_SPEC.md §3.8 / §6.2).
-// P0.2: three placeholder bars whose heights track the last three audio-level
-// snapshots. Typeless-style strip animation lands in P3.
+// P0.2: three placeholder bars track the last three audio-level snapshots.
+// P0.6: plain text for PROCESSING/SUCCESS, red + message for ERROR. CANCEL and
+// IDLE fade out. Typeless-style polish lands in P2/P3.
 
 import { useAudioLevels } from "../../hooks/useAudioLevels";
 import { useRecordingStore } from "../../store/recording";
@@ -20,24 +21,47 @@ function barHeight(level: number): number {
 
 export function Capsule() {
   const state = useRecordingStore((s) => s.state);
+  const error = useRecordingStore((s) => s.error);
   const levels = useAudioLevels();
 
-  const visible = state === "RECORDING";
+  // CANCEL and IDLE fade out; everything else keeps the capsule on screen.
+  const visible =
+    state === "RECORDING" ||
+    state === "PROCESSING" ||
+    state === "SUCCESS" ||
+    state === "ERROR";
+  const isError = state === "ERROR";
 
   return (
     <div
-      className={`h-14 w-80 rounded-full bg-base-300/85 backdrop-blur-md
-                  shadow-lg flex items-center justify-center gap-1.5
+      className={`h-14 w-80 rounded-full backdrop-blur-md shadow-lg
+                  flex items-center justify-center gap-1.5 px-4
                   transition-all duration-150 ease-out
+                  ${isError ? "bg-error/90" : "bg-base-300/85"}
                   ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"}`}
     >
-      {levels.map((level, i) => (
-        <span
-          key={i}
-          className="w-1 rounded-full bg-base-content/85 transition-[height] duration-75 ease-out"
-          style={{ height: `${barHeight(level)}px` }}
-        />
-      ))}
+      {state === "RECORDING" &&
+        levels.map((level, i) => (
+          <span
+            key={i}
+            className="w-1 rounded-full bg-base-content/85 transition-[height] duration-75 ease-out"
+            style={{ height: `${barHeight(level)}px` }}
+          />
+        ))}
+
+      {state === "PROCESSING" && (
+        <span className="text-sm text-base-content/70">处理中…</span>
+      )}
+
+      {state === "SUCCESS" && (
+        <span className="text-sm text-base-content/70">完成</span>
+      )}
+
+      {isError && (
+        <span className="text-sm text-error-content text-center truncate">
+          {error?.message ?? "出错了"}
+        </span>
+      )}
     </div>
   );
 }

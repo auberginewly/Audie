@@ -5,17 +5,29 @@ import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENT_STATE_CHANGE,
+  EVENT_ERROR,
   StateChangeSchema,
+  AppErrorSchema,
   type StateChange,
+  type AppErrorEvent,
 } from "../types/events";
 import { useRecordingStore } from "../store/recording";
 
 export function useRecordingFlow(): void {
   const setState = useRecordingStore((s) => s.setState);
+  const setError = useRecordingStore((s) => s.setError);
 
   useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
+    const unlisteners: UnlistenFn[] = [];
     let cancelled = false;
+
+    const track = (fn: UnlistenFn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisteners.push(fn);
+      }
+    };
 
     listen<StateChange>(EVENT_STATE_CHANGE, (event) => {
       const parsed = StateChangeSchema.safeParse(event.payload);
@@ -26,20 +38,25 @@ export function useRecordingFlow(): void {
       }
       setState(parsed.data.to);
     })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      })
-      .catch((err) => {
-        console.error("failed to subscribe state-change:", err);
-      });
+      .then(track)
+      .catch((err) => console.error("failed to subscribe state-change:", err));
+
+    // The ERROR state-change and this `error` event arrive as a pair; the latter
+    // carries the message the capsule renders.
+    listen<AppErrorEvent>(EVENT_ERROR, (event) => {
+      const parsed = AppErrorSchema.safeParse(event.payload);
+      if (!parsed.success) {
+        console.warn("invalid error payload", parsed.error, event.payload);
+        return;
+      }
+      setError(parsed.data);
+    })
+      .then(track)
+      .catch((err) => console.error("failed to subscribe error:", err));
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlisteners.forEach((fn) => fn());
     };
-  }, [setState]);
+  }, [setState, setError]);
 }

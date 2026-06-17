@@ -66,6 +66,13 @@ pub trait Platform: Send + Sync {
     /// clipboard plugin. Per §6.3 the OS-specific keystroke stays in this layer.
     fn inject_text(&self, app: &AppHandle, text: &str) -> AppResult<()>;
 
+    /// Ensure microphone (TCC) access before recording, returning whether it's
+    /// granted. On first run this shows the system prompt; if already denied it
+    /// returns false without a dialog (macOS only asks once). Gating here means a
+    /// denial flashes the capsule red instead of silently capturing zeros
+    /// (§3.7 Permission). SPEC §3.5 `request_permission`.
+    fn ensure_microphone_permission(&self) -> bool;
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn read_secret(&self, key: &str) -> AppResult<String>;

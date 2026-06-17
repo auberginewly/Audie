@@ -31,3 +31,24 @@ export const AudioLevelSchema = z.object({
 export type AudioLevel = z.infer<typeof AudioLevelSchema>;
 
 export const EVENT_AUDIO_LEVEL = "audio-level";
+
+// `error`: emitted on any pipeline failure. Mirrors src-tauri ErrorPayload /
+// AppError categories (PROJECT_SPEC.md §3.6 / §3.7).
+export const ErrorCodeSchema = z.enum([
+  "permission",
+  "device",
+  "network",
+  "provider",
+  "inject",
+  "internal",
+]);
+export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
+
+export const AppErrorSchema = z.object({
+  code: ErrorCodeSchema,
+  message: z.string(),
+  recoverable: z.boolean(),
+});
+export type AppErrorEvent = z.infer<typeof AppErrorSchema>;
+
+export const EVENT_ERROR = "error";

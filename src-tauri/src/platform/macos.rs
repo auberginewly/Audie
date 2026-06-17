@@ -15,6 +15,7 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use tauri_plugin_macos_permissions::{check_microphone_permission, request_microphone_permission};
 
 use super::{HotkeyCallback, HotkeyRegistry, Platform};
 use crate::error::{AppError, AppResult};
@@ -82,6 +83,17 @@ impl Platform for MacosPlatform {
         }
 
         Ok(())
+    }
+
+    fn ensure_microphone_permission(&self) -> bool {
+        // `request` triggers requestAccess(.audio): it shows the prompt only when
+        // status is NotDetermined (resolving once the user answers) and is a no-op
+        // when already decided — but it doesn't report the decision, so we read it
+        // back with `check`. Blocks the hotkey thread, not the UI thread, so fine.
+        if let Err(err) = tauri::async_runtime::block_on(request_microphone_permission()) {
+            log::warn!("request microphone permission: {err}");
+        }
+        tauri::async_runtime::block_on(check_microphone_permission())
     }
 
     fn store_secret(&self, _key: &str, _value: &str) -> AppResult<()> {

@@ -91,7 +91,8 @@ impl Default for StateMachine {
 fn is_legal(from: AppState, to: AppState) -> bool {
     use AppState::*;
     match (from, to) {
-        (Idle, Recording) => true,
+        // Idle -> Error: permission denied at press time, before recording starts (P0.6).
+        (Idle, Recording | Error) => true,
         // P0.1 short-circuits Recording -> Idle directly (no transcription yet).
         // P0.4+ will wire Recording -> Processing -> Success/Error -> Idle.
         (Recording, Processing | Idle | Cancel) => true,

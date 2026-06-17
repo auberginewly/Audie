@@ -38,6 +38,15 @@ struct FinalTranscript {
     duration_ms: u64,
 }
 
+// §3.6 `error` event payload. Flattens AppError's category + message and adds
+// the recoverable flag from the §3.7 table.
+#[derive(Serialize, Clone)]
+struct ErrorPayload {
+    code: &'static str,
+    message: String,
+    recoverable: bool,
+}
+
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_BOTTOM_MARGIN_PX: f64 = 16.0;
 
@@ -140,11 +149,23 @@ fn handle_hotkey(
 ) {
     match event {
         HotkeyEvent::Pressed => {
+            // Gate on mic permission before recording: a denial otherwise
+            // captures silence and the user only sees a Whisper hallucination.
+            // Flash red instead (§3.7 Permission).
+            let platform = app.state::<Arc<dyn Platform>>();
+            if !platform.ensure_microphone_permission() {
+                let _ = show_overlay(app);
+                enter_error(
+                    app.clone(),
+                    state.clone(),
+                    AppError::Permission("请授予麦克风权限".into()),
+                );
+                return;
+            }
             if state.transition(app, AppState::Recording, Some("hotkey-down")) {
                 if let Err(err) = audio.start_capture(app.clone()) {
-                    // P0.6 will route this to the UI as an AppError event.
-                    // For now we just log; the overlay still shows but bars
-                    // will stay flat.
+                    // Device-error routing to the UI is P0.7. For now just log;
+                    // the overlay still shows but bars stay flat.
                     log::error!("start capture: {err:?}");
                 }
                 if let Err(err) = show_overlay(app) {
@@ -156,9 +177,8 @@ fn handle_hotkey(
             if !state.transition(app, AppState::Processing, Some("hotkey-up")) {
                 return;
             }
-            if let Err(err) = hide_overlay(app) {
-                log::error!("hide overlay: {err:?}");
-            }
+            // Overlay stays up through Processing/Success/Error so the user can
+            // see the result; it's hidden only when we settle back to Idle.
             match audio.stop_capture() {
                 Ok(recorded) => {
                     spawn_transcription(
@@ -221,19 +241,35 @@ fn spawn_transcription(
 
         state.transition(&app, AppState::Success, Some("injected"));
         thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
-        state.transition(&app, AppState::Idle, Some("done"));
+        settle_to_idle(&app, &state, "done");
     });
 }
 
 /// Emit the error, flash Error, and recover to Idle after a hold. Spawns its own
 /// thread so callers on the hotkey path don't block.
 fn enter_error(app: AppHandle, state: Arc<StateMachine>, err: AppError) {
-    let _ = app.emit("error", &err);
+    let _ = app.emit(
+        "error",
+        ErrorPayload {
+            code: err.code(),
+            message: err.message().to_string(),
+            recoverable: err.recoverable(),
+        },
+    );
     state.transition(&app, AppState::Error, Some("error"));
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(ERROR_HOLD_MS));
-        state.transition(&app, AppState::Idle, Some("recovered"));
+        settle_to_idle(&app, &state, "recovered");
     });
+}
+
+/// Transition to Idle and hide the overlay window. The single exit point for the
+/// pipeline — overlay visibility mirrors "not Idle".
+fn settle_to_idle(app: &AppHandle, state: &Arc<StateMachine>, reason: &str) {
+    state.transition(app, AppState::Idle, Some(reason));
+    if let Err(err) = hide_overlay(app) {
+        log::error!("hide overlay: {err:?}");
+    }
 }
 
 fn duration_ms(audio: &AudioData) -> u64 {

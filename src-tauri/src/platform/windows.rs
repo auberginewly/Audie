@@ -32,6 +32,10 @@ impl Platform for WindowsPlatform {
         unimplemented!("Windows inject — P4")
     }
 
+    fn ensure_microphone_permission(&self) -> bool {
+        unimplemented!("Windows mic permission — P4")
+    }
+
     fn store_secret(&self, _key: &str, _value: &str) -> AppResult<()> {
         unimplemented!("Windows credential manager — P4")
     }

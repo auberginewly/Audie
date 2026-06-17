@@ -29,7 +29,6 @@ pub enum AppError {
 }
 
 impl AppError {
-    #[allow(dead_code)] // Used by P0.7 when the error event is plumbed.
     pub fn recoverable(&self) -> bool {
         // §3.7 table — Permission / Device / Network are recoverable;
         // Provider / Internal are not; Inject is partial (clipboard fallback).
@@ -37,6 +36,29 @@ impl AppError {
             self,
             AppError::Permission(_) | AppError::Device(_) | AppError::Network(_)
         )
+    }
+
+    /// Stable snake_case code for the §3.6 `error` event payload.
+    pub fn code(&self) -> &'static str {
+        match self {
+            AppError::Permission(_) => "permission",
+            AppError::Device(_) => "device",
+            AppError::Network(_) => "network",
+            AppError::Provider(_) => "provider",
+            AppError::Inject(_) => "inject",
+            AppError::Internal(_) => "internal",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            AppError::Permission(m)
+            | AppError::Device(m)
+            | AppError::Network(m)
+            | AppError::Provider(m)
+            | AppError::Inject(m)
+            | AppError::Internal(m) => m,
+        }
     }
 }
 
