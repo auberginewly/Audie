@@ -52,25 +52,47 @@ impl AsrProvider for GroqProvider {
             .bearer_auth(api_key)
             .multipart(form)
             .send()
-            .map_err(|e| AppError::Network(format!("groq request failed: {e}")))?;
+            .map_err(classify_reqwest_error)?;
 
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
-            // 401/403 mean the key is bad — not recoverable, user must fix it.
-            return if status == 401 || status == 403 {
-                Err(AppError::Provider(format!(
-                    "groq auth failed ({status}): {body}"
-                )))
-            } else {
-                Err(AppError::Network(format!("groq returned {status}: {body}")))
-            };
+            return Err(classify_http_status(status.as_u16(), &body));
         }
 
         let parsed: GroqResponse = resp
             .json()
-            .map_err(|e| AppError::Provider(format!("parse groq response: {e}")))?;
+            .map_err(|e| AppError::Provider(format!("解析 Groq 响应失败：{e}")))?;
         Ok(parsed.text.trim().to_string())
+    }
+}
+
+/// Classify reqwest transport errors into §3.7 friendly categories. Bare
+/// reqwest Display is noisy and uninterpretable to end users.
+fn classify_reqwest_error(e: reqwest::Error) -> AppError {
+    if e.is_timeout() {
+        AppError::Network("请求 Groq 超时，请检查网络或代理".into())
+    } else if e.is_connect() {
+        AppError::Network("无法连接 Groq，请检查网络或代理（中国大陆需走代理）".into())
+    } else {
+        AppError::Network(format!("Groq 请求失败：{e}"))
+    }
+}
+
+/// Classify HTTP failure status into §3.7 categories. 401/invalid key is the
+/// only non-recoverable case — user has to fix the key. 403 is treated as
+/// Network because in practice it's Groq's region-block on mainland China,
+/// recoverable by enabling a proxy.
+fn classify_http_status(status: u16, body: &str) -> AppError {
+    match status {
+        401 => AppError::Provider("Groq API key 无效，请检查 GROQ_API_KEY".into()),
+        403 => AppError::Network("Groq 拒绝请求（可能是地区限制，中国大陆需走代理）".into()),
+        429 => AppError::Network("Groq 请求过于频繁，请稍后重试".into()),
+        500..=599 => AppError::Network(format!("Groq 服务端异常（{status}）")),
+        _ => {
+            let snippet: String = body.chars().take(200).collect();
+            AppError::Provider(format!("Groq 拒绝请求（{status}）：{snippet}"))
+        }
     }
 }
 

@@ -39,6 +39,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 # macOS-only: CGEvent to simulate the Cmd+V paste keystroke (clipboard inject).
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
+# CoreAudio HAL device-transport query: prefer wired/built-in input over
+# Bluetooth so AirPods don't blackhole capture into HFP silence (P0.7).
+core-foundation = "0.10"
 # Microphone TCC status (AVCaptureDevice authorizationStatus under the hood),
 # same crate Handy uses. We call its `check_microphone_permission` fn directly.
 tauri-plugin-macos-permissions = "2.3.0"
