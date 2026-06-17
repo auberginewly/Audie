@@ -232,6 +232,7 @@ trait LlmProvider {
 **P1 必带的 adapter**：
 
 - AsrProvider：`Groq`（whisper-large-v3-turbo）、`OpenAI`（whisper-1）、`WhisperCpp`（本地）
+  - 中文 + 流式主力候选（P2 接流式时主推）：`豆包/火山引擎`、`阿里 Paraformer-realtime`、`Deepgram`（英文）。批量阶段先不接，到 P2 各加一个 adapter，不改其他代码。
 - LlmProvider：`OpenAICompatible`（base_url + api_key + model 三字段，覆盖 OpenAI / DeepSeek / 硅基流动 / Ollama）
 
 ### 4.2 BYOK + 系统 keychain

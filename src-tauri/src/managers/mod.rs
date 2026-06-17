@@ -2,3 +2,4 @@
 // (PROJECT_SPEC.md §6.1) and is stashed on the Tauri state at startup.
 
 pub mod audio;
+pub mod transcription;
