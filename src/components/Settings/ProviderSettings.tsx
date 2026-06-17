@@ -88,7 +88,12 @@ export function ProviderSettings() {
         secretKeyId="openai_compatible_api_key"
         kind="llm"
         providerId="openai_compatible"
-        defaultBaseUrl="https://api.openai.com/v1"
+        baseUrl={settings.openai_compatible_base_url}
+        model={settings.openai_compatible_model}
+        onBaseUrlChange={(openai_compatible_base_url) =>
+          updateSettings({ openai_compatible_base_url })
+        }
+        onModelChange={(openai_compatible_model) => updateSettings({ openai_compatible_model })}
       />
       <div className="divider my-1" />
       <label className="flex items-center justify-between gap-3 text-sm">
@@ -123,17 +128,22 @@ function ProviderKeyField({
   secretKeyId,
   kind,
   providerId,
-  defaultBaseUrl,
+  baseUrl,
+  model,
+  onBaseUrlChange,
+  onModelChange,
 }: {
   title: string;
   description: string;
   secretKeyId: string;
   kind: ProviderKind;
   providerId: AsrProviderId | LlmProviderId;
-  defaultBaseUrl?: string;
+  baseUrl?: string;
+  model?: string;
+  onBaseUrlChange?: (value: string) => void;
+  onModelChange?: (value: string) => void;
 }) {
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState(defaultBaseUrl ?? "");
   const [hasSavedSecret, setHasSavedSecret] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -211,7 +221,7 @@ function ProviderKeyField({
           kind,
           provider_id: providerId,
           key_id: secretKeyId,
-          base_url: defaultBaseUrl ? baseUrl.trim() : null,
+          base_url: baseUrl !== undefined ? baseUrl.trim() : null,
         },
       });
       const parsed = ProviderTestResultSchema.safeParse(raw);
@@ -248,14 +258,25 @@ function ProviderKeyField({
           {hasSavedSecret ? "已保存" : "未保存"}
         </span>
       </div>
-      {defaultBaseUrl ? (
+      {baseUrl !== undefined && onBaseUrlChange ? (
         <label className="form-control">
           <span className="label-text mb-1">Base URL</span>
           <input
             className="input input-bordered input-sm"
             value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
+            onChange={(event) => onBaseUrlChange(event.target.value)}
             placeholder="https://api.openai.com/v1"
+          />
+        </label>
+      ) : null}
+      {model !== undefined && onModelChange ? (
+        <label className="form-control">
+          <span className="label-text mb-1">Model</span>
+          <input
+            className="input input-bordered input-sm"
+            value={model}
+            onChange={(event) => onModelChange(event.target.value)}
+            placeholder="gpt-4o-mini"
           />
         </label>
       ) : null}

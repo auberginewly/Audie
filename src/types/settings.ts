@@ -11,6 +11,8 @@ export const SettingsSchema = z.object({
   enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
   whisper_cpp_model_path: z.string().nullable(),
+  openai_compatible_base_url: z.string().min(1),
+  openai_compatible_model: z.string().min(1),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

@@ -6,16 +6,20 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENT_STATE_CHANGE,
   EVENT_ERROR,
+  EVENT_ENHANCE_PROGRESS,
   StateChangeSchema,
   AppErrorSchema,
+  EnhanceProgressSchema,
   type StateChange,
   type AppErrorEvent,
+  type EnhanceProgressEvent,
 } from "../types/events";
 import { useRecordingStore } from "../store/recording";
 
 export function useRecordingFlow(): void {
   const setState = useRecordingStore((s) => s.setState);
   const setError = useRecordingStore((s) => s.setError);
+  const setEnhanceProgress = useRecordingStore((s) => s.setEnhanceProgress);
 
   useEffect(() => {
     const unlisteners: UnlistenFn[] = [];
@@ -50,13 +54,24 @@ export function useRecordingFlow(): void {
         return;
       }
       setError(parsed.data);
-    })
+      })
       .then(track)
       .catch((err) => console.error("failed to subscribe error:", err));
+
+    listen<EnhanceProgressEvent>(EVENT_ENHANCE_PROGRESS, (event) => {
+      const parsed = EnhanceProgressSchema.safeParse(event.payload);
+      if (!parsed.success) {
+        console.warn("invalid enhance-progress payload", parsed.error, event.payload);
+        return;
+      }
+      setEnhanceProgress(parsed.data);
+    })
+      .then(track)
+      .catch((err) => console.error("failed to subscribe enhance-progress:", err));
 
     return () => {
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [setState, setError]);
+  }, [setState, setError, setEnhanceProgress]);
 }
