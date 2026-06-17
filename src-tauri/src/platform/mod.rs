@@ -3,8 +3,8 @@
 // All `#[cfg(target_os)]` lives behind this trait. Managers MUST go through
 // `current_platform()` — they must never import macos.rs / windows.rs directly.
 //
-// P0.1 only uses `register_hotkey` / `unregister_all_hotkeys`. inject_text and
-// keychain methods are stubbed until P0.5 / P1.
+// P0.1 only uses `register_hotkey` / `unregister_all_hotkeys`. inject_text lands
+// in P0.4; keychain methods stay stubbed until P1.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -61,8 +61,10 @@ pub trait Platform: Send + Sync {
 
     fn unregister_all_hotkeys(&self, app: &AppHandle) -> AppResult<()>;
 
-    /// P0.5 — clipboard-based text injection at the current caret.
-    fn inject_text(&self, text: &str) -> AppResult<()>;
+    /// P0.4 — clipboard-method injection at the current caret: save the current
+    /// clipboard, write `text`, simulate Cmd+V, restore. Needs `app` for the
+    /// clipboard plugin. Per §6.3 the OS-specific keystroke stays in this layer.
+    fn inject_text(&self, app: &AppHandle, text: &str) -> AppResult<()>;
 
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;

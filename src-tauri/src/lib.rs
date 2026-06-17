@@ -23,6 +23,7 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use crate::asr::AudioData;
 use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
+use crate::managers::inject::InjectManager;
 use crate::managers::transcription::TranscriptionManager;
 use crate::platform::{current_platform, HotkeyEvent, HotkeyRegistry, Platform};
 use crate::state::{AppState, StateMachine};
@@ -61,6 +62,7 @@ pub fn run() {
                 })
                 .build(),
         )
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
@@ -72,11 +74,14 @@ pub fn run() {
             let state_machine = Arc::new(StateMachine::new());
             let audio = Arc::new(AudioManager::new());
             let transcription = Arc::new(TranscriptionManager::new());
-            let platform = current_platform(registry_for_setup.clone());
+            let platform: Arc<dyn Platform> =
+                Arc::from(current_platform(registry_for_setup.clone()));
+            let inject = Arc::new(InjectManager::new(platform.clone()));
 
             let state_for_cb = state_machine.clone();
             let audio_for_cb = audio.clone();
             let transcription_for_cb = transcription.clone();
+            let inject_for_cb = inject.clone();
             let app_for_cb = app_handle.clone();
             if let Err(err) = platform.register_hotkey(
                 &app_handle,
@@ -87,6 +92,7 @@ pub fn run() {
                         &state_for_cb,
                         &audio_for_cb,
                         &transcription_for_cb,
+                        &inject_for_cb,
                         event,
                     );
                 }),
@@ -101,9 +107,9 @@ pub fn run() {
             app.manage(state_machine);
             app.manage(audio);
             app.manage(transcription);
+            app.manage(inject);
             app.manage(registry_for_setup.clone());
-            let platform_arc: Arc<dyn Platform> = Arc::from(platform);
-            app.manage(platform_arc);
+            app.manage(platform);
 
             Ok(())
         })
@@ -116,6 +122,7 @@ fn handle_hotkey(
     state: &Arc<StateMachine>,
     audio: &Arc<AudioManager>,
     transcription: &Arc<TranscriptionManager>,
+    inject: &Arc<InjectManager>,
     event: HotkeyEvent,
 ) {
     match event {
@@ -145,6 +152,7 @@ fn handle_hotkey(
                         app.clone(),
                         state.clone(),
                         transcription.clone(),
+                        inject.clone(),
                         recorded,
                     );
                 }
@@ -158,31 +166,49 @@ fn handle_hotkey(
 }
 
 /// Run the (blocking) transcription off the hotkey thread, then drive the
-/// pipeline tail: print the text, emit `final-transcript`, flash Success and
-/// settle to Idle. Errors flash red (Error) and recover. PROJECT_SPEC.md §3.3.
+/// pipeline tail: print the text, emit `final-transcript`, inject at the caret,
+/// flash Success and settle to Idle. Transcription or inject failures flash red
+/// (Error) and recover. PROJECT_SPEC.md §3.2 / §3.3.
 fn spawn_transcription(
     app: AppHandle,
     state: Arc<StateMachine>,
     transcription: Arc<TranscriptionManager>,
+    inject: Arc<InjectManager>,
     audio: AudioData,
 ) {
     thread::spawn(move || {
         let duration_ms = duration_ms(&audio);
-        match transcription.transcribe(&audio) {
-            Ok(text) => {
-                // P0.3 acceptance: the transcript shows up in the console.
-                println!("[transcript] {text}");
-                log::info!("transcript ({duration_ms} ms): {text}");
-                let _ = app.emit("final-transcript", FinalTranscript { text, duration_ms });
-                state.transition(&app, AppState::Success, Some("transcribed"));
-                thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
-                state.transition(&app, AppState::Idle, Some("done"));
-            }
+        let text = match transcription.transcribe(&audio) {
+            Ok(text) => text,
             Err(err) => {
                 log::error!("transcription failed: {err:?}");
                 enter_error(app, state, err);
+                return;
             }
+        };
+
+        // P0.3 acceptance: the transcript shows up in the console.
+        println!("[transcript] {text}");
+        log::info!("transcript ({duration_ms} ms): {text}");
+        let _ = app.emit(
+            "final-transcript",
+            FinalTranscript {
+                text: text.clone(),
+                duration_ms,
+            },
+        );
+
+        // P0.4: inject at the caret. On failure the text is still on the
+        // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
+        if let Err(err) = inject.inject(&app, &text) {
+            log::error!("inject failed: {err:?}");
+            enter_error(app, state, err);
+            return;
         }
+
+        state.transition(&app, AppState::Success, Some("injected"));
+        thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
+        state.transition(&app, AppState::Idle, Some("done"));
     });
 }
 
