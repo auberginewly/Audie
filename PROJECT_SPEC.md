@@ -258,8 +258,8 @@ trait LlmProvider {
 ### 4.2 BYOK + 系统 keychain
 
 - API key 存系统 keychain（macOS Keychain Services；P4 Windows Credential Manager）。
-- 设置里 key 字段：写入即调 `store_secret`，读取走 `read_secret`，**绝不**写进 `tauri-plugin-store` 的明文 JSON。
-- macOS 实现参考 Voxt 当前做法：用底层 `SecItemCopyMatching` / `SecItemAdd` / `SecItemUpdate` 管理 generic-password item，不用 `SecKeychain::default().set_generic_password` 这类高层 wrapper。item 的 `service` 用 bundle id 派生（如 `com.audie.app.secure-storage`），`account` 用稳定 key id（如 `provider.groq.api_key`），写入时设置 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。目标体验：保存一次后重启 App 可静默读取，不能每次读 key 都要求输入系统密码。
+- 设置里 key 字段：写入即调 `store_secret`，存在性检查走 `has_secret`，真正调用 provider 时才走 `read_secret`，**绝不**写进 `tauri-plugin-store` 的明文 JSON。
+- macOS 实现参考 Voxt 当前做法：用底层 `SecItemCopyMatching` / `SecItemAdd` / `SecItemUpdate` / `SecItemDelete` 管理 generic-password item，不用 `SecKeychain::default().set_generic_password` 这类高层 wrapper。item 的 `service` 固定为 `com.audie.app.secure-storage`，`account` 用稳定 key id（如 `groq_api_key`），写入时设置 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。`has_secret` 只做 presence check，不带 `kSecReturnData`，不能为了显示「已配置」而读取 key 明文；旧 `service = "audie"` item 不自动迁移，避免迁移时触发旧钥匙串授权弹窗。
 - 配置导出（设置 → 导出 JSON）：敏感字段用占位符 `"<keychain>"` 替换。
 - 配置导入：遇到占位符 → 提示用户重新填 key。
 
@@ -304,13 +304,40 @@ trait LlmProvider {
 
 ## 五、P2 / P3 / P4 · 概览
 
-进入对应阶段时再回来把这一节展开。
+P2 已进入执行前拆片阶段。P3/P4 仍保持高层目标，进入对应阶段时再展开。
 
 ### P2 — 真流式上屏（差异化核心）
 
 > **北极星**：用户要的最终手感 = P3 的 fn 单击 toggle 控制录音起止 + 本阶段「边录边传、松手即出」流式（typeless 手感）。这是项目的差异化核心，但**严守 P0→P1→P2 顺序**，P0/P1 绝不提前做流式（防烂尾）。
 
 **目标**：感知延迟 ≈ 1s，与说话时长无关。
+
+### 5.1 P2 切片清单（每个独立 commit，不收尾不开下一个）
+
+| 切片 | 内容 | 验收 |
+|---|---|---|
+| P2.1 | P2 正式 SPEC：接口合同 + 切片表 | `PROJECT_SPEC.md` 有 P2.1–P2.6 切片、验收、command/event/provider 语义；`CLAUDE.md` 当前进度同步 |
+| P2.2 | 给 ASR provider 增加流式合同，但先不接真实 provider | Rust 里有 `transcribe_stream` 的类型/事件骨架；现有批量 Groq/OpenAI/WhisperCpp 链路不变；测试能证明批量路径没被破坏 |
+| P2.3 | 接入第一个真实 WebSocket 流式 ASR provider | 选定一个 provider 后，按住说话时后端能收到 partial/final；先打印日志或发事件，不改注入策略 |
+| P2.4 | 录音边采集边上传 chunk | 不再等松手后整段上传；录音时音频 chunk 持续送进 stream；松手后关闭流并拿 final |
+| P2.5 | Overlay 显示实时 partial transcript | 胶囊 RECORDING 态从「录音中…」变成实时字幕；partial 抖动可接受，但不能乱序或闪空 |
+| P2.6 | 松手即 final 注入 + P2 收尾 | 松手后用 final transcript 走现有润色/注入链路；完整体验达到「边说边看字幕，松手后很快出文字」 |
+
+### 5.2 P2 接口边界
+
+- `AsrProvider` 在 P2.2 扩展 `transcribe_stream` 合同：接收音频 chunk 流，输出统一的 partial/final transcript 流。各家 WebSocket 协议差异只允许收敛在 adapter 内，不向 pipeline / overlay 泄漏。
+- `partial-transcript` 仍使用 §3.6 的 event 名，P2 补齐语义：`text` 是当前可展示文本，`is_final` 表示该片段是否定稿，`sequence` 用于保证前端只接受更新的 partial，避免乱序回退。
+- `final-transcript` 继续表示最终可注入文本，不让前端自己判断业务状态；P2 不做真实「流式注入到输入框」，只在 overlay 预览 partial，最终仍一次性注入，避免输入框抖动。
+- 流式 provider 错误继续归 §3.7 大类：连接失败 / 超时 / 断流归 `Network`；鉴权失败 / key 无效 / 配额耗尽归 `Provider`；录音 chunk 采集失败归 `Device`；协议解析异常或违反 adapter 不变量归 `Internal`，不得 panic。
+
+### 5.3 P2 明确不做
+
+- fn 单键、toggle 触发、Esc 中断、✓/✗ 按钮：留到 P3「Overlay 交互 + 控制模型」。
+- 麦克风设备下拉、设备 UID 持久化、设备变化监听：留到 P3「设备选择切片」。
+- 零配置默认 ASR、本地模型下载、onboarding：留到 P3。
+- 多个流式 provider 同时实现：P2 先选一个真实流式 provider 跑通，再扩第二个。
+
+### 5.4 P2 能力与风险
 
 **关键能力**：
 - ASR provider 加 `transcribe_stream` 方法，走 WebSocket（候选：豆包流式 / 阿里 Paraformer-realtime / Deepgram）
@@ -382,7 +409,7 @@ ASR / LLM 各自 trait + adapter 文件。加 provider 不改其他模块。
 ### 6.6 安全 / 隐私底线
 
 - API key 一律走系统 keychain，**绝不**进配置文件明文。
-- macOS keychain 具体实现走 Voxt 风格的 `SecItem*` generic-password API：bundle-id 派生 service、稳定 account、`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。不得采用会导致每次重启/读取都弹系统密码的实现。
+- macOS keychain 具体实现走 Voxt 风格的 `SecItem*` generic-password API：`service = com.audie.app.secure-storage`、稳定 account、`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。`has_secret` 必须是不读明文的 presence check；不得采用会导致每次打开设置页或读取状态都弹系统密码的实现。
 - 不自建任何后端，音频和 key 只在用户设备和用户的 API 之间。
 - 导出配置敏感字段占位。
 - 录音音频默认**不落盘**（除非 debug 模式显式开）。
