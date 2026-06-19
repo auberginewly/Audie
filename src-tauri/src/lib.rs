@@ -83,6 +83,9 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            // Frontend → Rust goes through commands. The hot path itself is not
+            // command-driven: global-shortcut events below enter `handle_hotkey`,
+            // while settings/keychain/provider-test stay here as explicit UI calls.
             commands::get_settings,
             commands::update_settings,
             commands::export_config,
@@ -110,6 +113,10 @@ pub fn run() {
                 Arc::from(current_platform(registry_for_setup.clone()));
             let inject = Arc::new(InjectManager::new(platform.clone()));
 
+            // This is the backend object graph for the P1 pipeline:
+            // StateMachine owns legal UI states; Audio captures samples; ASR and
+            // LLM managers choose providers from settings; Inject delegates the
+            // OS-specific paste/keychain work to Platform.
             // Manage first so `build_hotkey_callback` can resolve managers off
             // the app state — the same callback gets rebuilt when the hotkey
             // changes (commands::update_settings).
@@ -171,6 +178,9 @@ fn handle_hotkey(
 ) {
     match event {
         HotkeyEvent::Pressed => {
+            // Press enters the front half of the pipeline: permission gate →
+            // open cpal stream → Recording state → overlay. No ASR happens until
+            // Release, because P1 still uses batch transcription.
             // Gate on mic permission before recording: a denial otherwise
             // captures silence and the user only sees a Whisper hallucination.
             // Flash red instead (§3.7 Permission).
@@ -207,6 +217,9 @@ fn handle_hotkey(
             }
         }
         HotkeyEvent::Released => {
+            // Release closes the audio session and hands one complete utterance
+            // to the pipeline tail. From here on the overlay remains visible so
+            // the user sees Processing/Success/Error instead of a blink.
             if !state.transition(app, AppState::Processing, Some("hotkey-up")) {
                 return;
             }
@@ -233,9 +246,9 @@ fn handle_hotkey(
 }
 
 /// Run the (blocking) transcription off the hotkey thread, then drive the
-/// pipeline tail: print the text, emit `final-transcript`, inject at the caret,
-/// flash Success and settle to Idle. Transcription or inject failures flash red
-/// (Error) and recover. PROJECT_SPEC.md §3.2 / §3.3.
+/// P1 pipeline tail: ASR → `final-transcript` event → optional LLM enhance →
+/// inject at the caret → Success → Idle. Any failure is mapped to `error` and
+/// recovers through the same Idle exit. PROJECT_SPEC.md §3.2 / §3.3 / §4.3.
 fn spawn_transcription(
     app: AppHandle,
     state: Arc<StateMachine>,

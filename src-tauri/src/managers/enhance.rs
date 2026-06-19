@@ -1,4 +1,6 @@
 // EnhanceManager — P1.5 LLM polish orchestration. PROJECT_SPEC.md §4.3.
+// Like TranscriptionManager, this is an adapter boundary: it calls the selected
+// LLM provider and returns either polished text or an error for lib.rs to handle.
 
 use crate::error::{AppError, AppResult};
 use crate::llm::build_provider;
@@ -31,6 +33,8 @@ impl EnhanceManager {
             return Ok(text.to_string());
         }
 
+        // The caller owns fallback semantics. Here an LLM failure remains an
+        // error; lib.rs converts it into "inject original + show warning".
         let provider = build_provider(config)?;
         log::info!("enhancing transcript with {}", provider.name());
         provider.enhance(text, &config.enhance_prompt)

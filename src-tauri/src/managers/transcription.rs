@@ -1,6 +1,8 @@
 // TranscriptionManager — owns the active AsrProvider and turns buffered audio
 // into text. PROJECT_SPEC.md §6.1. P0 hard-wires Groq; P1 makes the provider
 // selectable from settings.
+// This manager only chooses and calls an ASR adapter; it does not emit UI events,
+// mutate app state, or decide fallback behavior. Those decisions stay in lib.rs.
 
 use crate::asr::groq::GroqProvider;
 use crate::asr::openai::OpenAiProvider;
@@ -24,6 +26,9 @@ impl TranscriptionManager {
     }
 
     pub fn transcribe(&self, audio: &AudioData, config: &TranscriptionConfig) -> AppResult<String> {
+        // Provider choice is data-driven by Settings. Adding a new batch ASR
+        // means adding an adapter plus one `build_provider` arm, not changing
+        // the hotkey pipeline.
         let provider = build_provider(config)?;
         provider.transcribe(audio)
     }

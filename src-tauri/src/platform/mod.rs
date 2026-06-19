@@ -2,6 +2,8 @@
 //
 // All `#[cfg(target_os)]` lives behind this trait. Managers MUST go through
 // `current_platform()` — they must never import macos.rs / windows.rs directly.
+// Think of Platform as the border around OS side effects: hotkeys, paste
+// injection, permission checks, device preferences, and secrets.
 //
 // P0.1 only uses `register_hotkey` / `unregister_all_hotkeys`. inject_text lands
 // in P0.4; keychain methods are filled in during P1.
@@ -96,6 +98,8 @@ pub fn current_platform(registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
 
 #[cfg(target_os = "windows")]
 pub fn current_platform(_registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
+    // Windows keeps the same trait shape so the Rust pipeline remains portable;
+    // the concrete Win32/Credential Manager calls are intentionally deferred to P4.
     Box::new(windows::WindowsPlatform::new())
 }
 
