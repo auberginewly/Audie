@@ -1,5 +1,8 @@
 // Windows implementation of trait Platform.
 // PROJECT_SPEC.md §3.4 — macOS first, Windows in P4. Everything `unimplemented!()`.
+// This file exists now to lock the cross-platform seam: managers can compile
+// against `Platform` without knowing which OS implementation will fill it later.
+// The panics are intentional P4 tripwires, not forgotten production behavior.
 
 use tauri::AppHandle;
 

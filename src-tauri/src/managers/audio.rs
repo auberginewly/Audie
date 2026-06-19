@@ -2,6 +2,8 @@
 //   1. emits `audio-level` events (~30 FPS peak) to drive the overlay waveform,
 //   2. accumulates raw samples so `stop_capture` can hand the whole utterance
 //      to the transcription pipeline. PROJECT_SPEC.md §3.6 / §6.1.
+// It deliberately stops there: ASR selection, LLM polish, and text injection
+// live in later managers so the audio layer stays platform/provider agnostic.
 //
 // cpal's `Stream` is `!Send`, so capture lives on a dedicated thread that owns
 // the stream from creation to drop. A second emitter thread snapshots the
