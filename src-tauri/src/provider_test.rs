@@ -208,6 +208,10 @@ mod tests {
                 unreachable!()
             }
 
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                unreachable!()
+            }
+
             fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
                 Ok(" ".into())
             }
