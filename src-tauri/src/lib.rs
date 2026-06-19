@@ -85,6 +85,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::update_settings,
+            commands::export_config,
+            commands::import_config,
             commands::list_asr_providers,
             commands::list_llm_providers,
             commands::set_secret,

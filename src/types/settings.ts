@@ -42,5 +42,27 @@ export const ProviderTestResultSchema = z.object({
 
 export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 
+export const KEYCHAIN_PLACEHOLDER = "<keychain>";
+
+export const ExportedSecretPlaceholderSchema = z.object({
+  key_id: z.enum(["groq_api_key", "openai_api_key", "openai_compatible_api_key"]),
+  value: z.literal(KEYCHAIN_PLACEHOLDER),
+});
+
+export const ExportedConfigSchema = z.object({
+  settings: SettingsSchema,
+  secrets: z.array(ExportedSecretPlaceholderSchema),
+});
+
+export type ExportedConfig = z.infer<typeof ExportedConfigSchema>;
+
+export const ImportConfigResultSchema = z.object({
+  settings: SettingsSchema,
+  keys_to_refill: z.array(ExportedSecretPlaceholderSchema.shape.key_id),
+  message: z.string(),
+});
+
+export type ImportConfigResult = z.infer<typeof ImportConfigResultSchema>;
+
 // Single source for the dropdown — derived from the schema so they can't drift.
 export const HOTKEY_PRESETS = SettingsSchema.shape.hotkey.options;
