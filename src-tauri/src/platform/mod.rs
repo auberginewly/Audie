@@ -87,6 +87,7 @@ pub trait Platform: Send + Sync {
 
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
+    fn has_secret(&self, key: &str) -> AppResult<bool>;
     fn read_secret(&self, key: &str) -> AppResult<String>;
     fn delete_secret(&self, key: &str) -> AppResult<()>;
 }

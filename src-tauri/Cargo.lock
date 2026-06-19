@@ -182,6 +182,7 @@ dependencies = [
  "parking_lot",
  "reqwest 0.12.28",
  "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "tauri",

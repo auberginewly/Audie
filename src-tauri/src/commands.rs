@@ -512,11 +512,7 @@ pub(crate) fn validate_secret_key_id(key_id: &str) -> Result<(), AppError> {
 }
 
 fn platform_has_secret(platform: &dyn Platform, key_id: &str) -> Result<bool, AppError> {
-    match platform.read_secret(key_id) {
-        Ok(_) => Ok(true),
-        Err(AppError::Provider(_)) => Ok(false),
-        Err(err) => Err(err),
-    }
+    platform.has_secret(key_id)
 }
 
 #[cfg(test)]
@@ -627,6 +623,10 @@ mod tests {
                 unreachable!()
             }
 
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                Ok(false)
+            }
+
             fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
                 Err(AppError::Provider("secret not found".into()))
             }
@@ -637,6 +637,52 @@ mod tests {
         }
 
         assert!(!platform_has_secret(&MissingSecretPlatform, "groq_api_key").unwrap());
+    }
+
+    #[test]
+    fn has_secret_uses_presence_check_without_reading_secret_value() {
+        struct PresentSecretPlatform;
+
+        impl Platform for PresentSecretPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                Ok(true)
+            }
+
+            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
+                panic!("has_secret must not read the secret value")
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        assert!(platform_has_secret(&PresentSecretPlatform, "groq_api_key").unwrap());
     }
 
     #[test]

@@ -11,12 +11,22 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::time::Duration;
 
-use core_foundation::base::TCFType;
+use core_foundation::base::{CFType, TCFType};
+use core_foundation::boolean::CFBoolean;
+use core_foundation::data::CFData;
+use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-use security_framework::os::macos::keychain::SecKeychain;
-use security_framework::os::macos::passwords::find_generic_password;
+use security_framework_sys::access_control::kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+use security_framework_sys::base::{errSecDuplicateItem, errSecItemNotFound, errSecSuccess};
+use security_framework_sys::item::{
+    kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecReturnData,
+    kSecValueData,
+};
+use security_framework_sys::keychain_item::{
+    SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
+};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
@@ -127,6 +137,10 @@ impl Platform for MacosPlatform {
         keychain_store_secret(key, value)
     }
 
+    fn has_secret(&self, key: &str) -> AppResult<bool> {
+        keychain_has_secret(key)
+    }
+
     fn read_secret(&self, key: &str) -> AppResult<String> {
         keychain_read_secret(key)
     }
@@ -138,45 +152,168 @@ impl Platform for MacosPlatform {
 
 // ---- macOS Keychain Services (P1.2) -----------------------------------------
 //
-// Store API keys as generic-password items:
-//   service = "audie"
+// Store API keys as generic-password items using SecItem* directly (Voxt-style):
+//   service = "com.audie.app.secure-storage"
 //   account = key_id (e.g. "groq_api_key")
 //   value   = secret bytes
 //
-// Commands expose only set/has/delete. `read_secret` exists for later provider
-// adapters, but it is never exposed to the frontend.
+// Presence checks never request `kSecReturnData`, so opening the settings page
+// can show "已配置 key" without asking macOS to unlock and reveal the secret.
+// `read_secret` exists for provider calls, but it is never exposed to the frontend.
 
-const KEYCHAIN_SERVICE: &str = "audie";
+const KEYCHAIN_SERVICE: &str = "com.audie.app.secure-storage";
 fn keychain_store_secret(key: &str, value: &str) -> AppResult<()> {
-    let keychain = SecKeychain::default()
-        .map_err(|err| AppError::Internal(format!("open default keychain: {err}")))?;
-    // This updates an existing item in place, so repeated saves are safe for
-    // settings forms.
-    keychain
-        .set_generic_password(KEYCHAIN_SERVICE, key, value.as_bytes())
-        .map_err(|err| AppError::Internal(format!("store secret: {err}")))
+    let value_data = CFData::from_buffer(value.as_bytes());
+    let query = keychain_base_query(key);
+    let attrs = keychain_value_attributes(&value_data);
+
+    let status = sec_item_copy_matching_status(&query);
+    if status == errSecSuccess {
+        sec_item_update(&query, &attrs, "update secret")
+    } else if status == errSecItemNotFound {
+        let item = keychain_add_item(key, &value_data);
+        let add_status = sec_item_add(&item);
+        if add_status == errSecSuccess {
+            Ok(())
+        } else if add_status == errSecDuplicateItem {
+            sec_item_update(&query, &attrs, "update duplicate secret")
+        } else {
+            Err(AppError::Internal(format!(
+                "add secret: status {add_status}"
+            )))
+        }
+    } else {
+        Err(AppError::Internal(format!(
+            "lookup secret before write: status {status}"
+        )))
+    }
+}
+
+fn keychain_has_secret(key: &str) -> AppResult<bool> {
+    let status = sec_item_copy_matching_status(&keychain_base_query(key));
+    if status == errSecSuccess {
+        Ok(true)
+    } else if status == errSecItemNotFound {
+        Ok(false)
+    } else {
+        Err(AppError::Internal(format!("check secret: status {status}")))
+    }
 }
 
 fn keychain_read_secret(key: &str) -> AppResult<String> {
-    let (password, _item) = find_generic_password(None, KEYCHAIN_SERVICE, key).map_err(|err| {
-        if err.code() == -25300 {
-            AppError::Provider("secret not found".into())
-        } else {
-            AppError::Internal(format!("read secret: {err}"))
+    let query = keychain_read_query(key);
+    let mut item = std::ptr::null();
+    let status = unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut item) };
+    if status == errSecSuccess {
+        if item.is_null() {
+            return Err(AppError::Internal("read secret returned null data".into()));
         }
-    })?;
-    String::from_utf8(password.as_ref().to_vec())
-        .map_err(|_| AppError::Internal("keychain secret is not UTF-8".into()))
+        let data = unsafe { CFData::wrap_under_create_rule(item.cast()) };
+        String::from_utf8(data.bytes().to_vec())
+            .map_err(|_| AppError::Internal("keychain secret is not UTF-8".into()))
+    } else if status == errSecItemNotFound {
+        Err(AppError::Provider("secret not found".into()))
+    } else {
+        Err(AppError::Internal(format!("read secret: status {status}")))
+    }
 }
 
 fn keychain_delete_secret(key: &str) -> AppResult<()> {
-    let (_password, item) = match find_generic_password(None, KEYCHAIN_SERVICE, key) {
-        Ok(found) => found,
-        Err(err) if err.code() == -25300 => return Ok(()),
-        Err(err) => return Err(AppError::Internal(format!("find secret for delete: {err}"))),
-    };
-    item.delete();
-    Ok(())
+    let status = unsafe { SecItemDelete(keychain_base_query(key).as_concrete_TypeRef()) };
+    if status == errSecSuccess || status == errSecItemNotFound {
+        Ok(())
+    } else {
+        Err(AppError::Internal(format!(
+            "delete secret: status {status}"
+        )))
+    }
+}
+
+fn keychain_base_query(key: &str) -> CFDictionary<CFString, CFType> {
+    let class_key = unsafe { CFString::wrap_under_get_rule(kSecClass) };
+    let class_value = unsafe { CFString::wrap_under_get_rule(kSecClassGenericPassword) };
+    let service_key = unsafe { CFString::wrap_under_get_rule(kSecAttrService) };
+    let service_value = CFString::new(KEYCHAIN_SERVICE);
+    let account_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccount) };
+    let account_value = CFString::new(key);
+
+    CFDictionary::from_CFType_pairs(&[
+        (class_key, class_value.as_CFType()),
+        (service_key, service_value.as_CFType()),
+        (account_key, account_value.as_CFType()),
+    ])
+}
+
+fn keychain_read_query(key: &str) -> CFDictionary<CFString, CFType> {
+    let class_key = unsafe { CFString::wrap_under_get_rule(kSecClass) };
+    let class_value = unsafe { CFString::wrap_under_get_rule(kSecClassGenericPassword) };
+    let service_key = unsafe { CFString::wrap_under_get_rule(kSecAttrService) };
+    let service_value = CFString::new(KEYCHAIN_SERVICE);
+    let account_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccount) };
+    let account_value = CFString::new(key);
+    let return_data_key = unsafe { CFString::wrap_under_get_rule(kSecReturnData) };
+    let return_data_value = CFBoolean::true_value();
+
+    CFDictionary::from_CFType_pairs(&[
+        (class_key, class_value.as_CFType()),
+        (service_key, service_value.as_CFType()),
+        (account_key, account_value.as_CFType()),
+        (return_data_key, return_data_value.as_CFType()),
+    ])
+}
+
+fn keychain_value_attributes(value: &CFData) -> CFDictionary<CFString, CFType> {
+    let value_key = unsafe { CFString::wrap_under_get_rule(kSecValueData) };
+    let accessible_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccessible) };
+    let accessible_value =
+        unsafe { CFString::wrap_under_get_rule(kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly) };
+
+    CFDictionary::from_CFType_pairs(&[
+        (value_key, value.as_CFType()),
+        (accessible_key, accessible_value.as_CFType()),
+    ])
+}
+
+fn keychain_add_item(key: &str, value: &CFData) -> CFDictionary<CFString, CFType> {
+    let class_key = unsafe { CFString::wrap_under_get_rule(kSecClass) };
+    let class_value = unsafe { CFString::wrap_under_get_rule(kSecClassGenericPassword) };
+    let service_key = unsafe { CFString::wrap_under_get_rule(kSecAttrService) };
+    let service_value = CFString::new(KEYCHAIN_SERVICE);
+    let account_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccount) };
+    let account_value = CFString::new(key);
+    let value_key = unsafe { CFString::wrap_under_get_rule(kSecValueData) };
+    let accessible_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccessible) };
+    let accessible_value =
+        unsafe { CFString::wrap_under_get_rule(kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly) };
+
+    CFDictionary::from_CFType_pairs(&[
+        (class_key, class_value.as_CFType()),
+        (service_key, service_value.as_CFType()),
+        (account_key, account_value.as_CFType()),
+        (value_key, value.as_CFType()),
+        (accessible_key, accessible_value.as_CFType()),
+    ])
+}
+
+fn sec_item_copy_matching_status(query: &CFDictionary<CFString, CFType>) -> i32 {
+    unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), std::ptr::null_mut()) }
+}
+
+fn sec_item_add(item: &CFDictionary<CFString, CFType>) -> i32 {
+    unsafe { SecItemAdd(item.as_concrete_TypeRef(), std::ptr::null_mut()) }
+}
+
+fn sec_item_update(
+    query: &CFDictionary<CFString, CFType>,
+    attrs: &CFDictionary<CFString, CFType>,
+    label: &str,
+) -> AppResult<()> {
+    let status = unsafe { SecItemUpdate(query.as_concrete_TypeRef(), attrs.as_concrete_TypeRef()) };
+    if status == errSecSuccess {
+        Ok(())
+    } else {
+        Err(AppError::Internal(format!("{label}: status {status}")))
+    }
 }
 
 /// Probe Accessibility (post-event) access. Returns true when CGEvent::post is
@@ -188,6 +325,8 @@ fn preflight_post_event_access() -> bool {
 }
 
 extern "C" {
+    static kSecAttrAccessible: CFStringRef;
+
     fn CGPreflightPostEventAccess() -> bool;
     fn CGRequestPostEventAccess() -> bool;
 }
@@ -485,13 +624,18 @@ mod tests {
 
         let _ = keychain_delete_secret(&key);
 
+        assert!(!keychain_has_secret(&key).unwrap());
+
         keychain_store_secret(&key, first).unwrap();
+        assert!(keychain_has_secret(&key).unwrap());
         assert_eq!(keychain_read_secret(&key).unwrap(), first);
 
         keychain_store_secret(&key, second).unwrap();
+        assert!(keychain_has_secret(&key).unwrap());
         assert_eq!(keychain_read_secret(&key).unwrap(), second);
 
         keychain_delete_secret(&key).unwrap();
+        assert!(!keychain_has_secret(&key).unwrap());
         assert!(matches!(
             keychain_read_secret(&key),
             Err(AppError::Provider(_))
