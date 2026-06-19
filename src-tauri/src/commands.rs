@@ -23,6 +23,12 @@ const KEY_ENHANCE_PROMPT: &str = "enhance_prompt";
 const KEY_WHISPER_CPP_MODEL_PATH: &str = "whisper_cpp_model_path";
 const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
 const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
+const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
+const SECRET_KEY_IDS: &[&str] = &[
+    "groq_api_key",
+    "openai_api_key",
+    "openai_compatible_api_key",
+];
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
 pub const DEFAULT_ASR_PROVIDER: &str = "groq";
@@ -37,7 +43,7 @@ pub const DEFAULT_ENHANCE_PROMPT: &str =
 /// `tauri-plugin-global-shortcut`.
 pub const HOTKEY_PRESETS: &[&str] = &["Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"];
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub hotkey: String,
     pub asr_provider: String,
@@ -74,6 +80,25 @@ pub struct SettingsPatch {
     pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_compatible_model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ExportedSecretPlaceholder {
+    pub key_id: String,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ExportedConfig {
+    pub settings: Settings,
+    pub secrets: Vec<ExportedSecretPlaceholder>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct ImportConfigResult {
+    pub settings: Settings,
+    pub keys_to_refill: Vec<String>,
+    pub message: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -250,69 +275,113 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, AppError> {
 #[tauri::command]
 pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings, AppError> {
     let current = load_settings(&app);
-    let next_hotkey = patch.hotkey.unwrap_or(current.hotkey);
-    let next_asr_provider = patch.asr_provider.unwrap_or(current.asr_provider);
-    let next_llm_provider = patch.llm_provider.unwrap_or(current.llm_provider);
-    let next_enhance_enabled = patch.enhance_enabled.unwrap_or(current.enhance_enabled);
-    let next_enhance_prompt = patch.enhance_prompt.unwrap_or(current.enhance_prompt);
+    let next = settings_from_patch(current, patch)?;
+
+    apply_hotkey_if_changed(&app, &next.hotkey)?;
+    persist_settings(&app, next)?;
+
+    Ok(load_settings(&app))
+}
+
+fn apply_hotkey_if_changed(app: &AppHandle, next_hotkey: &str) -> Result<(), AppError> {
+    if next_hotkey == load_hotkey(app) {
+        return Ok(());
+    }
+
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.unregister_all_hotkeys(app)?;
+    platform.register_hotkey(app, next_hotkey, crate::build_hotkey_callback(app))
+}
+
+fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settings, AppError> {
     let next_whisper_cpp_model_path = patch
         .whisper_cpp_model_path
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .or(current.whisper_cpp_model_path);
-    let next_openai_compatible_base_url = patch
-        .openai_compatible_base_url
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(current.openai_compatible_base_url);
-    let next_openai_compatible_model = patch
-        .openai_compatible_model
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(current.openai_compatible_model);
 
-    if !HOTKEY_PRESETS.contains(&next_hotkey.as_str()) {
+    let next = Settings {
+        hotkey: patch.hotkey.unwrap_or(current.hotkey),
+        asr_provider: patch.asr_provider.unwrap_or(current.asr_provider),
+        llm_provider: patch.llm_provider.unwrap_or(current.llm_provider),
+        enhance_enabled: patch.enhance_enabled.unwrap_or(current.enhance_enabled),
+        enhance_prompt: patch.enhance_prompt.unwrap_or(current.enhance_prompt),
+        whisper_cpp_model_path: next_whisper_cpp_model_path,
+        openai_compatible_base_url: patch
+            .openai_compatible_base_url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.openai_compatible_base_url),
+        openai_compatible_model: patch
+            .openai_compatible_model
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.openai_compatible_model),
+    };
+
+    validate_settings(&next)?;
+    Ok(next)
+}
+
+fn validate_settings(settings: &Settings) -> Result<(), AppError> {
+    if !HOTKEY_PRESETS.contains(&settings.hotkey.as_str()) {
         return Err(AppError::Internal(format!(
-            "unsupported hotkey: {next_hotkey}"
+            "unsupported hotkey: {}",
+            settings.hotkey
         )));
     }
     if !available_asr_providers()
         .iter()
-        .any(|provider| provider.id == next_asr_provider)
+        .any(|provider| provider.id == settings.asr_provider)
     {
         return Err(AppError::Internal(format!(
-            "unsupported ASR provider: {next_asr_provider}"
+            "unsupported ASR provider: {}",
+            settings.asr_provider
         )));
     }
     if !available_llm_providers()
         .iter()
-        .any(|provider| provider.id == next_llm_provider)
+        .any(|provider| provider.id == settings.llm_provider)
     {
         return Err(AppError::Internal(format!(
-            "unsupported LLM provider: {next_llm_provider}"
+            "unsupported LLM provider: {}",
+            settings.llm_provider
         )));
     }
-
-    if next_hotkey != load_hotkey(&app) {
-        let platform = app.state::<Arc<dyn Platform>>();
-        platform.unregister_all_hotkeys(&app)?;
-        platform.register_hotkey(&app, &next_hotkey, crate::build_hotkey_callback(&app))?;
+    if settings.enhance_prompt.trim().is_empty() {
+        return Err(AppError::Internal("enhance prompt cannot be empty".into()));
     }
+    if settings.openai_compatible_base_url.trim().is_empty() {
+        return Err(AppError::Internal(
+            "OpenAI-compatible base URL cannot be empty".into(),
+        ));
+    }
+    if settings.openai_compatible_model.trim().is_empty() {
+        return Err(AppError::Internal(
+            "OpenAI-compatible model cannot be empty".into(),
+        ));
+    }
+    Ok(())
+}
 
+fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError> {
     let store = app
         .store(STORE_FILE)
         .map_err(|err| AppError::Internal(format!("open store: {err}")))?;
-    store.set(KEY_HOTKEY, next_hotkey);
-    store.set(KEY_ASR_PROVIDER, next_asr_provider);
-    store.set(KEY_LLM_PROVIDER, next_llm_provider);
-    store.set(KEY_ENHANCE_ENABLED, next_enhance_enabled);
-    store.set(KEY_ENHANCE_PROMPT, next_enhance_prompt);
+    store.set(KEY_HOTKEY, settings.hotkey);
+    store.set(KEY_ASR_PROVIDER, settings.asr_provider);
+    store.set(KEY_LLM_PROVIDER, settings.llm_provider);
+    store.set(KEY_ENHANCE_ENABLED, settings.enhance_enabled);
+    store.set(KEY_ENHANCE_PROMPT, settings.enhance_prompt);
     store.set(
         KEY_OPENAI_COMPATIBLE_BASE_URL,
-        next_openai_compatible_base_url,
+        settings.openai_compatible_base_url,
     );
-    store.set(KEY_OPENAI_COMPATIBLE_MODEL, next_openai_compatible_model);
-    if let Some(model_path) = next_whisper_cpp_model_path {
+    store.set(
+        KEY_OPENAI_COMPATIBLE_MODEL,
+        settings.openai_compatible_model,
+    );
+    if let Some(model_path) = settings.whisper_cpp_model_path {
         store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
     } else {
         store.delete(KEY_WHISPER_CPP_MODEL_PATH);
@@ -321,7 +390,75 @@ pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings,
         .save()
         .map_err(|err| AppError::Internal(format!("save store: {err}")))?;
 
-    Ok(load_settings(&app))
+    Ok(())
+}
+
+#[tauri::command]
+pub fn export_config(app: AppHandle) -> Result<ExportedConfig, AppError> {
+    Ok(exportable_config_from_settings(load_settings(&app)))
+}
+
+fn exportable_config_from_settings(settings: Settings) -> ExportedConfig {
+    ExportedConfig {
+        settings,
+        secrets: secret_placeholders(),
+    }
+}
+
+fn secret_placeholders() -> Vec<ExportedSecretPlaceholder> {
+    SECRET_KEY_IDS
+        .iter()
+        .map(|key_id| ExportedSecretPlaceholder {
+            key_id: (*key_id).to_string(),
+            value: KEYCHAIN_PLACEHOLDER.to_string(),
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn import_config(
+    app: AppHandle,
+    config: ExportedConfig,
+) -> Result<ImportConfigResult, AppError> {
+    let import = import_config_payload(config)?;
+    apply_hotkey_if_changed(&app, &import.settings.hotkey)?;
+    persist_settings(&app, import.settings.clone())?;
+
+    Ok(ImportConfigResult {
+        settings: load_settings(&app),
+        keys_to_refill: import.keys_to_refill,
+        message: import.message,
+    })
+}
+
+fn import_config_payload(config: ExportedConfig) -> Result<ImportConfigResult, AppError> {
+    validate_settings(&config.settings)?;
+    for secret in &config.secrets {
+        validate_secret_key_id(&secret.key_id)?;
+        if !SECRET_KEY_IDS.contains(&secret.key_id.as_str()) {
+            return Err(AppError::Internal(format!(
+                "unsupported secret key id: {}",
+                secret.key_id
+            )));
+        }
+    }
+    let keys_to_refill = config
+        .secrets
+        .iter()
+        .filter(|secret| secret.value == KEYCHAIN_PLACEHOLDER)
+        .map(|secret| secret.key_id.clone())
+        .collect::<Vec<_>>();
+    let message = if keys_to_refill.is_empty() {
+        "配置已导入".to_string()
+    } else {
+        "配置已导入，请重新填写 key".to_string()
+    };
+
+    Ok(ImportConfigResult {
+        settings: config.settings,
+        keys_to_refill,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -500,5 +637,58 @@ mod tests {
         }
 
         assert!(!platform_has_secret(&MissingSecretPlatform, "groq_api_key").unwrap());
+    }
+
+    #[test]
+    fn exported_config_uses_keychain_placeholders_only() {
+        let config = exportable_config_from_settings(Settings::default());
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(json.contains(KEYCHAIN_PLACEHOLDER));
+        assert!(json.contains("groq_api_key"));
+        assert!(json.contains("openai_api_key"));
+        assert!(json.contains("openai_compatible_api_key"));
+        assert!(!json.contains("sk-"));
+        assert!(!json.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn importing_keychain_placeholders_reports_keys_to_refill() {
+        let config = exportable_config_from_settings(Settings::default());
+        let result = import_config_payload(config).unwrap();
+
+        assert_eq!(
+            result.keys_to_refill,
+            vec![
+                "groq_api_key".to_string(),
+                "openai_api_key".to_string(),
+                "openai_compatible_api_key".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn importing_invalid_provider_is_rejected() {
+        let mut config = exportable_config_from_settings(Settings::default());
+        config.settings.asr_provider = "not_real".into();
+
+        let err = import_config_payload(config).unwrap_err();
+
+        assert!(matches!(err, AppError::Internal(_)));
+        assert!(err.message().contains("unsupported ASR provider"));
+    }
+
+    #[test]
+    fn importing_unknown_secret_key_id_is_rejected() {
+        let mut config = exportable_config_from_settings(Settings::default());
+        config.secrets.push(ExportedSecretPlaceholder {
+            key_id: "other_api_key".into(),
+            value: KEYCHAIN_PLACEHOLDER.into(),
+        });
+
+        let err = import_config_payload(config).unwrap_err();
+
+        assert!(matches!(err, AppError::Internal(_)));
+        assert!(err.message().contains("unsupported secret key id"));
     }
 }

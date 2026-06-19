@@ -6,10 +6,13 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import {
+  ExportedConfigSchema,
+  ImportConfigResultSchema,
   ProviderMetadataSchema,
   ProviderTestResultSchema,
   SettingsSchema,
   type AsrProviderId,
+  type ExportedConfig,
   type LlmProviderId,
   type ProviderKind,
   type ProviderMetadata,
@@ -67,6 +70,11 @@ export function ProviderSettings() {
         providers={llmProviders}
         onChange={(llm_provider) => updateSettings({ llm_provider })}
       />
+      <ConfigImportExport
+        onImported={(nextSettings) => {
+          setSettings(nextSettings);
+        }}
+      />
       <div className="divider my-1" />
       <ProviderKeyField
         title="Groq key"
@@ -113,6 +121,113 @@ export function ProviderSettings() {
           onChange={(event) => updateSettings({ enhance_prompt: event.target.value })}
         />
       </label>
+    </section>
+  );
+}
+
+type ConfigStatus =
+  | { tone: "neutral"; message: string }
+  | { tone: "success"; message: string }
+  | { tone: "error"; message: string };
+
+function ConfigImportExport({ onImported }: { onImported: (settings: Settings) => void }) {
+  const [configText, setConfigText] = useState("");
+  const [isBusy, setIsBusy] = useState(false);
+  const [status, setStatus] = useState<ConfigStatus>({
+    tone: "neutral",
+    message: "导出不会包含 API key 明文",
+  });
+
+  const exportConfig = async () => {
+    setIsBusy(true);
+    try {
+      const raw = await invoke("export_config");
+      const parsed = ExportedConfigSchema.safeParse(raw);
+      if (!parsed.success) {
+        setStatus({ tone: "error", message: "导出配置响应格式错误" });
+        return;
+      }
+      const json = JSON.stringify(parsed.data, null, 2);
+      setConfigText(json);
+      await copyText(json);
+      setStatus({ tone: "success", message: "配置已导出，key 已用 <keychain> 占位" });
+    } catch (err) {
+      setStatus({ tone: "error", message: errorMessage(err) });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const importConfig = async () => {
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(configText);
+    } catch {
+      setStatus({ tone: "error", message: "配置 JSON 格式不正确" });
+      return;
+    }
+
+    const parsedConfig = ExportedConfigSchema.safeParse(parsedJson);
+    if (!parsedConfig.success) {
+      setStatus({ tone: "error", message: "配置内容不符合 Audie 导出格式" });
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const raw = await invoke("import_config", {
+        config: parsedConfig.data satisfies ExportedConfig,
+      });
+      const parsedResult = ImportConfigResultSchema.safeParse(raw);
+      if (!parsedResult.success) {
+        setStatus({ tone: "error", message: "导入配置响应格式错误" });
+        return;
+      }
+      onImported(parsedResult.data.settings);
+      const refill = keyLabels(parsedResult.data.keys_to_refill);
+      setStatus({
+        tone: "success",
+        message: refill
+          ? `配置已导入，请重新填写 ${refill} key`
+          : parsedResult.data.message,
+      });
+    } catch (err) {
+      setStatus({ tone: "error", message: errorMessage(err) });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const statusClass =
+    status.tone === "success"
+      ? "text-success"
+      : status.tone === "error"
+        ? "text-error"
+        : "opacity-60";
+
+  return (
+    <section className="space-y-2 rounded border border-base-300/70 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium">配置导入导出</h2>
+          <p className="text-xs opacity-60">只导入非敏感设置，API key 需要重新填写</p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button className="btn btn-outline btn-xs" onClick={exportConfig} disabled={isBusy}>
+            导出
+          </button>
+          <button className="btn btn-primary btn-xs" onClick={importConfig} disabled={isBusy}>
+            导入
+          </button>
+        </div>
+      </div>
+      <textarea
+        className="textarea textarea-bordered min-h-28 w-full font-mono text-xs"
+        value={configText}
+        onChange={(event) => setConfigText(event.target.value)}
+        placeholder="导出后会显示 JSON；也可以粘贴配置 JSON 后导入"
+      />
+      <p className={`text-xs ${statusClass}`}>{status.message}</p>
     </section>
   );
 }
@@ -321,6 +436,29 @@ function errorMessage(err: unknown): string {
     if (typeof message === "string") return message;
   }
   return "操作失败，请查看日志";
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Clipboard access is best-effort here; the textarea still contains JSON.
+  }
+}
+
+function keyLabels(keyIds: Array<"groq_api_key" | "openai_api_key" | "openai_compatible_api_key">) {
+  if (keyIds.length === 0) return "";
+  const labels = keyIds.map((keyId) => {
+    switch (keyId) {
+      case "groq_api_key":
+        return "Groq";
+      case "openai_api_key":
+        return "OpenAI";
+      case "openai_compatible_api_key":
+        return "OpenAI-compatible";
+    }
+  });
+  return labels.join(" / ");
 }
 
 function ProviderSelect<TProviderId extends AsrProviderId | LlmProviderId>({

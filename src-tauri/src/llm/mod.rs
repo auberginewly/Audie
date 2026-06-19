@@ -170,9 +170,7 @@ pub(crate) fn classify_http_status(status: u16, body: &str) -> AppError {
         500..=599 => AppError::Network(format!("OpenAI-compatible 服务端异常（{status}）")),
         _ => {
             let snippet: String = body.chars().take(200).collect();
-            AppError::Provider(format!(
-                "OpenAI-compatible 拒绝请求（{status}）：{snippet}"
-            ))
+            AppError::Provider(format!("OpenAI-compatible 拒绝请求（{status}）：{snippet}"))
         }
     }
 }

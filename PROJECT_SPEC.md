@@ -259,6 +259,7 @@ trait LlmProvider {
 
 - API key 存系统 keychain（macOS Keychain Services；P4 Windows Credential Manager）。
 - 设置里 key 字段：写入即调 `store_secret`，读取走 `read_secret`，**绝不**写进 `tauri-plugin-store` 的明文 JSON。
+- macOS 实现参考 Voxt 当前做法：用底层 `SecItemCopyMatching` / `SecItemAdd` / `SecItemUpdate` 管理 generic-password item，不用 `SecKeychain::default().set_generic_password` 这类高层 wrapper。item 的 `service` 用 bundle id 派生（如 `com.audie.app.secure-storage`），`account` 用稳定 key id（如 `provider.groq.api_key`），写入时设置 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。目标体验：保存一次后重启 App 可静默读取，不能每次读 key 都要求输入系统密码。
 - 配置导出（设置 → 导出 JSON）：敏感字段用占位符 `"<keychain>"` 替换。
 - 配置导入：遇到占位符 → 提示用户重新填 key。
 
@@ -381,6 +382,7 @@ ASR / LLM 各自 trait + adapter 文件。加 provider 不改其他模块。
 ### 6.6 安全 / 隐私底线
 
 - API key 一律走系统 keychain，**绝不**进配置文件明文。
+- macOS keychain 具体实现走 Voxt 风格的 `SecItem*` generic-password API：bundle-id 派生 service、稳定 account、`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。不得采用会导致每次重启/读取都弹系统密码的实现。
 - 不自建任何后端，音频和 key 只在用户设备和用户的 API 之间。
 - 导出配置敏感字段占位。
 - 录音音频默认**不落盘**（除非 debug 模式显式开）。
