@@ -20,6 +20,7 @@ pub struct ProviderTestRequest {
     pub kind: ProviderKind,
     pub provider_id: String,
     pub key_id: String,
+    pub api_key: Option<String>,
     pub base_url: Option<String>,
 }
 
@@ -45,7 +46,11 @@ pub fn test_provider(
     validate_secret_key_id(&request.key_id)?;
 
     let platform = app.state::<Arc<dyn Platform>>();
-    let api_key = read_api_key(platform.inner().as_ref(), &request.key_id)?;
+    let api_key = read_api_key_for_test(
+        platform.inner().as_ref(),
+        &request.key_id,
+        request.api_key.as_deref(),
+    )?;
 
     let endpoint = provider_test_endpoint(request.kind, &request.provider_id, request.base_url)?;
     test_models_endpoint(&endpoint, &api_key)?;
@@ -61,7 +66,22 @@ fn read_api_key(platform: &dyn Platform, key_id: &str) -> AppResult<String> {
     if api_key.trim().is_empty() {
         Err(AppError::Provider("请先填写 API key".into()))
     } else {
-        Ok(api_key)
+        Ok(api_key.trim().to_string())
+    }
+}
+
+fn read_api_key_for_test(
+    platform: &dyn Platform,
+    key_id: &str,
+    inline_api_key: Option<&str>,
+) -> AppResult<String> {
+    if let Some(api_key) = inline_api_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Ok(api_key.to_string())
+    } else {
+        read_api_key(platform, key_id)
     }
 }
 
@@ -225,6 +245,106 @@ mod tests {
 
         assert!(matches!(err, AppError::Provider(_)));
         assert_eq!(err.message(), "请先填写 API key");
+    }
+
+    #[test]
+    fn inline_api_key_is_used_without_reading_keychain() {
+        struct PanicOnReadPlatform;
+
+        impl Platform for PanicOnReadPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                unreachable!()
+            }
+
+            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
+                panic!("inline provider test key must not read keychain")
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        let api_key =
+            read_api_key_for_test(&PanicOnReadPlatform, "groq_api_key", Some("  inline-key  "))
+                .unwrap();
+
+        assert_eq!(api_key, "inline-key");
+    }
+
+    #[test]
+    fn blank_inline_api_key_falls_back_to_keychain() {
+        struct SavedSecretPlatform;
+
+        impl Platform for SavedSecretPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                unreachable!()
+            }
+
+            fn read_secret(&self, key: &str) -> crate::error::AppResult<String> {
+                assert_eq!(key, "groq_api_key");
+                Ok("saved-key".into())
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        let api_key =
+            read_api_key_for_test(&SavedSecretPlatform, "groq_api_key", Some("  ")).unwrap();
+
+        assert_eq!(api_key, "saved-key");
     }
 
     #[test]

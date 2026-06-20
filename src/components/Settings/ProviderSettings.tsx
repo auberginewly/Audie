@@ -9,6 +9,7 @@ import {
   ExportedConfigSchema,
   ImportConfigResultSchema,
   ProviderMetadataSchema,
+  ProviderTestRequestSchema,
   ProviderTestResultSchema,
   SettingsSchema,
   type AsrProviderId,
@@ -16,7 +17,9 @@ import {
   type LlmProviderId,
   type ProviderKind,
   type ProviderMetadata,
+  type ProviderTestRequest,
   type Settings,
+  type SecretKeyId,
 } from "../../types/settings";
 
 const ProviderListSchema = ProviderMetadataSchema.array();
@@ -250,7 +253,7 @@ function ProviderKeyField({
 }: {
   title: string;
   description: string;
-  secretKeyId: string;
+  secretKeyId: SecretKeyId;
   kind: ProviderKind;
   providerId: AsrProviderId | LlmProviderId;
   baseUrl?: string;
@@ -320,9 +323,11 @@ function ProviderKeyField({
   };
 
   const testProvider = async () => {
+    let inlineApiKey: string | null = null;
     if (apiKey.trim()) {
       const saved = await saveSecret();
       if (!saved) return;
+      inlineApiKey = saved;
     } else if (!hasSavedSecret) {
       setStatus({ tone: "error", message: "请先填写 API key" });
       return;
@@ -331,13 +336,21 @@ function ProviderKeyField({
     setIsTesting(true);
     setStatus({ tone: "neutral", message: "正在测试 provider..." });
     try {
+      const request: ProviderTestRequest = {
+        kind,
+        provider_id: providerId,
+        key_id: secretKeyId,
+        api_key: inlineApiKey,
+        base_url: baseUrl !== undefined ? baseUrl.trim() : null,
+      };
+      const parsedRequest = ProviderTestRequestSchema.safeParse(request);
+      if (!parsedRequest.success) {
+        setStatus({ tone: "error", message: "provider 测试请求格式错误" });
+        return;
+      }
+
       const raw = await invoke("test_provider", {
-        request: {
-          kind,
-          provider_id: providerId,
-          key_id: secretKeyId,
-          base_url: baseUrl !== undefined ? baseUrl.trim() : null,
-        },
+        request: parsedRequest.data,
       });
       const parsed = ProviderTestResultSchema.safeParse(raw);
       if (parsed.success) {

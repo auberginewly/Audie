@@ -357,11 +357,29 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
 
+    transcription_config_from_settings(
+        settings.asr_provider,
+        settings.whisper_cpp_model_path,
+        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
+    )
+}
+
+fn transcription_config_from_settings(
+    asr_provider: String,
+    whisper_cpp_model_path: Option<String>,
+    mut read_secret: impl FnMut(&str) -> Option<String>,
+) -> TranscriptionConfig {
+    let (groq_api_key, openai_api_key) = match asr_provider.as_str() {
+        "groq" => (read_secret("groq_api_key"), None),
+        "openai" => (None, read_secret("openai_api_key")),
+        _ => (None, None),
+    };
+
     TranscriptionConfig {
-        asr_provider: settings.asr_provider,
-        groq_api_key: read_optional_secret(platform.inner().as_ref(), "groq_api_key"),
-        openai_api_key: read_optional_secret(platform.inner().as_ref(), "openai_api_key"),
-        whisper_cpp_model_path: settings.whisper_cpp_model_path,
+        asr_provider,
+        groq_api_key,
+        openai_api_key,
+        whisper_cpp_model_path,
     }
 }
 
@@ -369,16 +387,37 @@ fn enhance_config(app: &AppHandle) -> EnhanceConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
 
+    enhance_config_from_settings(
+        settings.llm_provider,
+        settings.enhance_enabled,
+        settings.enhance_prompt,
+        settings.openai_compatible_base_url,
+        settings.openai_compatible_model,
+        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
+    )
+}
+
+fn enhance_config_from_settings(
+    llm_provider: String,
+    enhance_enabled: bool,
+    enhance_prompt: String,
+    openai_compatible_base_url: String,
+    openai_compatible_model: String,
+    mut read_secret: impl FnMut(&str) -> Option<String>,
+) -> EnhanceConfig {
+    let openai_compatible_api_key = if enhance_enabled && llm_provider == "openai_compatible" {
+        read_secret("openai_compatible_api_key")
+    } else {
+        None
+    };
+
     EnhanceConfig {
-        llm_provider: settings.llm_provider,
-        enhance_enabled: settings.enhance_enabled,
-        enhance_prompt: settings.enhance_prompt,
-        openai_compatible_api_key: read_optional_secret(
-            platform.inner().as_ref(),
-            "openai_compatible_api_key",
-        ),
-        openai_compatible_base_url: settings.openai_compatible_base_url,
-        openai_compatible_model: settings.openai_compatible_model,
+        llm_provider,
+        enhance_enabled,
+        enhance_prompt,
+        openai_compatible_api_key,
+        openai_compatible_base_url,
+        openai_compatible_model,
     }
 }
 
@@ -482,4 +521,105 @@ fn hide_overlay(app: &AppHandle) -> AppResult<()> {
         .hide()
         .map_err(|err| AppError::Internal(format!("hide overlay: {err}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn groq_transcription_config_reads_only_groq_key() {
+        let mut requested = Vec::new();
+
+        let config = transcription_config_from_settings("groq".into(), None, |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
+
+        assert_eq!(requested, vec!["groq_api_key"]);
+        assert_eq!(config.groq_api_key.as_deref(), Some("groq_api_key-value"));
+        assert_eq!(config.openai_api_key, None);
+    }
+
+    #[test]
+    fn openai_transcription_config_reads_only_openai_key() {
+        let mut requested = Vec::new();
+
+        let config = transcription_config_from_settings("openai".into(), None, |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
+
+        assert_eq!(requested, vec!["openai_api_key"]);
+        assert_eq!(config.groq_api_key, None);
+        assert_eq!(
+            config.openai_api_key.as_deref(),
+            Some("openai_api_key-value")
+        );
+    }
+
+    #[test]
+    fn whisper_cpp_transcription_config_reads_no_api_keys() {
+        let mut requested = Vec::new();
+
+        let config = transcription_config_from_settings(
+            "whisper_cpp".into(),
+            Some("/tmp/ggml.bin".into()),
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        );
+
+        assert!(requested.is_empty());
+        assert_eq!(config.groq_api_key, None);
+        assert_eq!(config.openai_api_key, None);
+        assert_eq!(
+            config.whisper_cpp_model_path.as_deref(),
+            Some("/tmp/ggml.bin")
+        );
+    }
+
+    #[test]
+    fn disabled_enhance_config_reads_no_llm_key() {
+        let mut requested = Vec::new();
+
+        let config = enhance_config_from_settings(
+            "openai_compatible".into(),
+            false,
+            "prompt".into(),
+            "https://api.example.com/v1".into(),
+            "model".into(),
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        );
+
+        assert!(requested.is_empty());
+        assert_eq!(config.openai_compatible_api_key, None);
+    }
+
+    #[test]
+    fn enabled_openai_compatible_enhance_config_reads_llm_key() {
+        let mut requested = Vec::new();
+
+        let config = enhance_config_from_settings(
+            "openai_compatible".into(),
+            true,
+            "prompt".into(),
+            "https://api.example.com/v1".into(),
+            "model".into(),
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        );
+
+        assert_eq!(requested, vec!["openai_compatible_api_key"]);
+        assert_eq!(
+            config.openai_compatible_api_key.as_deref(),
+            Some("openai_compatible_api_key-value")
+        );
+    }
 }

@@ -42,6 +42,17 @@ export const ProviderTestResultSchema = z.object({
 
 export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 
+export const ProviderTestRequestSchema = z.object({
+  kind: ProviderKindSchema,
+  provider_id: z.union([SettingsSchema.shape.asr_provider, SettingsSchema.shape.llm_provider]),
+  key_id: z.enum(["groq_api_key", "openai_api_key", "openai_compatible_api_key"]),
+  api_key: z.string().nullable(),
+  base_url: z.string().nullable(),
+});
+
+export type ProviderTestRequest = z.infer<typeof ProviderTestRequestSchema>;
+export type SecretKeyId = ProviderTestRequest["key_id"];
+
 export const KEYCHAIN_PLACEHOLDER = "<keychain>";
 
 export const ExportedSecretPlaceholderSchema = z.object({
