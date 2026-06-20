@@ -4,6 +4,7 @@
 // without touching anything else. P0 ships a single batch (non-streaming)
 // provider — Groq. P2 will extend this with a streaming variant.
 
+pub mod doubao;
 pub mod groq;
 pub mod openai;
 pub mod whisper_cpp;
