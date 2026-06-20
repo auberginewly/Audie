@@ -271,19 +271,39 @@ function ProviderKeyField({
   });
 
   useEffect(() => {
+    let cancelled = false;
+
     invoke("has_secret", { keyId: secretKeyId })
-      .then((raw) => {
-        if (typeof raw === "boolean") {
-          setHasSavedSecret(raw);
+      .then(async (raw) => {
+        if (cancelled || typeof raw !== "boolean") return;
+
+        setHasSavedSecret(raw);
+        if (!raw) {
           setStatus({
             tone: "neutral",
-            message: raw ? "已配置 key" : "未配置 key",
+            message: "未配置 key",
           });
+          return;
+        }
+
+        const secret = await invoke("get_secret_for_settings", { keyId: secretKeyId });
+        if (cancelled) return;
+
+        if (typeof secret === "string" && secret.trim()) {
+          setApiKey(secret);
+          setStatus({ tone: "neutral", message: "已从 Keychain 载入" });
+        } else {
+          setStatus({ tone: "neutral", message: "已保存 key" });
         }
       })
       .catch((err) => {
+        if (cancelled) return;
         setStatus({ tone: "error", message: errorMessage(err) });
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [secretKeyId]);
 
   const saveSecret = async () => {
@@ -325,10 +345,8 @@ function ProviderKeyField({
   const testProvider = async () => {
     let inlineApiKey: string | null = null;
     if (apiKey.trim()) {
-      const saved = await saveSecret();
-      if (!saved) return;
-      inlineApiKey = saved;
-    } else if (!hasSavedSecret) {
+      inlineApiKey = apiKey.trim();
+    } else {
       setStatus({ tone: "error", message: "请先填写 API key" });
       return;
     }
@@ -415,7 +433,7 @@ function ProviderKeyField({
           type="password"
           value={apiKey}
           onChange={(event) => setApiKey(event.target.value)}
-          placeholder={hasSavedSecret ? "输入新 key 可覆盖" : "sk-..."}
+          placeholder={hasSavedSecret ? "已保存 key" : "sk-..."}
         />
       </label>
       <div className="flex items-center justify-between gap-2">

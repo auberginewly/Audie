@@ -61,18 +61,9 @@ pub fn test_provider(
     })
 }
 
-fn read_api_key(platform: &dyn Platform, key_id: &str) -> AppResult<String> {
-    let api_key = platform.read_secret(key_id)?;
-    if api_key.trim().is_empty() {
-        Err(AppError::Provider("请先填写 API key".into()))
-    } else {
-        Ok(api_key.trim().to_string())
-    }
-}
-
 fn read_api_key_for_test(
-    platform: &dyn Platform,
-    key_id: &str,
+    _platform: &dyn Platform,
+    _key_id: &str,
     inline_api_key: Option<&str>,
 ) -> AppResult<String> {
     if let Some(api_key) = inline_api_key
@@ -81,7 +72,7 @@ fn read_api_key_for_test(
     {
         Ok(api_key.to_string())
     } else {
-        read_api_key(platform, key_id)
+        Err(AppError::Provider("请先填写 API key".into()))
     }
 }
 
@@ -199,55 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_keychain_secret_is_provider_error() {
-        struct EmptySecretPlatform;
-
-        impl Platform for EmptySecretPlatform {
-            fn register_hotkey(
-                &self,
-                _app: &AppHandle,
-                _combo: &str,
-                _callback: crate::platform::HotkeyCallback,
-            ) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn ensure_microphone_permission(&self) -> bool {
-                unreachable!()
-            }
-
-            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
-                unreachable!()
-            }
-
-            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
-                Ok(" ".into())
-            }
-
-            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-        }
-
-        let err = read_api_key(&EmptySecretPlatform, "groq_api_key").unwrap_err();
-
-        assert!(matches!(err, AppError::Provider(_)));
-        assert_eq!(err.message(), "请先填写 API key");
-    }
-
-    #[test]
     fn inline_api_key_is_used_without_reading_keychain() {
         struct PanicOnReadPlatform;
 
@@ -298,10 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn blank_inline_api_key_falls_back_to_keychain() {
-        struct SavedSecretPlatform;
+    fn blank_inline_api_key_is_provider_error_without_reading_keychain() {
+        struct PanicOnReadPlatform;
 
-        impl Platform for SavedSecretPlatform {
+        impl Platform for PanicOnReadPlatform {
             fn register_hotkey(
                 &self,
                 _app: &AppHandle,
@@ -331,9 +273,8 @@ mod tests {
                 unreachable!()
             }
 
-            fn read_secret(&self, key: &str) -> crate::error::AppResult<String> {
-                assert_eq!(key, "groq_api_key");
-                Ok("saved-key".into())
+            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
+                panic!("blank provider test key must not read keychain")
             }
 
             fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
@@ -341,10 +282,60 @@ mod tests {
             }
         }
 
-        let api_key =
-            read_api_key_for_test(&SavedSecretPlatform, "groq_api_key", Some("  ")).unwrap();
+        let err =
+            read_api_key_for_test(&PanicOnReadPlatform, "groq_api_key", Some("  ")).unwrap_err();
 
-        assert_eq!(api_key, "saved-key");
+        assert!(matches!(err, AppError::Provider(_)));
+        assert_eq!(err.message(), "请先填写 API key");
+    }
+
+    #[test]
+    fn missing_inline_api_key_is_provider_error_without_reading_keychain() {
+        struct PanicOnReadPlatform;
+
+        impl Platform for PanicOnReadPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                unreachable!()
+            }
+
+            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
+                panic!("missing provider test key must not read keychain")
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        let err = read_api_key_for_test(&PanicOnReadPlatform, "groq_api_key", None).unwrap_err();
+
+        assert!(matches!(err, AppError::Provider(_)));
+        assert_eq!(err.message(), "请先填写 API key");
     }
 
     #[test]

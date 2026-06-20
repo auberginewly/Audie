@@ -102,6 +102,7 @@ pub fn run() {
             commands::list_llm_providers,
             commands::set_secret,
             commands::has_secret,
+            commands::get_secret_for_settings,
             commands::delete_secret,
             provider_test::test_provider,
         ])
