@@ -35,6 +35,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
 ] }
+# Doubao streaming ASR (P2.3+) uses a custom binary frame protocol whose server
+# responses are gzip-compressed JSON. Pure-function codec only at P2.3.
+flate2 = "1"
 
 # macOS-only: CGEvent to simulate the Cmd+V paste keystroke (clipboard inject).
 [target.'cfg(target_os = "macos")'.dependencies]
