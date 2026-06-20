@@ -8,7 +8,9 @@ pub mod groq;
 pub mod openai;
 pub mod whisper_cpp;
 
-use crate::error::AppResult;
+use std::sync::mpsc::Receiver;
+
+use crate::error::{AppError, AppResult};
 
 /// One captured utterance, as interleaved f32 samples in [-1.0, 1.0].
 /// Providers are responsible for encoding this into whatever wire format their
@@ -19,6 +21,31 @@ pub struct AudioData {
     pub channels: u16,
 }
 
+/// One streaming audio packet. `sequence` is assigned by the stream producer so
+/// adapters can preserve chunk order; `is_final` marks the input-side close.
+#[allow(dead_code)] // P2.2 defines the streaming contract; P2.3+ wires providers.
+pub struct AudioChunk {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sequence: u64,
+    pub is_final: bool,
+}
+
+/// A provider-normalized ASR update for the overlay. Partial updates may be
+/// revised by later deltas; final updates are safe for the pipeline to commit.
+#[allow(dead_code)] // P2.2 defines the streaming contract; P2.3+ emits deltas.
+pub struct TranscriptDelta {
+    pub text: String,
+    pub is_final: bool,
+    pub sequence: u64,
+}
+
+#[allow(dead_code)] // P2.2 contract type; consumed once streaming pipeline lands.
+pub type AudioChunkStream = Receiver<AppResult<AudioChunk>>;
+#[allow(dead_code)] // P2.2 contract type; consumed once streaming pipeline lands.
+pub type TranscriptStream = Receiver<AppResult<TranscriptDelta>>;
+
 /// Speech → text. Synchronous on purpose: the caller runs it on a dedicated
 /// thread (no async runtime in P0). Streaming lands in P2 as a separate method.
 pub trait AsrProvider: Send + Sync {
@@ -26,6 +53,13 @@ pub trait AsrProvider: Send + Sync {
     fn name(&self) -> &str;
 
     fn transcribe(&self, audio: &AudioData) -> AppResult<String>;
+
+    #[allow(dead_code)] // Default stub until each streaming adapter implements it.
+    fn transcribe_stream(&self, _chunks: AudioChunkStream) -> AppResult<TranscriptStream> {
+        Err(AppError::Internal(
+            "streaming ASR is not implemented for this provider".into(),
+        ))
+    }
 }
 
 /// Encode f32 samples into a 16-bit PCM WAV (44-byte header + data).
@@ -57,4 +91,35 @@ pub(crate) fn encode_wav(audio: &AudioData) -> Vec<u8> {
         buf.extend_from_slice(&v.to_le_bytes());
     }
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcript_delta_can_represent_partial_text() {
+        let delta = TranscriptDelta {
+            text: "hel".into(),
+            is_final: false,
+            sequence: 1,
+        };
+
+        assert_eq!(delta.text, "hel");
+        assert!(!delta.is_final);
+        assert_eq!(delta.sequence, 1);
+    }
+
+    #[test]
+    fn transcript_delta_can_represent_final_text() {
+        let delta = TranscriptDelta {
+            text: "hello".into(),
+            is_final: true,
+            sequence: 2,
+        };
+
+        assert_eq!(delta.text, "hello");
+        assert!(delta.is_final);
+        assert_eq!(delta.sequence, 2);
+    }
 }

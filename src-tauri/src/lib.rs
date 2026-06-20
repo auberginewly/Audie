@@ -42,6 +42,14 @@ struct FinalTranscript {
 }
 
 #[derive(Serialize, Clone)]
+#[allow(dead_code)] // P2.2 defines the event payload; P2.5 will emit it to overlay.
+struct PartialTranscript {
+    text: String,
+    is_final: bool,
+    sequence: u64,
+}
+
+#[derive(Serialize, Clone)]
 struct EnhanceProgress {
     phase: &'static str,
     message: String,
