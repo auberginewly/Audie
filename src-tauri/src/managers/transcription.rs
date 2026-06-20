@@ -7,7 +7,7 @@
 use crate::asr::groq::GroqProvider;
 use crate::asr::openai::OpenAiProvider;
 use crate::asr::whisper_cpp::WhisperCppProvider;
-use crate::asr::{AsrProvider, AudioData};
+use crate::asr::{AsrProvider, AudioChunkStream, AudioData, TranscriptStream};
 use crate::error::{AppError, AppResult};
 
 pub struct TranscriptionManager;
@@ -31,6 +31,16 @@ impl TranscriptionManager {
         // the hotkey pipeline.
         let provider = build_provider(config)?;
         provider.transcribe(audio)
+    }
+
+    #[allow(dead_code)] // P2.2 exposes the contract; hotkey pipeline stays batch for now.
+    pub fn transcribe_stream(
+        &self,
+        chunks: AudioChunkStream,
+        config: &TranscriptionConfig,
+    ) -> AppResult<TranscriptStream> {
+        let provider = build_provider(config)?;
+        provider.transcribe_stream(chunks)
     }
 }
 
@@ -153,5 +163,56 @@ mod tests {
 
         assert!(matches!(err, AppError::Device(_)));
         assert_eq!(err.message(), "本地 Whisper 推理将在 P3 模型管理中接入");
+    }
+
+    #[test]
+    fn manager_batch_transcribe_still_uses_existing_provider_errors() {
+        let manager = TranscriptionManager::new();
+        let audio = AudioData {
+            samples: vec![0.0],
+            sample_rate: 16_000,
+            channels: 1,
+        };
+        let config = TranscriptionConfig {
+            asr_provider: "groq".into(),
+            groq_api_key: None,
+            openai_api_key: None,
+            whisper_cpp_model_path: None,
+        };
+
+        let err = manager.transcribe(&audio, &config).unwrap_err();
+
+        assert!(matches!(err, AppError::Provider(_)));
+        assert_eq!(err.message(), "Groq API key 未配置，请先到设置页填写");
+    }
+
+    #[test]
+    fn manager_stream_transcribe_exposes_p2_contract_without_provider_impl() {
+        let manager = TranscriptionManager::new();
+        let (chunks_tx, chunks_rx) = std::sync::mpsc::channel();
+        chunks_tx
+            .send(Ok(crate::asr::AudioChunk {
+                samples: vec![0.0],
+                sample_rate: 16_000,
+                channels: 1,
+                sequence: 1,
+                is_final: true,
+            }))
+            .unwrap();
+        drop(chunks_tx);
+        let config = TranscriptionConfig {
+            asr_provider: "groq".into(),
+            groq_api_key: Some("groq-key".into()),
+            openai_api_key: None,
+            whisper_cpp_model_path: None,
+        };
+
+        let err = manager.transcribe_stream(chunks_rx, &config).unwrap_err();
+
+        assert!(matches!(err, AppError::Internal(_)));
+        assert_eq!(
+            err.message(),
+            "streaming ASR is not implemented for this provider"
+        );
     }
 }
