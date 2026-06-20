@@ -491,6 +491,14 @@ pub fn has_secret(app: AppHandle, key_id: String) -> Result<bool, AppError> {
 }
 
 #[tauri::command]
+pub fn get_secret_for_settings(app: AppHandle, key_id: String) -> Result<Option<String>, AppError> {
+    validate_secret_key_id(&key_id)?;
+
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform_secret_for_settings(platform.inner().as_ref(), &key_id)
+}
+
+#[tauri::command]
 pub fn delete_secret(app: AppHandle, key_id: String) -> Result<(), AppError> {
     validate_secret_key_id(&key_id)?;
 
@@ -513,6 +521,17 @@ pub(crate) fn validate_secret_key_id(key_id: &str) -> Result<(), AppError> {
 
 fn platform_has_secret(platform: &dyn Platform, key_id: &str) -> Result<bool, AppError> {
     platform.has_secret(key_id)
+}
+
+fn platform_secret_for_settings(
+    platform: &dyn Platform,
+    key_id: &str,
+) -> Result<Option<String>, AppError> {
+    if platform.has_secret(key_id)? {
+        platform.read_secret(key_id).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -683,6 +702,104 @@ mod tests {
         }
 
         assert!(platform_has_secret(&PresentSecretPlatform, "groq_api_key").unwrap());
+    }
+
+    #[test]
+    fn settings_secret_snapshot_returns_none_for_missing_secret_without_reading_value() {
+        struct MissingSecretPlatform;
+
+        impl Platform for MissingSecretPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                Ok(false)
+            }
+
+            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
+                panic!("missing settings snapshot must not read the secret value")
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        let secret = platform_secret_for_settings(&MissingSecretPlatform, "groq_api_key").unwrap();
+
+        assert_eq!(secret, None);
+    }
+
+    #[test]
+    fn settings_secret_snapshot_returns_saved_secret_value() {
+        struct PresentSecretPlatform;
+
+        impl Platform for PresentSecretPlatform {
+            fn register_hotkey(
+                &self,
+                _app: &AppHandle,
+                _combo: &str,
+                _callback: crate::platform::HotkeyCallback,
+            ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn ensure_microphone_permission(&self) -> bool {
+                unreachable!()
+            }
+
+            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
+                Ok(true)
+            }
+
+            fn read_secret(&self, key: &str) -> crate::error::AppResult<String> {
+                assert_eq!(key, "openai_api_key");
+                Ok("saved-openai-key".into())
+            }
+
+            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+        }
+
+        let secret =
+            platform_secret_for_settings(&PresentSecretPlatform, "openai_api_key").unwrap();
+
+        assert_eq!(secret.as_deref(), Some("saved-openai-key"));
     }
 
     #[test]

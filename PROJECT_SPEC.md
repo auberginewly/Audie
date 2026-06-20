@@ -258,7 +258,7 @@ trait LlmProvider {
 ### 4.2 BYOK + 系统 keychain
 
 - API key 存系统 keychain（macOS Keychain Services；P4 Windows Credential Manager）。
-- 设置里 key 字段：写入即调 `store_secret`，存在性检查走 `has_secret`，真正调用 provider 时才走 `read_secret`，**绝不**写进 `tauri-plugin-store` 的明文 JSON。
+- 设置里 key 字段：写入调 `store_secret`；存在性检查走 `has_secret`，只做 presence check；provider test 按 Voxt 的 snapshot 模型，设置页可通过受限 command 把已保存 key 读入当前 password input state，`test_provider` 只消费这份当前表单 snapshot；ASR / LLM 真正调用 provider 时才走 `read_secret`，**绝不**写进 `tauri-plugin-store` 的明文 JSON。
 - macOS 实现参考 Voxt 当前做法：用底层 `SecItemCopyMatching` / `SecItemAdd` / `SecItemUpdate` / `SecItemDelete` 管理 generic-password item，不用 `SecKeychain::default().set_generic_password` 这类高层 wrapper。item 的 `service` 固定为 `com.audie.app.secure-storage`，`account` 用稳定 key id（如 `groq_api_key`），写入时设置 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。`has_secret` 只做 presence check，不带 `kSecReturnData`，不能为了显示「已配置」而读取 key 明文；旧 `service = "audie"` item 不自动迁移，避免迁移时触发旧钥匙串授权弹窗。
 - 配置导出（设置 → 导出 JSON）：敏感字段用占位符 `"<keychain>"` 替换。
 - 配置导入：遇到占位符 → 提示用户重新填 key。
@@ -279,10 +279,11 @@ trait LlmProvider {
 |---|---|
 | `set_secret` | 写 key 到 keychain（用 `key_id` 标识，如 `groq_api_key`） |
 | `has_secret` | 查某个 key 是否已配置（不返回内容） |
+| `get_secret_for_settings` | 设置页按 Voxt snapshot 模型读取已保存 key 明文到当前表单 state；先 `has_secret`，不存在返回空，存在才读明文 |
 | `delete_secret` | 删 key |
 | `list_asr_providers` | 列可用 ASR provider 元信息 |
 | `list_llm_providers` | 列可用 LLM provider 元信息 |
-| `test_provider` | 用当前配置发一个测试请求 |
+| `test_provider` | 用当前表单 snapshot 发一个测试请求；只消费请求里的 inline `api_key`，不在 command 内读取 keychain |
 | `export_config` | 导出配置（敏感字段占位） |
 | `import_config` | 导入配置 |
 

@@ -641,4 +641,28 @@ mod tests {
             Err(AppError::Provider(_))
         ));
     }
+
+    #[test]
+    fn keychain_add_item_uses_voxt_style_accessible_policy_without_access_acl() {
+        let value = CFData::from_buffer(b"secret");
+        let item = keychain_add_item("test_key", &value);
+        let accessible_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccessible) };
+        let value_key = unsafe { CFString::wrap_under_get_rule(kSecValueData) };
+
+        assert_eq!(item.len(), 5);
+        assert!(item.find(value_key).is_some());
+        assert!(item.find(accessible_key).is_some());
+    }
+
+    #[test]
+    fn keychain_update_attributes_use_voxt_style_accessible_policy_without_access_acl() {
+        let value = CFData::from_buffer(b"secret");
+        let attrs = keychain_value_attributes(&value);
+        let value_key = unsafe { CFString::wrap_under_get_rule(kSecValueData) };
+        let accessible_key = unsafe { CFString::wrap_under_get_rule(kSecAttrAccessible) };
+
+        assert_eq!(attrs.len(), 2);
+        assert!(attrs.find(value_key).is_some());
+        assert!(attrs.find(accessible_key).is_some());
+    }
 }
