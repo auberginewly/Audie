@@ -27,14 +27,15 @@ const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
 const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
 const KEY_DOUBAO_STREAMING_PREVIEW_ENABLED: &str = "doubao_streaming_preview_enabled";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
-// Doubao's AppID + Access Token both live in the keychain (Voxt treats appID as
-// sensitive too), so they're listed here for export placeholders / import refill.
+// Doubao credentials live in the keychain, so they're listed here for export
+// placeholders / import refill. `doubao_access_token` stores either new-console
+// API Key or old-console Access Token.
 const SECRET_KEY_IDS: &[&str] = &[
     "groq_api_key",
     "openai_api_key",
     "openai_compatible_api_key",
     crate::asr::doubao::config::SECRET_APP_ID,
-    crate::asr::doubao::config::SECRET_ACCESS_TOKEN,
+    crate::asr::doubao::config::SECRET_API_KEY_OR_ACCESS_TOKEN,
 ];
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
@@ -153,6 +154,23 @@ fn read_string_setting(app: &AppHandle, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn read_doubao_resource_id(app: &AppHandle) -> String {
+    let stored = read_string_setting(
+        app,
+        KEY_DOUBAO_RESOURCE_ID,
+        crate::asr::doubao::config::DEFAULT_RESOURCE_ID,
+    );
+    normalize_doubao_resource_id(stored)
+}
+
+fn normalize_doubao_resource_id(stored: String) -> String {
+    if stored == crate::asr::doubao::config::LEGACY_RESOURCE_ID {
+        crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string()
+    } else {
+        stored
+    }
+}
+
 fn read_bool_setting(app: &AppHandle, key: &str, default: bool) -> bool {
     app.store(STORE_FILE)
         .ok()
@@ -194,11 +212,7 @@ pub fn load_settings(app: &AppHandle) -> Settings {
             KEY_DOUBAO_ENDPOINT,
             crate::asr::doubao::config::DEFAULT_ENDPOINT,
         ),
-        doubao_resource_id: read_string_setting(
-            app,
-            KEY_DOUBAO_RESOURCE_ID,
-            crate::asr::doubao::config::DEFAULT_RESOURCE_ID,
-        ),
+        doubao_resource_id: read_doubao_resource_id(app),
         doubao_streaming_preview_enabled: read_bool_setting(
             app,
             KEY_DOUBAO_STREAMING_PREVIEW_ENABLED,
@@ -592,6 +606,73 @@ fn platform_secret_for_settings(
     }
 }
 
+/// Dev-only connectivity probe for the Doubao streaming ASR (P2.5). Reads a
+/// local 16k/mono/16-bit wav and streams it to Doubao, logging partial/final
+/// text. Not registered in release builds — the recording hot path lands P2.6.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn test_doubao_streaming(app: AppHandle, wav_path: String) -> Result<String, AppError> {
+    use crate::asr::doubao::{client, config};
+
+    let pcm16 = read_wav_pcm16(&wav_path)?;
+
+    let endpoint = read_string_setting(&app, KEY_DOUBAO_ENDPOINT, config::DEFAULT_ENDPOINT);
+    let resource_id = read_doubao_resource_id(&app);
+
+    // Read secrets before the await so we don't hold the State across it.
+    let auth = {
+        let platform = app.state::<Arc<dyn Platform>>();
+        let app_id = platform
+            .read_secret(config::SECRET_APP_ID)
+            .unwrap_or_default();
+        let api_key_or_access_token = platform
+            .read_secret(config::SECRET_API_KEY_OR_ACCESS_TOKEN)
+            .map_err(|_| {
+                AppError::Provider("doubao API Key / Access Token not configured".into())
+            })?;
+        client::DoubaoAuth::from_settings(app_id, api_key_or_access_token)
+    };
+
+    let cfg = client::DoubaoStreamConfig {
+        endpoint,
+        auth,
+        resource_id,
+    };
+    log::info!(
+        "test_doubao_streaming: {} PCM bytes from {wav_path}",
+        pcm16.len()
+    );
+    let text = client::transcribe_pcm16(&cfg, &pcm16).await?;
+    log::info!("test_doubao_streaming final text: {text}");
+    Ok(text)
+}
+
+/// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
+#[cfg(debug_assertions)]
+fn read_wav_pcm16(path: &str) -> Result<Vec<u8>, AppError> {
+    use crate::asr::doubao::config;
+
+    let mut reader =
+        hound::WavReader::open(path).map_err(|err| AppError::Device(format!("open wav: {err}")))?;
+    let spec = reader.spec();
+    if spec.sample_rate != config::STREAMING_SAMPLE_RATE
+        || spec.channels != config::STREAMING_CHANNELS
+        || spec.bits_per_sample != config::STREAMING_BITS_PER_SAMPLE
+    {
+        return Err(AppError::Device(format!(
+            "expect 16k mono 16-bit wav, got {} Hz / {} ch / {} bit",
+            spec.sample_rate, spec.channels, spec.bits_per_sample
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    for sample in reader.samples::<i16>() {
+        let sample = sample.map_err(|err| AppError::Device(format!("read wav sample: {err}")))?;
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,6 +716,14 @@ mod tests {
         // Endpoint + resource id are non-secret store fields, so they ARE present
         // in plain; only the keychain secrets get redacted.
         assert!(json.contains(crate::asr::doubao::config::DEFAULT_ENDPOINT));
+    }
+
+    #[test]
+    fn legacy_doubao_resource_id_migrates_to_seed_asr_2_default() {
+        assert_eq!(
+            normalize_doubao_resource_id(crate::asr::doubao::config::LEGACY_RESOURCE_ID.into()),
+            crate::asr::doubao::config::DEFAULT_RESOURCE_ID
+        );
     }
 
     #[test]
