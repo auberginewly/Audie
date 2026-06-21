@@ -38,6 +38,22 @@ reqwest = { version = "0.12", default-features = false, features = [
 # Doubao streaming ASR (P2.3+) uses a custom binary frame protocol whose server
 # responses are gzip-compressed JSON. Pure-function codec only at P2.3.
 flate2 = "1"
+# Doubao streaming WebSocket client (P2.5). tokio-tungstenite pulls tokio-rustls
+# transitively via the rustls feature, so no separate tokio-rustls dep is needed.
+# tokio + futures-util are the mandatory async runtime/traits for the ws client.
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-native-roots",
+] }
+futures-util = { version = "0.3", default-features = false, features = [
+    "sink",
+    "std",
+] }
+# WAV decoding for the dev-only doubao connectivity command (P2.5). Mature crate;
+# avoids hand-rolling a WAV parser.
+hound = "3"
 
 # macOS-only: CGEvent to simulate the Cmd+V paste keystroke (clipboard inject).
 [target.'cfg(target_os = "macos")'.dependencies]

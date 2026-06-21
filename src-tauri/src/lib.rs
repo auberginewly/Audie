@@ -104,6 +104,8 @@ pub fn run() {
             commands::has_secret,
             commands::get_secret_for_settings,
             commands::delete_secret,
+            #[cfg(debug_assertions)]
+            commands::test_doubao_streaming,
             provider_test::test_provider,
         ])
         .setup(move |app| {

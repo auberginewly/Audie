@@ -6,5 +6,6 @@
 // Protocol reference: agent-project/voxt/Voxt/Transcription/RemoteASRTranscriber+DoubaoTypes.swift
 // + DoubaoASRConfiguration.swift. We re-implement in Rust, not transliterate.
 
+pub mod client;
 pub mod codec;
 pub mod config;

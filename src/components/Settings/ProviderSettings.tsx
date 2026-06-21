@@ -493,7 +493,7 @@ function keyLabels(keyIds: SecretKeyId[]) {
       case "doubao_app_id":
         return "豆包 AppID";
       case "doubao_access_token":
-        return "豆包 Access Token";
+        return "豆包 API Key / Access Token";
     }
   });
   return labels.join(" / ");

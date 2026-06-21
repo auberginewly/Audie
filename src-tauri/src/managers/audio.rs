@@ -12,7 +12,7 @@
 //
 // Mirrors Handy's pattern: cpal default host, blocking thread, atomic shutdown.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::asr::AudioData;
+use crate::asr::{AudioChunk, AudioData};
 use crate::error::{AppError, AppResult};
 use crate::platform::Platform;
 
@@ -50,6 +50,32 @@ struct AudioMeta {
     channels: u16,
 }
 
+/// Optional live PCM outlet (P2.5). When present, the cpal callback forwards
+/// each buffer of samples as an `AudioChunk` in addition to the batch buffer —
+/// the streaming ASR consumer drains the receiver. `None` (the default path) is
+/// a no-op, so the batch flow keeps its current cost. Real consumer lands P2.6.
+struct ChunkSink {
+    tx: mpsc::Sender<AppResult<AudioChunk>>,
+    sequence: AtomicU64,
+    sample_rate: u32,
+    channels: u16,
+}
+
+impl ChunkSink {
+    fn forward(&self, samples: Vec<f32>) {
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        // A dropped receiver just means the streaming consumer went away; the
+        // batch path is unaffected, so swallow the send error.
+        let _ = self.tx.send(Ok(AudioChunk {
+            samples,
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            sequence,
+            is_final: false,
+        }));
+    }
+}
+
 struct CaptureSession {
     shutdown: Arc<AtomicBool>,
     capture_thread: Option<JoinHandle<()>>,
@@ -73,6 +99,26 @@ impl AudioManager {
     /// buffering samples. Idempotent: a redundant call while a session is live
     /// logs a warn and returns Ok.
     pub fn start_capture(&self, app: AppHandle) -> AppResult<()> {
+        self.start_capture_inner(app, None)
+    }
+
+    /// Like `start_capture` but also forwards live PCM chunks to `chunk_tx` for
+    /// the streaming ASR path. Batch buffering is unchanged. Wired into the hot
+    /// path at P2.6; defined here so P2.5 lands the outlet plumbing.
+    #[allow(dead_code)]
+    pub fn start_capture_streaming(
+        &self,
+        app: AppHandle,
+        chunk_tx: mpsc::Sender<AppResult<AudioChunk>>,
+    ) -> AppResult<()> {
+        self.start_capture_inner(app, Some(chunk_tx))
+    }
+
+    fn start_capture_inner(
+        &self,
+        app: AppHandle,
+        chunk_tx: Option<mpsc::Sender<AppResult<AudioChunk>>>,
+    ) -> AppResult<()> {
         let mut guard = self.session.lock();
         if guard.is_some() {
             log::warn!("start_capture called while a session is active; ignoring");
@@ -104,6 +150,7 @@ impl AudioManager {
                     shutdown_cap,
                     accum_cap,
                     buffer_cap,
+                    chunk_tx,
                     preferred_name,
                     ready_tx,
                 );
@@ -204,6 +251,7 @@ fn run_capture_thread(
     shutdown: Arc<AtomicBool>,
     accum: Arc<Mutex<LevelAccum>>,
     buffer: Arc<Mutex<Vec<f32>>>,
+    chunk_tx: Option<mpsc::Sender<AppResult<AudioChunk>>>,
     preferred_name: Option<String>,
     ready_tx: mpsc::Sender<AppResult<AudioMeta>>,
 ) {
@@ -233,32 +281,41 @@ fn run_capture_thread(
         sample_rate: config.sample_rate.0,
         channels: config.channels,
     };
+    // Build the optional live PCM outlet now that we know the stream format.
+    let chunk_sink = chunk_tx.map(|tx| {
+        Arc::new(ChunkSink {
+            tx,
+            sequence: AtomicU64::new(0),
+            sample_rate: meta.sample_rate,
+            channels: meta.channels,
+        })
+    });
     let err_fn = |err| log::error!("cpal stream error: {err}");
 
     let build_result = match sample_format {
         SampleFormat::F32 => {
-            let (a, b) = (accum.clone(), buffer.clone());
+            let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
             device.build_input_stream(
                 &config,
-                move |data: &[f32], _| process_f32(&a, &b, data),
+                move |data: &[f32], _| process_f32(&a, &b, s.as_deref(), data),
                 err_fn,
                 None,
             )
         }
         SampleFormat::I16 => {
-            let (a, b) = (accum.clone(), buffer.clone());
+            let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
             device.build_input_stream(
                 &config,
-                move |data: &[i16], _| process_i16(&a, &b, data),
+                move |data: &[i16], _| process_i16(&a, &b, s.as_deref(), data),
                 err_fn,
                 None,
             )
         }
         SampleFormat::U16 => {
-            let (a, b) = (accum.clone(), buffer.clone());
+            let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
             device.build_input_stream(
                 &config,
-                move |data: &[u16], _| process_u16(&a, &b, data),
+                move |data: &[u16], _| process_u16(&a, &b, s.as_deref(), data),
                 err_fn,
                 None,
             )
@@ -310,8 +367,14 @@ fn run_emit_thread(app: AppHandle, accum: Arc<Mutex<LevelAccum>>, shutdown: Arc<
 }
 
 // Each `process_*` does one locked pass: track the peak for the waveform and
-// append normalized f32 samples for transcription.
-fn process_f32(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[f32]) {
+// append normalized f32 samples for transcription. When a streaming sink is
+// present, the same normalized samples are also forwarded as an `AudioChunk`.
+fn process_f32(
+    accum: &Mutex<LevelAccum>,
+    buffer: &Mutex<Vec<f32>>,
+    sink: Option<&ChunkSink>,
+    data: &[f32],
+) {
     let mut peak = 0.0f32;
     {
         let mut buf = buffer.lock();
@@ -325,11 +388,20 @@ fn process_f32(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[f32]
         }
     }
     merge_peak(accum, peak);
+    if let Some(sink) = sink {
+        sink.forward(data.to_vec());
+    }
 }
 
-fn process_i16(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[i16]) {
+fn process_i16(
+    accum: &Mutex<LevelAccum>,
+    buffer: &Mutex<Vec<f32>>,
+    sink: Option<&ChunkSink>,
+    data: &[i16],
+) {
     let scale = i16::MAX as f32;
     let mut peak = 0.0f32;
+    let mut chunk = sink.map(|_| Vec::with_capacity(data.len()));
     {
         let mut buf = buffer.lock();
         buf.reserve(data.len());
@@ -340,13 +412,25 @@ fn process_i16(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[i16]
                 peak = a;
             }
             buf.push(v);
+            if let Some(chunk) = chunk.as_mut() {
+                chunk.push(v);
+            }
         }
     }
     merge_peak(accum, peak);
+    if let (Some(sink), Some(chunk)) = (sink, chunk) {
+        sink.forward(chunk);
+    }
 }
 
-fn process_u16(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[u16]) {
+fn process_u16(
+    accum: &Mutex<LevelAccum>,
+    buffer: &Mutex<Vec<f32>>,
+    sink: Option<&ChunkSink>,
+    data: &[u16],
+) {
     let mut peak = 0.0f32;
+    let mut chunk = sink.map(|_| Vec::with_capacity(data.len()));
     {
         let mut buf = buffer.lock();
         buf.reserve(data.len());
@@ -358,9 +442,15 @@ fn process_u16(accum: &Mutex<LevelAccum>, buffer: &Mutex<Vec<f32>>, data: &[u16]
                 peak = a;
             }
             buf.push(v);
+            if let Some(chunk) = chunk.as_mut() {
+                chunk.push(v);
+            }
         }
     }
     merge_peak(accum, peak);
+    if let (Some(sink), Some(chunk)) = (sink, chunk) {
+        sink.forward(chunk);
+    }
 }
 
 /// Look up `preferred_name` in the host's input device list and return it; fall
@@ -389,5 +479,62 @@ fn merge_peak(accum: &Mutex<LevelAccum>, local: f32) {
     let mut g = accum.lock();
     if local > g.peak {
         g.peak = local;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_f32_forwards_chunk_when_sink_present() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(Vec::new());
+        let (tx, rx) = mpsc::channel();
+        let sink = ChunkSink {
+            tx,
+            sequence: AtomicU64::new(0),
+            sample_rate: 16_000,
+            channels: 1,
+        };
+
+        process_f32(&accum, &buffer, Some(&sink), &[0.5, -0.25]);
+
+        // Batch buffer still gets the samples …
+        assert_eq!(*buffer.lock(), vec![0.5, -0.25]);
+        // … and the same samples arrive as an AudioChunk.
+        let chunk = rx.recv().unwrap().unwrap();
+        assert_eq!(chunk.samples, vec![0.5, -0.25]);
+        assert_eq!(chunk.sequence, 0);
+        assert!(!chunk.is_final);
+    }
+
+    #[test]
+    fn process_f32_without_sink_only_fills_buffer() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(Vec::new());
+
+        process_f32(&accum, &buffer, None, &[0.1, 0.2]);
+
+        assert_eq!(*buffer.lock(), vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn process_i16_normalizes_and_forwards() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(Vec::new());
+        let (tx, rx) = mpsc::channel();
+        let sink = ChunkSink {
+            tx,
+            sequence: AtomicU64::new(0),
+            sample_rate: 16_000,
+            channels: 1,
+        };
+
+        process_i16(&accum, &buffer, Some(&sink), &[i16::MAX, 0]);
+
+        let chunk = rx.recv().unwrap().unwrap();
+        assert_eq!(chunk.samples, vec![1.0, 0.0]);
+        assert_eq!(*buffer.lock(), vec![1.0, 0.0]);
     }
 }

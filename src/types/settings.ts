@@ -46,8 +46,9 @@ export const ProviderTestResultSchema = z.object({
 
 export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 
-// Every keychain-backed secret id. Doubao stores AppID + Access Token here too
-// (Voxt treats appID as sensitive), so export/import cover all five.
+// Every keychain-backed secret id. Doubao keeps the historical
+// `doubao_access_token` id for either new-console API Key or old-console Access
+// Token, so export/import cover all five without migrating saved secrets.
 export const SecretKeyIdSchema = z.enum([
   "groq_api_key",
   "openai_api_key",

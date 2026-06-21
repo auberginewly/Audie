@@ -1,8 +1,7 @@
 // Doubao streaming ASR configuration (P2.4). Endpoint + resource id are plain
-// store fields; AppID + Access Token are keychain secrets (key ids below),
-// matching Voxt's "appID is sensitive" model. This slice does NOT connect — the
-// WebSocket client + hot-path wiring land in P2.5/P2.6. Doubao deliberately does
-// not appear in `list_asr_providers`; it only ever drives the streaming path.
+// store fields; old-console AppID and API Key / Access Token are keychain
+// secrets (key ids below). Doubao deliberately does not appear in
+// `list_asr_providers`; it only ever drives the streaming path.
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -23,11 +22,15 @@ export function DoubaoSettings({
         <p className="text-xs opacity-60">国内可直连的流式转写（实验性）</p>
       </div>
 
-      <DoubaoSecretField title="AppID" keyId="doubao_app_id" placeholder="火山引擎 App ID" />
       <DoubaoSecretField
-        title="Access Token"
+        title="AppID（旧版控制台可选）"
+        keyId="doubao_app_id"
+        placeholder="旧版控制台 App ID；新版留空"
+      />
+      <DoubaoSecretField
+        title="API Key / Access Token"
         keyId="doubao_access_token"
-        placeholder="火山引擎 Access Token"
+        placeholder="新版控制台 API Key；旧版控制台 Access Token"
       />
 
       <label className="form-control">
@@ -45,7 +48,7 @@ export function DoubaoSettings({
           className="input input-bordered input-sm font-mono"
           value={settings.doubao_resource_id}
           onChange={(event) => onChange({ doubao_resource_id: event.target.value })}
-          placeholder="volc.bigasr.sauc.duration"
+          placeholder="volc.seedasr.sauc.duration"
         />
       </label>
 
