@@ -7,3 +7,4 @@
 // + DoubaoASRConfiguration.swift. We re-implement in Rust, not transliterate.
 
 pub mod codec;
+pub mod config;

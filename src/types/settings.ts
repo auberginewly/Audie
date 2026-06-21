@@ -13,6 +13,10 @@ export const SettingsSchema = z.object({
   whisper_cpp_model_path: z.string().nullable(),
   openai_compatible_base_url: z.string().min(1),
   openai_compatible_model: z.string().min(1),
+  doubao_endpoint: z.string().min(1),
+  doubao_resource_id: z.string().min(1),
+  // Experimental streaming preview; default false until P2.6 wires the hot path.
+  doubao_streaming_preview_enabled: z.boolean(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -42,21 +46,40 @@ export const ProviderTestResultSchema = z.object({
 
 export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 
+// Every keychain-backed secret id. Doubao stores AppID + Access Token here too
+// (Voxt treats appID as sensitive), so export/import cover all five.
+export const SecretKeyIdSchema = z.enum([
+  "groq_api_key",
+  "openai_api_key",
+  "openai_compatible_api_key",
+  "doubao_app_id",
+  "doubao_access_token",
+]);
+export type SecretKeyId = z.infer<typeof SecretKeyIdSchema>;
+
+// Only these providers have a reachable `test_provider` probe (P1.3). Doubao
+// streaming connectivity is exercised by a dev command in P2.5, not here.
+export const TestProviderKeyIdSchema = z.enum([
+  "groq_api_key",
+  "openai_api_key",
+  "openai_compatible_api_key",
+]);
+export type TestProviderKeyId = z.infer<typeof TestProviderKeyIdSchema>;
+
 export const ProviderTestRequestSchema = z.object({
   kind: ProviderKindSchema,
   provider_id: z.union([SettingsSchema.shape.asr_provider, SettingsSchema.shape.llm_provider]),
-  key_id: z.enum(["groq_api_key", "openai_api_key", "openai_compatible_api_key"]),
+  key_id: TestProviderKeyIdSchema,
   api_key: z.string().nullable(),
   base_url: z.string().nullable(),
 });
 
 export type ProviderTestRequest = z.infer<typeof ProviderTestRequestSchema>;
-export type SecretKeyId = ProviderTestRequest["key_id"];
 
 export const KEYCHAIN_PLACEHOLDER = "<keychain>";
 
 export const ExportedSecretPlaceholderSchema = z.object({
-  key_id: z.enum(["groq_api_key", "openai_api_key", "openai_compatible_api_key"]),
+  key_id: SecretKeyIdSchema,
   value: z.literal(KEYCHAIN_PLACEHOLDER),
 });
 

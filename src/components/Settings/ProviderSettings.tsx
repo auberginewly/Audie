@@ -20,7 +20,9 @@ import {
   type ProviderTestRequest,
   type Settings,
   type SecretKeyId,
+  type TestProviderKeyId,
 } from "../../types/settings";
+import { DoubaoSettings } from "./DoubaoSettings";
 
 const ProviderListSchema = ProviderMetadataSchema.array();
 
@@ -106,6 +108,7 @@ export function ProviderSettings() {
         }
         onModelChange={(openai_compatible_model) => updateSettings({ openai_compatible_model })}
       />
+      <DoubaoSettings settings={settings} onChange={updateSettings} />
       <div className="divider my-1" />
       <label className="flex items-center justify-between gap-3 text-sm">
         <span>AI 润色</span>
@@ -253,7 +256,7 @@ function ProviderKeyField({
 }: {
   title: string;
   description: string;
-  secretKeyId: SecretKeyId;
+  secretKeyId: TestProviderKeyId;
   kind: ProviderKind;
   providerId: AsrProviderId | LlmProviderId;
   baseUrl?: string;
@@ -477,7 +480,7 @@ async function copyText(text: string) {
   }
 }
 
-function keyLabels(keyIds: Array<"groq_api_key" | "openai_api_key" | "openai_compatible_api_key">) {
+function keyLabels(keyIds: SecretKeyId[]) {
   if (keyIds.length === 0) return "";
   const labels = keyIds.map((keyId) => {
     switch (keyId) {
@@ -487,6 +490,10 @@ function keyLabels(keyIds: Array<"groq_api_key" | "openai_api_key" | "openai_com
         return "OpenAI";
       case "openai_compatible_api_key":
         return "OpenAI-compatible";
+      case "doubao_app_id":
+        return "豆包 AppID";
+      case "doubao_access_token":
+        return "豆包 Access Token";
     }
   });
   return labels.join(" / ");

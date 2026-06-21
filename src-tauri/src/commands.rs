@@ -23,11 +23,18 @@ const KEY_ENHANCE_PROMPT: &str = "enhance_prompt";
 const KEY_WHISPER_CPP_MODEL_PATH: &str = "whisper_cpp_model_path";
 const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
 const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
+const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
+const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
+const KEY_DOUBAO_STREAMING_PREVIEW_ENABLED: &str = "doubao_streaming_preview_enabled";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
+// Doubao's AppID + Access Token both live in the keychain (Voxt treats appID as
+// sensitive too), so they're listed here for export placeholders / import refill.
 const SECRET_KEY_IDS: &[&str] = &[
     "groq_api_key",
     "openai_api_key",
     "openai_compatible_api_key",
+    crate::asr::doubao::config::SECRET_APP_ID,
+    crate::asr::doubao::config::SECRET_ACCESS_TOKEN,
 ];
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
@@ -53,6 +60,9 @@ pub struct Settings {
     pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: String,
     pub openai_compatible_model: String,
+    pub doubao_endpoint: String,
+    pub doubao_resource_id: String,
+    pub doubao_streaming_preview_enabled: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +76,9 @@ impl Default for Settings {
             whisper_cpp_model_path: None,
             openai_compatible_base_url: DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string(),
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
+            doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
+            doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
+            doubao_streaming_preview_enabled: false,
         }
     }
 }
@@ -80,6 +93,9 @@ pub struct SettingsPatch {
     pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_compatible_model: Option<String>,
+    pub doubao_endpoint: Option<String>,
+    pub doubao_resource_id: Option<String>,
+    pub doubao_streaming_preview_enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -172,6 +188,21 @@ pub fn load_settings(app: &AppHandle) -> Settings {
             app,
             KEY_OPENAI_COMPATIBLE_MODEL,
             DEFAULT_OPENAI_COMPATIBLE_MODEL,
+        ),
+        doubao_endpoint: read_string_setting(
+            app,
+            KEY_DOUBAO_ENDPOINT,
+            crate::asr::doubao::config::DEFAULT_ENDPOINT,
+        ),
+        doubao_resource_id: read_string_setting(
+            app,
+            KEY_DOUBAO_RESOURCE_ID,
+            crate::asr::doubao::config::DEFAULT_RESOURCE_ID,
+        ),
+        doubao_streaming_preview_enabled: read_bool_setting(
+            app,
+            KEY_DOUBAO_STREAMING_PREVIEW_ENABLED,
+            false,
         ),
     }
 }
@@ -317,6 +348,19 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.openai_compatible_model),
+        doubao_endpoint: patch
+            .doubao_endpoint
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.doubao_endpoint),
+        doubao_resource_id: patch
+            .doubao_resource_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.doubao_resource_id),
+        doubao_streaming_preview_enabled: patch
+            .doubao_streaming_preview_enabled
+            .unwrap_or(current.doubao_streaming_preview_enabled),
     };
 
     validate_settings(&next)?;
@@ -361,6 +405,14 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
             "OpenAI-compatible model cannot be empty".into(),
         ));
     }
+    if settings.doubao_endpoint.trim().is_empty() {
+        return Err(AppError::Internal("Doubao endpoint cannot be empty".into()));
+    }
+    if settings.doubao_resource_id.trim().is_empty() {
+        return Err(AppError::Internal(
+            "Doubao resource id cannot be empty".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -380,6 +432,12 @@ fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError>
     store.set(
         KEY_OPENAI_COMPATIBLE_MODEL,
         settings.openai_compatible_model,
+    );
+    store.set(KEY_DOUBAO_ENDPOINT, settings.doubao_endpoint);
+    store.set(KEY_DOUBAO_RESOURCE_ID, settings.doubao_resource_id);
+    store.set(
+        KEY_DOUBAO_STREAMING_PREVIEW_ENABLED,
+        settings.doubao_streaming_preview_enabled,
     );
     if let Some(model_path) = settings.whisper_cpp_model_path {
         store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
@@ -556,6 +614,27 @@ mod tests {
             settings.openai_compatible_model,
             DEFAULT_OPENAI_COMPATIBLE_MODEL
         );
+        assert_eq!(
+            settings.doubao_endpoint,
+            crate::asr::doubao::config::DEFAULT_ENDPOINT
+        );
+        assert_eq!(
+            settings.doubao_resource_id,
+            crate::asr::doubao::config::DEFAULT_RESOURCE_ID
+        );
+        assert!(!settings.doubao_streaming_preview_enabled);
+    }
+
+    #[test]
+    fn exported_config_lists_doubao_secrets_as_placeholders() {
+        let config = exportable_config_from_settings(Settings::default());
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(json.contains("doubao_app_id"));
+        assert!(json.contains("doubao_access_token"));
+        // Endpoint + resource id are non-secret store fields, so they ARE present
+        // in plain; only the keychain secrets get redacted.
+        assert!(json.contains(crate::asr::doubao::config::DEFAULT_ENDPOINT));
     }
 
     #[test]
@@ -826,6 +905,8 @@ mod tests {
                 "groq_api_key".to_string(),
                 "openai_api_key".to_string(),
                 "openai_compatible_api_key".to_string(),
+                "doubao_app_id".to_string(),
+                "doubao_access_token".to_string(),
             ]
         );
     }
