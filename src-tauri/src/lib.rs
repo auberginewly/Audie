@@ -15,7 +15,7 @@ mod platform;
 mod provider_test;
 mod state;
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -23,7 +23,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 use tauri_plugin_global_shortcut::ShortcutState;
 
-use crate::asr::AudioData;
+use crate::asr::doubao::config as doubao_config;
+use crate::asr::{AudioData, TranscriptStream};
 use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
 use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
@@ -34,6 +35,8 @@ use crate::state::{AppState, StateMachine};
 
 const SUCCESS_HOLD_MS: u64 = 150;
 const ERROR_HOLD_MS: u64 = 2500;
+
+type ActiveStreamingSession = Arc<parking_lot::Mutex<Option<TranscriptStream>>>;
 
 #[derive(Serialize, Clone)]
 struct FinalTranscript {
@@ -62,6 +65,16 @@ struct ErrorPayload {
     code: &'static str,
     message: String,
     recoverable: bool,
+}
+
+struct HotkeyContext<'a> {
+    app: &'a AppHandle,
+    state: &'a Arc<StateMachine>,
+    audio: &'a Arc<AudioManager>,
+    transcription: &'a Arc<TranscriptionManager>,
+    enhance: &'a Arc<EnhanceManager>,
+    inject: &'a Arc<InjectManager>,
+    streaming: &'a ActiveStreamingSession,
 }
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
@@ -138,6 +151,7 @@ pub fn run() {
             app.manage(inject);
             app.manage(registry_for_setup.clone());
             app.manage(platform.clone());
+            app.manage(Arc::new(parking_lot::Mutex::new(None::<TranscriptStream>)));
 
             let hotkey = commands::load_hotkey(&app_handle);
             if let Err(err) =
@@ -166,27 +180,21 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
         let transcription = app.state::<Arc<TranscriptionManager>>();
         let enhance = app.state::<Arc<EnhanceManager>>();
         let inject = app.state::<Arc<InjectManager>>();
-        handle_hotkey(
-            &app,
-            state.inner(),
-            audio.inner(),
-            transcription.inner(),
-            enhance.inner(),
-            inject.inner(),
-            event,
-        );
+        let streaming = app.state::<ActiveStreamingSession>();
+        let ctx = HotkeyContext {
+            app: &app,
+            state: state.inner(),
+            audio: audio.inner(),
+            transcription: transcription.inner(),
+            enhance: enhance.inner(),
+            inject: inject.inner(),
+            streaming: streaming.inner(),
+        };
+        handle_hotkey(&ctx, event);
     })
 }
 
-fn handle_hotkey(
-    app: &AppHandle,
-    state: &Arc<StateMachine>,
-    audio: &Arc<AudioManager>,
-    transcription: &Arc<TranscriptionManager>,
-    enhance: &Arc<EnhanceManager>,
-    inject: &Arc<InjectManager>,
-    event: HotkeyEvent,
-) {
+fn handle_hotkey(ctx: &HotkeyContext<'_>, event: HotkeyEvent) {
     match event {
         HotkeyEvent::Pressed => {
             // Press enters the front half of the pipeline: permission gate →
@@ -195,12 +203,12 @@ fn handle_hotkey(
             // Gate on mic permission before recording: a denial otherwise
             // captures silence and the user only sees a Whisper hallucination.
             // Flash red instead (§3.7 Permission).
-            let platform = app.state::<Arc<dyn Platform>>();
+            let platform = ctx.app.state::<Arc<dyn Platform>>();
             if !platform.ensure_microphone_permission() {
-                let _ = show_overlay(app);
+                let _ = show_overlay(ctx.app);
                 enter_error(
-                    app.clone(),
-                    state.clone(),
+                    ctx.app.clone(),
+                    ctx.state.clone(),
                     AppError::Permission("请授予麦克风权限".into()),
                 );
                 return;
@@ -209,20 +217,31 @@ fn handle_hotkey(
             // (no input device, build_input_stream blew up, etc.) needs to surface
             // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
             // transition first would strand us in Recording with a dead stream.
-            if let Err(err) = audio.start_capture(app.clone()) {
+            let streaming_start =
+                start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
+            let capture_result = match streaming_start {
+                Some(chunk_tx) => ctx.audio.start_capture_streaming(ctx.app.clone(), chunk_tx),
+                None => ctx.audio.start_capture(ctx.app.clone()),
+            };
+            if let Err(err) = capture_result {
                 log::error!("start capture: {err:?}");
-                let _ = show_overlay(app);
-                enter_error(app.clone(), state.clone(), err);
+                clear_streaming_session(ctx.streaming);
+                let _ = show_overlay(ctx.app);
+                enter_error(ctx.app.clone(), ctx.state.clone(), err);
                 return;
             }
-            if state.transition(app, AppState::Recording, Some("hotkey-down")) {
-                if let Err(err) = show_overlay(app) {
+            if ctx
+                .state
+                .transition(ctx.app, AppState::Recording, Some("hotkey-down"))
+            {
+                if let Err(err) = show_overlay(ctx.app) {
                     log::error!("show overlay: {err:?}");
                 }
             } else {
                 // Transition rejected (shouldn't happen — we just confirmed Idle
                 // implicitly by reaching here). Tear down the capture we just opened.
-                if let Err(err) = audio.stop_capture() {
+                clear_streaming_session(ctx.streaming);
+                if let Err(err) = ctx.audio.stop_capture() {
                     log::warn!("rollback stop_capture: {err:?}");
                 }
             }
@@ -231,25 +250,30 @@ fn handle_hotkey(
             // Release closes the audio session and hands one complete utterance
             // to the pipeline tail. From here on the overlay remains visible so
             // the user sees Processing/Success/Error instead of a blink.
-            if !state.transition(app, AppState::Processing, Some("hotkey-up")) {
+            if !ctx
+                .state
+                .transition(ctx.app, AppState::Processing, Some("hotkey-up"))
+            {
                 return;
             }
             // Overlay stays up through Processing/Success/Error so the user can
             // see the result; it's hidden only when we settle back to Idle.
-            match audio.stop_capture() {
+            let streaming_result = take_streaming_session(ctx.streaming);
+            match ctx.audio.stop_capture() {
                 Ok(recorded) => {
                     spawn_transcription(
-                        app.clone(),
-                        state.clone(),
-                        transcription.clone(),
-                        enhance.clone(),
-                        inject.clone(),
+                        ctx.app.clone(),
+                        ctx.state.clone(),
+                        ctx.transcription.clone(),
+                        ctx.enhance.clone(),
+                        ctx.inject.clone(),
                         recorded,
+                        streaming_result,
                     );
                 }
                 Err(err) => {
                     log::error!("stop capture: {err:?}");
-                    enter_error(app.clone(), state.clone(), err);
+                    enter_error(ctx.app.clone(), ctx.state.clone(), err);
                 }
             }
         }
@@ -267,6 +291,7 @@ fn spawn_transcription(
     enhance: Arc<EnhanceManager>,
     inject: Arc<InjectManager>,
     audio: AudioData,
+    streaming_result: Option<TranscriptStream>,
 ) {
     thread::spawn(move || {
         let duration_ms = duration_ms(&audio);
@@ -288,8 +313,7 @@ fn spawn_transcription(
             return;
         }
 
-        let config = transcription_config(&app);
-        let text = match transcription.transcribe(&audio, &config) {
+        let text = match resolve_transcript(&app, &transcription, &audio, streaming_result) {
             Ok(text) => text,
             Err(err) => {
                 log::error!("transcription failed: {err:?}");
@@ -298,22 +322,7 @@ fn spawn_transcription(
             }
         };
 
-        // P0.3 acceptance: the transcript shows up in the console.
-        println!("[transcript] {text}");
-        log::info!("transcript ({duration_ms} ms): {text}");
-        let _ = app.emit(
-            "final-transcript",
-            FinalTranscript {
-                text: text.clone(),
-                duration_ms,
-            },
-        );
-
-        let text_to_inject = maybe_enhance_text(&app, &enhance, &text);
-
-        // P0.4: inject at the caret. On failure the text is still on the
-        // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
-        if let Err(err) = inject.inject(&app, &text_to_inject) {
+        if let Err(err) = finish_pipeline_tail(&app, &enhance, &inject, &text, duration_ms) {
             log::error!("inject failed: {err:?}");
             enter_error(app, state, err);
             return;
@@ -323,6 +332,53 @@ fn spawn_transcription(
         thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
         settle_to_idle(&app, &state, "done");
     });
+}
+
+fn resolve_transcript(
+    app: &AppHandle,
+    transcription: &TranscriptionManager,
+    audio: &AudioData,
+    streaming_result: Option<TranscriptStream>,
+) -> AppResult<String> {
+    if let Some(stream) = streaming_result {
+        let delta = stream
+            .recv()
+            .map_err(|_| AppError::Network("doubao stream ended without result".into()))??;
+        if delta.is_final {
+            return Ok(delta.text);
+        }
+        return Err(AppError::Internal(
+            "doubao stream returned non-final transcript".into(),
+        ));
+    }
+
+    let config = transcription_config(app);
+    transcription.transcribe(audio, &config)
+}
+
+fn finish_pipeline_tail(
+    app: &AppHandle,
+    enhance: &EnhanceManager,
+    inject: &InjectManager,
+    text: &str,
+    duration_ms: u64,
+) -> AppResult<()> {
+    // P0.3 acceptance: the transcript shows up in the console.
+    println!("[transcript] {text}");
+    log::info!("transcript ({duration_ms} ms): {text}");
+    let _ = app.emit(
+        "final-transcript",
+        FinalTranscript {
+            text: text.to_string(),
+            duration_ms,
+        },
+    );
+
+    let text_to_inject = maybe_enhance_text(app, enhance, text);
+
+    // P0.4: inject at the caret. On failure the text is still on the
+    // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
+    inject.inject(app, &text_to_inject)
 }
 
 fn maybe_enhance_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> String {
@@ -356,6 +412,33 @@ fn emit_enhance_progress(app: &AppHandle, phase: &'static str, message: &str) {
     );
 }
 
+fn start_streaming_session(
+    app: &AppHandle,
+    transcription: &TranscriptionManager,
+    streaming: &ActiveStreamingSession,
+) -> Option<mpsc::Sender<AppResult<crate::asr::AudioChunk>>> {
+    let config = doubao_streaming_config(app)?;
+    let (chunks_tx, chunks_rx) = mpsc::channel();
+    match transcription.transcribe_stream(chunks_rx, &config) {
+        Ok(transcripts) => {
+            *streaming.lock() = Some(transcripts);
+            Some(chunks_tx)
+        }
+        Err(err) => {
+            log::warn!("doubao streaming unavailable, falling back to batch: {err:?}");
+            None
+        }
+    }
+}
+
+fn clear_streaming_session(streaming: &ActiveStreamingSession) {
+    let _ = streaming.lock().take();
+}
+
+fn take_streaming_session(streaming: &ActiveStreamingSession) -> Option<TranscriptStream> {
+    streaming.lock().take()
+}
+
 fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
@@ -383,7 +466,45 @@ fn transcription_config_from_settings(
         groq_api_key,
         openai_api_key,
         whisper_cpp_model_path,
+        doubao_endpoint: None,
+        doubao_resource_id: None,
+        doubao_app_id: None,
+        doubao_api_key_or_access_token: None,
     }
+}
+
+fn doubao_streaming_config(app: &AppHandle) -> Option<TranscriptionConfig> {
+    let settings = commands::load_settings(app);
+    if !settings.doubao_streaming_preview_enabled {
+        return None;
+    }
+
+    let platform = app.state::<Arc<dyn Platform>>();
+    doubao_streaming_config_from_settings(
+        settings.doubao_endpoint,
+        settings.doubao_resource_id,
+        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
+    )
+}
+
+fn doubao_streaming_config_from_settings(
+    endpoint: String,
+    resource_id: String,
+    mut read_secret: impl FnMut(&str) -> Option<String>,
+) -> Option<TranscriptionConfig> {
+    let api_key_or_access_token = read_secret(doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN)?;
+    let app_id = read_secret(doubao_config::SECRET_APP_ID);
+
+    Some(TranscriptionConfig {
+        asr_provider: "doubao_stream".into(),
+        groq_api_key: None,
+        openai_api_key: None,
+        whisper_cpp_model_path: None,
+        doubao_endpoint: Some(endpoint),
+        doubao_resource_id: Some(resource_id),
+        doubao_app_id: app_id,
+        doubao_api_key_or_access_token: Some(api_key_or_access_token),
+    })
 }
 
 fn enhance_config(app: &AppHandle) -> EnhanceConfig {
@@ -580,6 +701,59 @@ mod tests {
         assert_eq!(
             config.whisper_cpp_model_path.as_deref(),
             Some("/tmp/ggml.bin")
+        );
+    }
+
+    #[test]
+    fn doubao_streaming_config_without_token_returns_none_for_batch_fallback() {
+        let mut requested = Vec::new();
+
+        let config = doubao_streaming_config_from_settings(
+            "wss://example.test".into(),
+            "resource".into(),
+            |key_id| {
+                requested.push(key_id.to_string());
+                None
+            },
+        );
+
+        assert!(config.is_none());
+        assert_eq!(
+            requested,
+            vec![doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN]
+        );
+    }
+
+    #[test]
+    fn doubao_streaming_config_reads_token_then_optional_app_id() {
+        let mut requested = Vec::new();
+
+        let config = doubao_streaming_config_from_settings(
+            "wss://example.test".into(),
+            "resource".into(),
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        )
+        .expect("token enables streaming config");
+
+        assert_eq!(
+            requested,
+            vec![
+                doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN,
+                doubao_config::SECRET_APP_ID
+            ]
+        );
+        assert_eq!(config.asr_provider, "doubao_stream");
+        assert_eq!(
+            config.doubao_endpoint.as_deref(),
+            Some("wss://example.test")
+        );
+        assert_eq!(config.doubao_resource_id.as_deref(), Some("resource"));
+        assert_eq!(
+            config.doubao_api_key_or_access_token.as_deref(),
+            Some("doubao_access_token-value")
         );
     }
 
