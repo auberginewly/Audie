@@ -25,7 +25,6 @@ const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
 const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
 const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
 const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
-const KEY_DOUBAO_STREAMING_PREVIEW_ENABLED: &str = "doubao_streaming_preview_enabled";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
 // Doubao credentials live in the keychain, so they're listed here for export
 // placeholders / import refill. `doubao_access_token` stores either new-console
@@ -63,7 +62,6 @@ pub struct Settings {
     pub openai_compatible_model: String,
     pub doubao_endpoint: String,
     pub doubao_resource_id: String,
-    pub doubao_streaming_preview_enabled: bool,
 }
 
 impl Default for Settings {
@@ -79,7 +77,6 @@ impl Default for Settings {
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
             doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
-            doubao_streaming_preview_enabled: false,
         }
     }
 }
@@ -96,7 +93,6 @@ pub struct SettingsPatch {
     pub openai_compatible_model: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
-    pub doubao_streaming_preview_enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -213,11 +209,6 @@ pub fn load_settings(app: &AppHandle) -> Settings {
             crate::asr::doubao::config::DEFAULT_ENDPOINT,
         ),
         doubao_resource_id: read_doubao_resource_id(app),
-        doubao_streaming_preview_enabled: read_bool_setting(
-            app,
-            KEY_DOUBAO_STREAMING_PREVIEW_ENABLED,
-            false,
-        ),
     }
 }
 
@@ -372,9 +363,6 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.doubao_resource_id),
-        doubao_streaming_preview_enabled: patch
-            .doubao_streaming_preview_enabled
-            .unwrap_or(current.doubao_streaming_preview_enabled),
     };
 
     validate_settings(&next)?;
@@ -449,10 +437,6 @@ fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError>
     );
     store.set(KEY_DOUBAO_ENDPOINT, settings.doubao_endpoint);
     store.set(KEY_DOUBAO_RESOURCE_ID, settings.doubao_resource_id);
-    store.set(
-        KEY_DOUBAO_STREAMING_PREVIEW_ENABLED,
-        settings.doubao_streaming_preview_enabled,
-    );
     if let Some(model_path) = settings.whisper_cpp_model_path {
         store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
     } else {
@@ -703,7 +687,6 @@ mod tests {
             settings.doubao_resource_id,
             crate::asr::doubao::config::DEFAULT_RESOURCE_ID
         );
-        assert!(!settings.doubao_streaming_preview_enabled);
     }
 
     #[test]

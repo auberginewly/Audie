@@ -475,10 +475,6 @@ fn transcription_config_from_settings(
 
 fn doubao_streaming_config(app: &AppHandle) -> Option<TranscriptionConfig> {
     let settings = commands::load_settings(app);
-    if !settings.doubao_streaming_preview_enabled {
-        return None;
-    }
-
     let platform = app.state::<Arc<dyn Platform>>();
     doubao_streaming_config_from_settings(
         settings.doubao_endpoint,
@@ -725,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn doubao_streaming_config_reads_token_then_optional_app_id() {
+    fn doubao_streaming_config_reads_token_then_optional_app_id_by_default() {
         let mut requested = Vec::new();
 
         let config = doubao_streaming_config_from_settings(
