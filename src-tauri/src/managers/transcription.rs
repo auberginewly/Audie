@@ -4,6 +4,7 @@
 // This manager only chooses and calls an ASR adapter; it does not emit UI events,
 // mutate app state, or decide fallback behavior. Those decisions stay in lib.rs.
 
+use crate::asr::doubao::client::{DoubaoAuth, DoubaoStreamConfig, DoubaoStreamingProvider};
 use crate::asr::groq::GroqProvider;
 use crate::asr::openai::OpenAiProvider;
 use crate::asr::whisper_cpp::WhisperCppProvider;
@@ -18,6 +19,10 @@ pub struct TranscriptionConfig {
     pub groq_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub whisper_cpp_model_path: Option<String>,
+    pub doubao_endpoint: Option<String>,
+    pub doubao_resource_id: Option<String>,
+    pub doubao_app_id: Option<String>,
+    pub doubao_api_key_or_access_token: Option<String>,
 }
 
 impl TranscriptionManager {
@@ -78,10 +83,29 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
             Some(model_path) => Ok(Box::new(WhisperCppProvider::new(model_path.to_string()))),
             None => Err(AppError::Device("未配置本地 Whisper 模型".into())),
         },
+        "doubao_stream" => Ok(Box::new(DoubaoStreamingProvider::new(
+            doubao_stream_config(config)?,
+        ))),
         other => Err(AppError::Internal(format!(
             "unsupported ASR provider: {other}"
         ))),
     }
+}
+
+fn doubao_stream_config(config: &TranscriptionConfig) -> AppResult<DoubaoStreamConfig> {
+    let endpoint = required_key(&config.doubao_endpoint, "Doubao endpoint 未配置")?;
+    let resource_id = required_key(&config.doubao_resource_id, "Doubao resource_id 未配置")?;
+    let api_key_or_access_token = required_key(
+        &config.doubao_api_key_or_access_token,
+        "Doubao API Key / Access Token 未配置，请先到设置页填写",
+    )?;
+    let app_id = config.doubao_app_id.clone().unwrap_or_default();
+
+    Ok(DoubaoStreamConfig {
+        endpoint,
+        auth: DoubaoAuth::from_settings(app_id, api_key_or_access_token),
+        resource_id,
+    })
 }
 
 #[cfg(test)]
@@ -95,6 +119,10 @@ mod tests {
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
             whisper_cpp_model_path: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
         };
 
         let err = match build_provider(&config) {
@@ -113,6 +141,10 @@ mod tests {
             groq_api_key: None,
             openai_api_key: Some("openai-key".into()),
             whisper_cpp_model_path: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
         };
 
         let err = match build_provider(&config) {
@@ -131,6 +163,10 @@ mod tests {
             groq_api_key: None,
             openai_api_key: None,
             whisper_cpp_model_path: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
         };
 
         let err = match build_provider(&config) {
@@ -149,6 +185,10 @@ mod tests {
             groq_api_key: None,
             openai_api_key: None,
             whisper_cpp_model_path: Some("/tmp/ggml.bin".into()),
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
         };
 
         let err = match build_provider(&config) {
@@ -178,6 +218,10 @@ mod tests {
             groq_api_key: None,
             openai_api_key: None,
             whisper_cpp_model_path: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
         };
 
         let err = manager.transcribe(&audio, &config).unwrap_err();
@@ -205,6 +249,10 @@ mod tests {
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
             whisper_cpp_model_path: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
         };
 
         let err = manager.transcribe_stream(chunks_rx, &config).unwrap_err();
@@ -213,6 +261,31 @@ mod tests {
         assert_eq!(
             err.message(),
             "streaming ASR is not implemented for this provider"
+        );
+    }
+
+    #[test]
+    fn doubao_stream_requires_token_for_streaming_provider() {
+        let config = TranscriptionConfig {
+            asr_provider: "doubao_stream".into(),
+            groq_api_key: None,
+            openai_api_key: None,
+            whisper_cpp_model_path: None,
+            doubao_endpoint: Some("wss://example.test".into()),
+            doubao_resource_id: Some("resource".into()),
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
+        };
+
+        let err = match build_provider(&config) {
+            Ok(_) => panic!("expected Doubao stream without token to fail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, AppError::Provider(_)));
+        assert_eq!(
+            err.message(),
+            "Doubao API Key / Access Token 未配置，请先到设置页填写"
         );
     }
 }

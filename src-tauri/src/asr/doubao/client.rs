@@ -20,6 +20,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::{codec, config};
+use crate::asr::{AsrProvider, AudioChunk, AudioChunkStream, AudioData, TranscriptStream};
 use crate::error::{AppError, AppResult};
 
 /// Pace successive audio frames so we don't flood the server. Doubao's async
@@ -30,6 +31,7 @@ const FINAL_TIMEOUT_SECS: u64 = 20;
 
 /// Doubao auth mode. New console uses one API key; old console uses AppID plus
 /// Access Token.
+#[derive(Clone)]
 pub enum DoubaoAuth {
     NewConsole {
         api_key: String,
@@ -56,10 +58,51 @@ impl DoubaoAuth {
 }
 
 /// Connection parameters. Endpoint + resource id come from settings (non-secret).
+#[derive(Clone)]
 pub struct DoubaoStreamConfig {
     pub endpoint: String,
     pub auth: DoubaoAuth,
     pub resource_id: String,
+}
+
+pub struct DoubaoStreamingProvider {
+    config: DoubaoStreamConfig,
+}
+
+impl DoubaoStreamingProvider {
+    pub fn new(config: DoubaoStreamConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl AsrProvider for DoubaoStreamingProvider {
+    fn name(&self) -> &str {
+        "doubao_stream"
+    }
+
+    fn transcribe(&self, _audio: &AudioData) -> AppResult<String> {
+        Err(AppError::Internal(
+            "doubao streaming provider does not support batch transcription".into(),
+        ))
+    }
+
+    fn transcribe_stream(&self, chunks: AudioChunkStream) -> AppResult<TranscriptStream> {
+        let cfg = self.config.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("audie-doubao-stream".into())
+            .spawn(move || {
+                let result =
+                    run_streaming_runtime(cfg, chunks).map(|text| crate::asr::TranscriptDelta {
+                        text,
+                        is_final: true,
+                        sequence: 0,
+                    });
+                let _ = tx.send(result);
+            })
+            .map_err(|err| AppError::Internal(format!("spawn doubao stream: {err}")))?;
+        Ok(rx)
+    }
 }
 
 /// Stream a whole 16k/mono/16-bit PCM buffer to Doubao and return the final text.
@@ -111,6 +154,73 @@ pub async fn transcribe_pcm16(cfg: &DoubaoStreamConfig, pcm16: &[u8]) -> AppResu
             "doubao stream timed out waiting for final result".into(),
         )),
     }
+}
+
+/// Stream live AudioManager chunks to Doubao and return the final text.
+/// Partial server text is logged only; P2 intentionally does not emit
+/// `partial-transcript` or alter the overlay.
+pub async fn transcribe_audio_chunks(
+    cfg: &DoubaoStreamConfig,
+    chunks: AudioChunkStream,
+) -> AppResult<String> {
+    let request = build_request(cfg)?;
+    let (ws, _resp) = connect_async(request)
+        .await
+        .map_err(|err| classify_ws_error(&err, cfg))?;
+    let (mut write, read) = ws.split();
+
+    let payload = build_full_request_payload(&new_request_id())?;
+    write
+        .send(Message::Binary(codec::build_full_client_request(
+            1, &payload,
+        )))
+        .await
+        .map_err(|err| classify_ws_error(&err, cfg))?;
+
+    let receiver = tokio::spawn(receive_loop(read));
+    let mut sequence: i32 = 2;
+
+    for chunk_result in chunks {
+        let chunk = chunk_result?;
+        if chunk.is_final {
+            break;
+        }
+        let pcm16 = audio_chunk_to_pcm16(&chunk)?;
+        if pcm16.is_empty() {
+            continue;
+        }
+        for packet in pcm16.chunks(config::STREAMING_PACKET_BYTES) {
+            write
+                .send(Message::Binary(codec::build_audio_chunk(sequence, packet)))
+                .await
+                .map_err(|err| classify_ws_error(&err, cfg))?;
+            sequence += 1;
+        }
+    }
+
+    let final_sequence = codec::final_sequence_value(sequence);
+    write
+        .send(Message::Binary(codec::build_final_audio(final_sequence)))
+        .await
+        .map_err(|err| classify_ws_error(&err, cfg))?;
+
+    match tokio::time::timeout(Duration::from_secs(FINAL_TIMEOUT_SECS), receiver).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join_err)) => Err(AppError::Internal(format!(
+            "doubao receive task failed: {join_err}"
+        ))),
+        Err(_) => Err(AppError::Network(
+            "doubao stream timed out waiting for final result".into(),
+        )),
+    }
+}
+
+fn run_streaming_runtime(cfg: DoubaoStreamConfig, chunks: AudioChunkStream) -> AppResult<String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| AppError::Internal(format!("build doubao runtime: {err}")))?
+        .block_on(transcribe_audio_chunks(&cfg, chunks))
 }
 
 /// Read frames until the server marks the result final (or the socket closes),
@@ -209,6 +319,54 @@ fn build_full_request_payload(request_id: &str) -> AppResult<Vec<u8>> {
         .map_err(|err| AppError::Internal(format!("doubao request payload encode failed: {err}")))
 }
 
+fn audio_chunk_to_pcm16(chunk: &AudioChunk) -> AppResult<Vec<u8>> {
+    let mono = downmix_to_mono(&chunk.samples, chunk.channels);
+    let resampled = resample_linear(&mono, chunk.sample_rate, config::STREAMING_SAMPLE_RATE)?;
+    let mut pcm = Vec::with_capacity(resampled.len() * 2);
+    for sample in resampled {
+        let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        pcm.extend_from_slice(&value.to_le_bytes());
+    }
+    Ok(pcm)
+}
+
+fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let channels = channels.max(1) as usize;
+    if channels == 1 {
+        return samples.to_vec();
+    }
+
+    samples
+        .chunks(channels)
+        .map(|frame| frame.iter().copied().sum::<f32>() / frame.len() as f32)
+        .collect()
+}
+
+fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> AppResult<Vec<f32>> {
+    if from_rate == 0 {
+        return Err(AppError::Device("audio chunk sample rate is zero".into()));
+    }
+    if samples.is_empty() || from_rate == to_rate {
+        return Ok(samples.to_vec());
+    }
+
+    let output_len = ((samples.len() as u64 * to_rate as u64) / from_rate as u64) as usize;
+    if output_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    let ratio = from_rate as f32 / to_rate as f32;
+    let mut output = Vec::with_capacity(output_len);
+    for index in 0..output_len {
+        let source = index as f32 * ratio;
+        let left = source.floor() as usize;
+        let right = (left + 1).min(samples.len() - 1);
+        let t = source - left as f32;
+        output.push(samples[left] * (1.0 - t) + samples[right] * t);
+    }
+    Ok(output)
+}
+
 fn new_request_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
@@ -273,6 +431,7 @@ fn classify_codec_error(err: codec::CodecError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asr::AudioChunk;
 
     #[test]
     fn full_request_payload_has_expected_audio_fields() {
@@ -319,5 +478,38 @@ mod tests {
         assert_eq!(headers["X-Api-Access-Key"], "access-token");
         assert!(!headers.contains_key("X-Api-Key"));
         assert_eq!(headers["X-Api-Sequence"], "-1");
+    }
+
+    #[test]
+    fn audio_chunk_to_pcm16_downmixes_stereo() {
+        let chunk = AudioChunk {
+            samples: vec![1.0, -1.0, 0.5, 0.5],
+            sample_rate: config::STREAMING_SAMPLE_RATE,
+            channels: 2,
+            sequence: 1,
+            is_final: false,
+        };
+
+        let pcm = audio_chunk_to_pcm16(&chunk).expect("chunk converts");
+
+        assert_eq!(pcm, vec![0, 0, 255, 63]);
+    }
+
+    #[test]
+    fn audio_chunk_to_pcm16_resamples_to_16k_mono() {
+        let chunk = AudioChunk {
+            samples: vec![0.0, 1.0, 0.0, -1.0],
+            sample_rate: 8_000,
+            channels: 1,
+            sequence: 1,
+            is_final: false,
+        };
+
+        let pcm = audio_chunk_to_pcm16(&chunk).expect("chunk converts");
+
+        assert_eq!(pcm.len(), 16);
+        assert_eq!(&pcm[0..2], &[0, 0]);
+        assert_eq!(&pcm[4..6], &[255, 127]);
+        assert_eq!(&pcm[12..14], &[1, 128]);
     }
 }
