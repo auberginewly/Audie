@@ -19,7 +19,9 @@ export function DoubaoSettings({
     <section className="space-y-2 rounded border border-base-300/70 p-3">
       <div>
         <h2 className="text-sm font-medium">豆包流式 ASR</h2>
-        <p className="text-xs opacity-60">国内可直连的流式转写（实验性）</p>
+        <p className="text-xs opacity-60">
+          保存 API Key 后自动用于流式；未配置时走批量 ASR
+        </p>
       </div>
 
       <DoubaoSecretField
@@ -49,21 +51,6 @@ export function DoubaoSettings({
           value={settings.doubao_resource_id}
           onChange={(event) => onChange({ doubao_resource_id: event.target.value })}
           placeholder="volc.seedasr.sauc.duration"
-        />
-      </label>
-
-      <label className="flex items-center justify-between gap-3 text-sm">
-        <span>
-          实验性流式预览
-          <span className="block text-xs opacity-60">开启后录音并行送豆包（P2.6 起生效）</span>
-        </span>
-        <input
-          type="checkbox"
-          className="toggle toggle-sm"
-          checked={settings.doubao_streaming_preview_enabled}
-          onChange={(event) =>
-            onChange({ doubao_streaming_preview_enabled: event.target.checked })
-          }
         />
       </label>
     </section>

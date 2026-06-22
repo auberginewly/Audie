@@ -15,8 +15,6 @@ export const SettingsSchema = z.object({
   openai_compatible_model: z.string().min(1),
   doubao_endpoint: z.string().min(1),
   doubao_resource_id: z.string().min(1),
-  // Experimental streaming preview; default false until P2.6 wires the hot path.
-  doubao_streaming_preview_enabled: z.boolean(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
