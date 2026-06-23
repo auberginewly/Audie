@@ -182,6 +182,7 @@ dependencies = [
  "futures-util",
  "hound",
  "log",
+ "objc2",
  "parking_lot",
  "reqwest 0.12.28",
  "security-framework",

@@ -80,6 +80,33 @@ struct HotkeyContext<'a> {
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_BOTTOM_MARGIN_PX: f64 = 16.0;
 
+/// Hide a window's green zoom traffic light. The main window is fixed-size, so
+/// the zoom button can never do anything; hiding it reads cleaner than a grayed
+/// stub. Done via a direct NSWindow `standardWindowButton:` / `setHidden:` —
+/// macOS has no per-button Tauri config.
+#[cfg(target_os = "macos")]
+fn hide_zoom_button(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+
+    let Ok(ptr) = window.ns_window() else {
+        return;
+    };
+    let ns_window = ptr.cast::<AnyObject>();
+    if ns_window.is_null() {
+        return;
+    }
+    // NSWindowButton::ZoomButton == 2.
+    // SAFETY: `ns_window` is the live NSWindow for this webview window; the
+    // selectors are standard AppKit and setup runs on the main thread.
+    unsafe {
+        let button: *mut AnyObject = msg_send![ns_window, standardWindowButton: 2usize];
+        if !button.is_null() {
+            let _: () = msg_send![button, setHidden: Bool::new(true)];
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -127,6 +154,14 @@ pub fn run() {
             if let Err(err) = position_overlay(&app_handle) {
                 log::error!("position overlay failed: {err:?}");
                 return Err(Box::new(std::io::Error::other(format!("{err:?}"))));
+            }
+
+            // The main window is fixed-size (resizable/maximizable off), so the
+            // green zoom traffic light is dead — hide it instead of showing it
+            // grayed out (macOS only).
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                hide_zoom_button(&window);
             }
 
             let state_machine = Arc::new(StateMachine::new());
