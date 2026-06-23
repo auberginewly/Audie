@@ -29,7 +29,9 @@ export function AppShell({
       <main
         className={[
           "flex flex-1 min-w-0 flex-col overflow-hidden",
-          panel ? "bg-surface-app rounded-md m-2 ml-2" : "bg-transparent",
+          // Top margin matches the sidebar's pt-9 so the panel's top edge lines
+          // up with the "Audie" brand row; other sides keep the 8px float.
+          panel ? "bg-surface-app rounded-md mt-9 mr-2 mb-2 ml-2" : "bg-transparent",
         ].join(" ")}
       >
         {header ? <div className="flex h-13 shrink-0 items-center px-6">{header}</div> : null}
