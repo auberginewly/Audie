@@ -16,8 +16,10 @@
       {
         "label": "main",
         "title": "Audie",
-        "width": 800,
-        "height": 600,
+        "width": 960,
+        "height": 640,
+        "minWidth": 720,
+        "minHeight": 520,
         "url": "index.html",
         "theme": "Dark",
         "titleBarStyle": "Overlay",
