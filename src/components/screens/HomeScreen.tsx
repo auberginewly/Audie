@@ -31,7 +31,7 @@ const STATS: { icon: IconName; value: string; unit: string; label: string }[] = 
 
 export function HomeScreen() {
   return (
-    <div className="px-1">
+    <div data-tauri-drag-region className="px-1">
       <div className="mb-6 pl-1">
         <h1 className="max-w-[36ch] text-balance text-xl font-semibold leading-[26px] tracking-[-0.4px] text-text-primary">
           言为心声，出口成章
