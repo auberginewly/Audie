@@ -1,6 +1,141 @@
+/* Geist webfonts — Geist Sans (UI/prose) + Geist Mono (code, keycaps, data).
+ * Must stay first: CSS @import rules precede all other statements. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
+/* Audie design tokens (Geist, dark-first). Order matters: scales → semantic
+ * aliases (which reference the scales) → base element defaults. */
+@import "./styles/tokens/colors.css";
+@import "./styles/tokens/semantic.css";
+@import "./styles/tokens/spacing.css";
+@import "./styles/tokens/typography.css";
+@import "./styles/tokens/base.css";
+
+/* daisyUI stays during the migration — the existing Capsule/Settings still
+ * depend on its `nord` classes. Deliberate transitional state; dropped once
+ * those screens move onto the design-system components. */
 @plugin "daisyui" {
   themes: nord --default;
-  /* Keep the kit tight — early UI is disposable, no need to ship every theme. */
+}
+
+/* ---------------------------------------------------------------------------
+ * Bridge the design tokens into Tailwind v4 utilities. `inline` keeps the
+ * var() reference in generated classes, so `.theme-light` overrides still work.
+ * Build screens off the semantic aliases (bg-surface-card, text-text-tertiary,
+ * text-accent-text); raw scales (bg-gray-200, text-aubergine-900) are exposed
+ * for chips/fills that the design uses directly.
+ * ------------------------------------------------------------------------- */
+@theme inline {
+  /* fonts */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  /* radius — tight Geist family (overrides Tailwind defaults intentionally) */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+
+  /* elevation */
+  --shadow-raised: var(--shadow-raised);
+  --shadow-popover: var(--shadow-popover);
+  --shadow-modal: var(--shadow-modal);
+  --shadow-capsule: var(--shadow-capsule);
+
+  /* ---- semantic surfaces ---- */
+  --color-surface-app: var(--surface-app);
+  --color-surface-sidebar: var(--surface-sidebar);
+  --color-surface-card: var(--surface-card);
+  --color-surface-card-hover: var(--surface-card-hover);
+  --color-surface-inset: var(--surface-inset);
+  --color-surface-capsule: var(--surface-capsule);
+  --color-surface-overlay: var(--surface-overlay);
+
+  /* ---- semantic text ---- */
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-text-disabled: var(--text-disabled);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-text-on-solid: var(--text-on-solid);
+
+  /* ---- semantic borders ---- */
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+  --color-border-focus: var(--border-focus);
+
+  /* ---- accent (aubergine) ---- */
+  --color-accent-fill: var(--accent-fill);
+  --color-accent-fill-hover: var(--accent-fill-hover);
+  --color-accent-text: var(--accent-text);
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-border: var(--accent-border);
+
+  /* ---- state ---- */
+  --color-success-fill: var(--success-fill);
+  --color-success-text: var(--success-text);
+  --color-success-bg: var(--success-bg);
+  --color-success-border: var(--success-border);
+  --color-warning-fill: var(--warning-fill);
+  --color-warning-text: var(--warning-text);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-border: var(--warning-border);
+  --color-danger-fill: var(--danger-fill);
+  --color-danger-text: var(--danger-text);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+
+  /* ---- raw Geist scales (dark-first; replaces Tailwind defaults) ---- */
+  --color-background-100: var(--background-100);
+  --color-background-200: var(--background-200);
+
+  --color-gray-100: var(--gray-100);
+  --color-gray-200: var(--gray-200);
+  --color-gray-300: var(--gray-300);
+  --color-gray-400: var(--gray-400);
+  --color-gray-500: var(--gray-500);
+  --color-gray-600: var(--gray-600);
+  --color-gray-700: var(--gray-700);
+  --color-gray-800: var(--gray-800);
+  --color-gray-900: var(--gray-900);
+  --color-gray-1000: var(--gray-1000);
+
+  --color-gray-alpha-100: var(--gray-alpha-100);
+  --color-gray-alpha-200: var(--gray-alpha-200);
+  --color-gray-alpha-300: var(--gray-alpha-300);
+  --color-gray-alpha-400: var(--gray-alpha-400);
+  --color-gray-alpha-500: var(--gray-alpha-500);
+  --color-gray-alpha-600: var(--gray-alpha-600);
+  --color-gray-alpha-700: var(--gray-alpha-700);
+  --color-gray-alpha-800: var(--gray-alpha-800);
+  --color-gray-alpha-900: var(--gray-alpha-900);
+  --color-gray-alpha-1000: var(--gray-alpha-1000);
+
+  --color-aubergine-100: var(--aubergine-100);
+  --color-aubergine-200: var(--aubergine-200);
+  --color-aubergine-300: var(--aubergine-300);
+  --color-aubergine-400: var(--aubergine-400);
+  --color-aubergine-500: var(--aubergine-500);
+  --color-aubergine-600: var(--aubergine-600);
+  --color-aubergine-700: var(--aubergine-700);
+  --color-aubergine-800: var(--aubergine-800);
+  --color-aubergine-900: var(--aubergine-900);
+  --color-aubergine-1000: var(--aubergine-1000);
+
+  --color-blue-700: var(--blue-700);
+  --color-blue-900: var(--blue-900);
+
+  --color-red-100: var(--red-100);
+  --color-red-400: var(--red-400);
+  --color-red-800: var(--red-800);
+  --color-red-900: var(--red-900);
+
+  --color-amber-100: var(--amber-100);
+  --color-amber-400: var(--amber-400);
+  --color-amber-700: var(--amber-700);
+
+  --color-green-100: var(--green-100);
+  --color-green-400: var(--green-400);
+  --color-green-700: var(--green-700);
+  --color-green-900: var(--green-900);
 }

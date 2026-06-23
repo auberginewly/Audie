@@ -1,0 +1,65 @@
+/* ============================================================================
+ * Audie · Semantic aliases. Build screens off THESE, not raw scale steps —
+ * so light/dark and future retheme stays in one place. Maps Geist scale
+ * semantics onto Audie's surfaces, text, borders, and state colors.
+ * ========================================================================== */
+
+:root {
+  /* ---- Surfaces ---- */
+  --surface-app: var(--background-100);      /* window / page base */
+  --surface-sidebar: #0a0a0a;                /* left rail — a hair off-black */
+  --surface-card: var(--gray-100);           /* settings cards, rows */
+  --surface-card-hover: var(--gray-200);
+  --surface-inset: var(--background-200);     /* wells, code blocks, subtle separation */
+  --surface-capsule: #0d0d0dF2;              /* recording overlay (with blur) */
+  --surface-overlay: var(--gray-100);         /* menus, popovers */
+
+  /* ---- Text ---- */
+  --text-primary: var(--gray-1000);          /* headings, primary copy */
+  --text-secondary: var(--gray-900);         /* secondary copy, labels */
+  --text-tertiary: var(--gray-600);          /* hints, metadata, captions */
+  --text-disabled: var(--gray-500);
+  --text-on-accent: #ffffff;                 /* text on solid blue */
+  --text-on-solid: var(--background-100);    /* text on primary (gray-1000) fill */
+
+  /* ---- Borders / dividers (translucent, layer anywhere) ---- */
+  --border-subtle: var(--gray-alpha-200);
+  --border-default: var(--gray-alpha-400);
+  --border-strong: var(--gray-alpha-500);
+  --border-focus: var(--blue-700);
+
+  /* ---- Accent (Audie aubergine / 茄子) ---- */
+  --accent-fill: var(--aubergine-700);
+  --accent-fill-hover: var(--aubergine-800);
+  --accent-text: var(--aubergine-900);            /* aubergine text/icon on dark */
+  --accent-bg: var(--aubergine-100);              /* tinted aubergine background */
+  --accent-border: var(--aubergine-400);
+
+  /* ---- State: success / connected / granted ---- */
+  --success-fill: var(--green-700);
+  --success-text: var(--green-900);
+  --success-bg: var(--green-100);
+  --success-border: var(--green-400);
+
+  /* ---- State: warning / pending ---- */
+  --warning-fill: var(--amber-700);
+  --warning-text: var(--amber-700);
+  --warning-bg: var(--amber-100);
+  --warning-border: var(--amber-400);
+
+  /* ---- State: error / denied / destructive ---- */
+  --danger-fill: var(--red-800);
+  --danger-text: var(--red-900);
+  --danger-bg: var(--red-100);
+  --danger-border: var(--red-400);
+
+  /* ---- Focus ring (two-layer per Geist dark) ---- */
+  --focus-ring: 0 0 0 2px var(--background-100), 0 0 0 4px var(--aubergine-900);
+}
+
+.theme-light {
+  --surface-sidebar: #fafafa;
+  --surface-capsule: #ffffffF2;
+  --text-on-accent: #ffffff;
+  --focus-ring: 0 0 0 2px var(--background-100), 0 0 0 4px var(--aubergine-800);
+}
