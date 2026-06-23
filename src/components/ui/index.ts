@@ -7,3 +7,4 @@ export { Select, type SelectSize } from "./Select";
 export { Switch, type SwitchSize } from "./Switch";
 export { Badge, type BadgeTone } from "./Badge";
 export { Card } from "./Card";
+export { InlineNotice, StatusMessage, type NoticeTone, type StatusTone } from "./Feedback";

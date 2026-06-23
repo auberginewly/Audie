@@ -18,7 +18,9 @@ html {
 
 body {
   margin: 0;
-  background: var(--surface-app);
+  /* No body background: the main window and overlay share this stylesheet, and
+   * the overlay webview must stay transparent (the capsule floats over other
+   * apps). The main window paints --surface-app on its own root instead. */
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: var(--copy-14-size);
