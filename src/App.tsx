@@ -12,7 +12,6 @@ function App() {
   const data = useSettings();
   const [nav, setNav] = useState("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const hotkey = data.settings?.hotkey ?? "Ctrl+Shift+Space";
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-surface-app">
@@ -31,7 +30,7 @@ function App() {
           />
         }
       >
-        {nav === "home" ? <HomeScreen hotkey={hotkey} /> : <HistoryScreen />}
+        {nav === "home" ? <HomeScreen /> : <HistoryScreen />}
       </AppShell>
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} />
     </div>

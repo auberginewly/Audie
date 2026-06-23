@@ -1,10 +1,10 @@
-// Home — the landing. Real content only: slogan, the configured hotkey, and the
+// Home — the landing. Real content only: slogan, the fn trigger hint, and the
 // live recording state from the Rust event stream. No fabricated stats (the
 // backend tracks none yet); the stat area is an honest empty state.
 
 import { useRecordingStore } from "../../store/recording";
 import type { AppState } from "../../types/events";
-import { Badge, KeyCombo, type BadgeTone } from "../ui";
+import { Badge, Keycap, type BadgeTone } from "../ui";
 
 const STATE_LABEL: Record<AppState, { text: string; tone: BadgeTone }> = {
   IDLE: { text: "待命", tone: "neutral" },
@@ -15,21 +15,20 @@ const STATE_LABEL: Record<AppState, { text: string; tone: BadgeTone }> = {
   CANCEL: { text: "已取消", tone: "neutral" },
 };
 
-export function HomeScreen({ hotkey }: { hotkey: string }) {
+export function HomeScreen() {
   const state = useRecordingStore((s) => s.state);
   const label = STATE_LABEL[state] ?? STATE_LABEL.IDLE;
-  const keys = hotkey.split("+").map((k) => k.trim().toLowerCase());
 
   return (
     <div className="px-1">
       <div className="mb-7">
         <h1 className="max-w-[34ch] text-balance text-xl font-semibold leading-[26px] tracking-[-0.4px] text-text-primary">
-          按住快捷键说话，松手后干净的文字落在光标处。
+          言为心声，出口成章
         </h1>
         <div className="mt-3 flex items-center gap-2 text-sm text-text-tertiary">
           <span>按住</span>
-          <KeyCombo keys={keys} />
-          <span>开始说话</span>
+          <Keycap>fn</Keycap>
+          <span>开始和停止语音输入。</span>
         </div>
       </div>
 
