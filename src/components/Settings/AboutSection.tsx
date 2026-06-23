@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import type { UseSettings } from "../../hooks/useSettings";
 import { Button, Icon, Switch } from "../ui";
+import { openExternal } from "../../lib/open";
 import { SettingSection, SettingRow } from "./SettingSection";
 import { ConfigSection } from "./ConfigSection";
 
@@ -15,8 +16,10 @@ function ExtLink({ href, children, mono }: { href: string; children: string; mon
   return (
     <a
       href={href}
-      target="_blank"
-      rel="noreferrer"
+      onClick={(e) => {
+        e.preventDefault();
+        openExternal(href);
+      }}
       className={[
         "inline-flex items-center gap-1.5 text-sm text-text-secondary no-underline transition-colors hover:text-text-primary",
         mono ? "font-mono" : "",

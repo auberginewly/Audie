@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Icon, IconButton, type IconName } from "../ui";
+import { openExternal } from "../../lib/open";
 
 type SidebarItemProps = {
   icon?: IconName;
@@ -111,8 +112,10 @@ export function AppSidebar({
       <div className="flex items-center justify-between gap-2 pt-2.5">
         <a
           href={githubUrl}
-          target="_blank"
-          rel="noreferrer"
+          onClick={(e) => {
+            e.preventDefault();
+            openExternal(githubUrl);
+          }}
           title="GitHub · auberginewly/Audie"
           className={[
             "inline-flex h-[30px] items-center gap-[7px] rounded-full bg-gray-100 px-[11px]",
