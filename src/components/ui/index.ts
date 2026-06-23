@@ -11,3 +11,4 @@ export { InlineNotice, StatusMessage, type NoticeTone, type StatusTone } from ".
 export { Menu, type MenuItem } from "./Menu";
 export { Dialog } from "./Dialog";
 export { Segmented, type SegmentedOption } from "./Segmented";
+export { DevicePicker, type AudioDevice } from "./DevicePicker";

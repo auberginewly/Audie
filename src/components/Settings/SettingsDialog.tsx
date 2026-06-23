@@ -1,51 +1,33 @@
 // Paneled settings modal — its own left nav + content, opened from the sidebar
-// gear. Only backed sections appear (Provider / Enhance / Trigger / Config /
-// About); the design's unbacked model-picker & device/permission rows are out.
+// gear. Restored to the design's IA: 模型 · 文本处理 · 通用 · 关于. Backed paths
+// wire to real commands; unbacked rows are mock (see each section + plan).
 
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Icon, IconButton, type IconName } from "../ui";
 import type { UseSettings } from "../../hooks/useSettings";
-import { ProviderSection } from "./ProviderSection";
-import { EnhanceSection, TriggerSection, AboutSection } from "./GeneralSections";
-import { ConfigSection } from "./ConfigSection";
+import { ModelSection } from "./ModelSection";
+import { TextSection } from "./TextSection";
+import { GeneralSection } from "./GeneralSection";
+import { AboutSection } from "./AboutSection";
 
 type SectionDef = { id: string; icon: IconName; label: string; render: (s: UseSettings) => ReactNode };
 
 const SECTIONS: SectionDef[] = [
+  { id: "model", icon: "cpu", label: "模型", render: (data) => <ModelSection data={data} /> },
   {
-    id: "provider",
-    icon: "cpu",
-    label: "服务商",
-    render: ({ settings, asrProviders, llmProviders, update }) =>
-      settings ? (
-        <ProviderSection
-          settings={settings}
-          asrProviders={asrProviders}
-          llmProviders={llmProviders}
-          update={update}
-        />
-      ) : null,
-  },
-  {
-    id: "enhance",
+    id: "text",
     icon: "sparkles",
-    label: "润色",
-    render: ({ settings, update }) => (settings ? <EnhanceSection settings={settings} update={update} /> : null),
+    label: "文本处理",
+    render: ({ settings, update }) => (settings ? <TextSection settings={settings} update={update} /> : null),
   },
   {
-    id: "trigger",
-    icon: "command",
-    label: "触发",
-    render: ({ settings, update }) => (settings ? <TriggerSection settings={settings} update={update} /> : null),
+    id: "general",
+    icon: "sliders",
+    label: "通用",
+    render: ({ settings, update }) => (settings ? <GeneralSection settings={settings} update={update} /> : null),
   },
-  {
-    id: "config",
-    icon: "arrow-down-up",
-    label: "配置",
-    render: ({ applyImported }) => <ConfigSection onImported={applyImported} />,
-  },
-  { id: "about", icon: "book", label: "关于", render: () => <AboutSection /> },
+  { id: "about", icon: "book", label: "关于", render: (data) => <AboutSection data={data} /> },
 ];
 
 type SettingsDialogProps = {
