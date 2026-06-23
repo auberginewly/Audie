@@ -1,8 +1,19 @@
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useRecordingStore } from "./store/recording";
 import { HotkeySettings, ProviderSettings } from "./components/Settings";
+import { DesignSystemPreview } from "./designsystem/DesignSystemPreview";
+
+// Dev-only gallery for the design-system foundation. Reach it at `?preview`
+// during `tauri dev`; the production main window is untouched.
+const showPreview =
+  import.meta.env.DEV && new URLSearchParams(window.location.search).has("preview");
 
 function App() {
+  if (showPreview) return <DesignSystemPreview />;
+  return <MainWindow />;
+}
+
+function MainWindow() {
   useRecordingFlow();
   const state = useRecordingStore((s) => s.state);
 
