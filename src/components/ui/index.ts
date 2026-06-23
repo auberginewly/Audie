@@ -8,3 +8,6 @@ export { Switch, type SwitchSize } from "./Switch";
 export { Badge, type BadgeTone } from "./Badge";
 export { Card } from "./Card";
 export { InlineNotice, StatusMessage, type NoticeTone, type StatusTone } from "./Feedback";
+export { Menu, type MenuItem } from "./Menu";
+export { Dialog } from "./Dialog";
+export { Segmented, type SegmentedOption } from "./Segmented";
