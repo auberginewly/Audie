@@ -19,7 +19,9 @@
         "width": 800,
         "height": 600,
         "url": "index.html",
-        "theme": "Dark"
+        "theme": "Dark",
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true
       },
       {
         "label": "overlay",
