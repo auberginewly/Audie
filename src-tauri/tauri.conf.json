@@ -20,7 +20,7 @@
         "height": 600,
         "url": "index.html",
         "theme": "Dark",
-        "titleBarStyle": "Transparent",
+        "titleBarStyle": "Overlay",
         "hiddenTitle": true
       },
       {
