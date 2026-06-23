@@ -1,2 +1,1 @@
-export { HotkeySettings } from "./HotkeySettings";
-export { ProviderSettings } from "./ProviderSettings";
+export { SettingsDialog } from "./SettingsDialog";

@@ -1,23 +1,37 @@
+import { useState } from "react";
+
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
-import { useRecordingStore } from "./store/recording";
-import { HotkeySettings, ProviderSettings } from "./components/Settings";
+import { useSettings } from "./hooks/useSettings";
+import { AppShell, AppSidebar } from "./components/shell";
+import { HomeScreen } from "./components/screens/HomeScreen";
+import { HistoryScreen } from "./components/screens/HistoryScreen";
+import { SettingsDialog } from "./components/Settings";
 
 function App() {
   useRecordingFlow();
-  const state = useRecordingStore((s) => s.state);
+  const data = useSettings();
+  const [nav, setNav] = useState("home");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const hotkey = data.settings?.hotkey ?? "Ctrl+Shift+Space";
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-base-100 text-base-content">
-      <div className="text-center space-y-4">
-        <h1 className="text-2xl font-semibold">Audie</h1>
-        <p className="opacity-60 text-sm">Hold your hotkey to summon the capsule.</p>
-        <div className="badge badge-outline mt-2">state: {state}</div>
-        <div className="pt-3">
-          <HotkeySettings />
-        </div>
-        <ProviderSettings />
-      </div>
-    </main>
+    <div className="relative h-screen w-screen overflow-hidden bg-surface-app">
+      <AppShell
+        sidebar={
+          <AppSidebar
+            active={nav}
+            onNavigate={setNav}
+            version="0.0.0"
+            settingsLabel="设置"
+            settingsActive={settingsOpen}
+            onSettings={() => setSettingsOpen(true)}
+          />
+        }
+      >
+        {nav === "home" ? <HomeScreen hotkey={hotkey} /> : <HistoryScreen />}
+      </AppShell>
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} />
+    </div>
   );
 }
 
