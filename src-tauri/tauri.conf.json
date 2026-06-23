@@ -18,7 +18,8 @@
         "title": "Audie",
         "width": 800,
         "height": 600,
-        "url": "index.html"
+        "url": "index.html",
+        "theme": "Dark"
       },
       {
         "label": "overlay",
