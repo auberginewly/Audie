@@ -33,6 +33,26 @@ body {
   font-feature-settings: "ss01", "cv01";
 }
 
+/* Desktop chrome: a press-drag should move the window (from a drag region), not
+ * select text or ghost-drag icons/images. Form fields opt back into selection. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+}
+img,
+svg,
+a {
+  -webkit-user-drag: none;
+}
+
 ::selection {
   background: var(--aubergine-500);
   color: var(--aubergine-1000);

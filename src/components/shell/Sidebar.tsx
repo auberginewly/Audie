@@ -85,7 +85,10 @@ export function AppSidebar({
   aboveDock,
 }: AppSidebarProps) {
   return (
-    <aside className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-surface-sidebar box-border pt-9 pr-2.5 pb-3 pl-4">
+    <aside
+      data-tauri-drag-region
+      className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-surface-sidebar box-border pt-9 pr-2.5 pb-3 pl-4"
+    >
       <SidebarHeader version={version} />
 
       <div className="mt-[18px] flex flex-col gap-0.5 pt-1">
@@ -101,7 +104,7 @@ export function AppSidebar({
         ))}
       </div>
 
-      <div className="flex-1" />
+      <div data-tauri-drag-region className="flex-1" />
 
       {aboveDock ? <div className="mb-2.5">{aboveDock}</div> : null}
 
