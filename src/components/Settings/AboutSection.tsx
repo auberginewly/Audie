@@ -56,7 +56,7 @@ export function AboutSection({ data }: { data: UseSettings }) {
       <SettingSection icon="github" title="关于项目">
         <SettingRow label="源代码" divider={false} control={<ExtLink mono href={REPO_URL}>auberginewly/Audie</ExtLink>} />
         <SettingRow label="问题反馈" control={<ExtLink href={`${REPO_URL}/issues`}>GitHub Issues</ExtLink>} />
-        <SettingRow label="作者" control={<ExtLink href="https://auberginewly.vercel.app">auberginewly</ExtLink>} />
+        <SettingRow label="作者" control={<ExtLink href="https://github.com/auberginewly">auberginewly</ExtLink>} />
       </SettingSection>
 
       <ConfigSection onImported={data.applyImported} />
