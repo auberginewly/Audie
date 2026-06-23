@@ -6,6 +6,7 @@ import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState
 import { Button, Dialog } from "./components/ui";
 import { HomeScreen } from "./components/screens/HomeScreen";
 import { HistoryScreen } from "./components/screens/HistoryScreen";
+import { SetupWizard } from "./components/screens/SetupWizard";
 import { SettingsDialog } from "./components/Settings";
 
 const UPDATE_LABELS: UpdateLabels = {
@@ -19,11 +20,35 @@ const UPDATE_LABELS: UpdateLabels = {
 // design's "available" state so the titlebar pill matches the mockup.
 const AVAILABLE_VERSION = "0.5.0";
 
+// Sidebar dock card nudging first-run setup — progress + CTA into the wizard.
+function SetupGuideCard({ done, total, onContinue }: { done: number; total: number; onContinue: () => void }) {
+  return (
+    <div className="rounded-md bg-gray-100 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[13px] font-medium text-text-primary">完成配置</span>
+        <span className="font-mono text-[11px] text-text-tertiary">
+          {done}/{total}
+        </span>
+      </div>
+      <div className="mb-2.5 h-1 overflow-hidden rounded-full bg-gray-300">
+        <div className="h-full rounded-full bg-accent-fill" style={{ width: `${(done / total) * 100}%` }} />
+      </div>
+      <Button size="sm" variant="accent" block iconRight="chevron-right" onClick={onContinue}>
+        继续配置
+      </Button>
+    </div>
+  );
+}
+
 function App() {
   useRecordingFlow();
   const data = useSettings();
   const [nav, setNav] = useState("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
+  // mock: no first-run persistence — the guide card shows until the wizard
+  // finishes this session (see plan).
+  const [setupDone, setSetupDone] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>("available");
   const [updateOpen, setUpdateOpen] = useState(false);
 
@@ -68,6 +93,9 @@ function App() {
             settingsLabel="设置"
             settingsActive={settingsOpen}
             onSettings={() => setSettingsOpen(true)}
+            aboveDock={
+              setupDone ? undefined : <SetupGuideCard done={3} total={4} onContinue={() => setSetupOpen(true)} />
+            }
           />
         }
       >
@@ -75,6 +103,16 @@ function App() {
       </AppShell>
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} />
+
+      <SetupWizard
+        open={setupOpen}
+        onClose={() => setSetupOpen(false)}
+        onComplete={() => {
+          setSetupDone(true);
+          setSetupOpen(false);
+        }}
+        data={data}
+      />
 
       <Dialog
         open={updateOpen}
