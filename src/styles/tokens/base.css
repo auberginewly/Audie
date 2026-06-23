@@ -10,6 +10,15 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+  /* Fixed desktop window: the page itself never scrolls or rubber-bands —
+   * only the app's own inner containers scroll. Kills macOS webview overscroll. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
