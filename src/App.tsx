@@ -84,7 +84,7 @@ function App() {
       </div>
 
       <AppShell
-        bleed={nav === "history"}
+        bleed
         sidebar={
           <AppSidebar
             active={nav}
