@@ -1,0 +1,82 @@
+/* ============================================================================
+ * Audie · Base reset + element defaults. Dark-first. Sets the app background,
+ * default type, selection color, focus-ring discipline, and font smoothing.
+ * Scope-light by adding class="theme-light" on any container.
+ * ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  /* Fixed desktop window: the page itself never scrolls or rubber-bands —
+   * only the app's own inner containers scroll. Kills macOS webview overscroll. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  /* No body background: the main window and overlay share this stylesheet, and
+   * the overlay webview must stay transparent (the capsule floats over other
+   * apps). The main window paints --surface-app on its own root instead. */
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--copy-14-size);
+  line-height: var(--copy-14-line);
+  font-weight: var(--weight-regular);
+}
+
+/* Tabular, lining figures for data/status (Geist Mono handles its own). */
+body {
+  font-feature-settings: "ss01", "cv01";
+}
+
+/* Desktop chrome: a press-drag should move the window (from a drag region), not
+ * select text or ghost-drag icons/images. Form fields opt back into selection. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+}
+img,
+svg,
+a {
+  -webkit-user-drag: none;
+}
+
+::selection {
+  background: var(--aubergine-500);
+  color: var(--aubergine-1000);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

@@ -1,0 +1,39 @@
+/* ============================================================================
+ * Audie · Typography tokens (Geist). Each token is a {family, size, weight,
+ * line-height, tracking} set, exposed as composable vars. Prefer the role
+ * shorthands (--text-*) in components; reach for raw steps when needed.
+ *
+ * Geist Sans → UI + prose · Geist Mono → code, data, keycaps, tabular figures.
+ * ========================================================================== */
+
+:root {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+
+  /* ---- Weights ---- */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---- Headings (semibold, tightening tracking as size grows) ---- */
+  --heading-32-size: 32px;  --heading-32-line: 40px;  --heading-32-track: -1.28px;
+  --heading-24-size: 24px;  --heading-24-line: 32px;  --heading-24-track: -0.96px;
+  --heading-20-size: 20px;  --heading-20-line: 26px;  --heading-20-track: -0.4px;
+  --heading-16-size: 16px;  --heading-16-line: 24px;  --heading-16-track: -0.32px;
+  --heading-14-size: 14px;  --heading-14-line: 20px;  --heading-14-track: -0.28px;
+
+  /* ---- Body / copy (regular, taller line-height) ---- */
+  --copy-16-size: 16px;  --copy-16-line: 24px;
+  --copy-14-size: 14px;  --copy-14-line: 20px;
+  --copy-13-size: 13px;  --copy-13-line: 18px;
+
+  /* ---- Labels (single-line, scannable) ---- */
+  --label-14-size: 14px; --label-14-line: 20px;
+  --label-13-size: 13px; --label-13-line: 16px;
+  --label-12-size: 12px; --label-12-line: 16px;
+
+  /* ---- Buttons / compact controls (medium) ---- */
+  --button-14-size: 14px; --button-14-line: 20px;
+  --button-12-size: 12px; --button-12-line: 16px;
+}

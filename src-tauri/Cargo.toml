@@ -26,6 +26,9 @@ env_logger = "0.11"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-store = "2"
+# Open external URLs (GitHub repo, author site) in the system browser — Tauri has
+# no built-in way; this is the official link-opening plugin.
+tauri-plugin-opener = "2"
 cpal = "0.15"
 # rustls-tls so we don't depend on a system OpenSSL; blocking client runs on
 # our own transcription thread (no async runtime needed for P0).
@@ -64,5 +67,8 @@ core-foundation = "0.10"
 # Microphone TCC status (AVCaptureDevice authorizationStatus under the hood),
 # same crate Handy uses. We call its `check_microphone_permission` fn directly.
 tauri-plugin-macos-permissions = "2.3.0"
+# Hide the dead green zoom traffic light on the fixed-size main window via a
+# direct NSWindow msg_send. objc2 0.6 is already in the tree (Tauri depends on it).
+objc2 = "0.6"
 security-framework = "3.7.0"
 security-framework-sys = "2.17.0"

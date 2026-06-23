@@ -11,6 +11,9 @@
     "core:window:allow-hide",
     "core:window:allow-set-position",
     "core:window:allow-set-ignore-cursor-events",
-    "global-shortcut:default"
+    "core:window:allow-start-dragging",
+    "global-shortcut:default",
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ]
 }
