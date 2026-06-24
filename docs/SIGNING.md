@@ -96,6 +96,29 @@ codesign -d --requirements - src-tauri/target/debug/audie
 - **Developer ID Application**：专门给「**不走 App Store、直接分发**」的 app 用（GitHub Release 正是这种）。在 [developer.apple.com](https://developer.apple.com) → Certificates 里创建。需要 **Apple Developer Program 付费会员（$99/年）**——你已经有 Team ID（`CL54DSKC64`），大概率已经是会员，直接建证书就行。
 - **公证**：Apple 自动扫描你的 app 有没有恶意代码，通过后给一张票据。`staple` 是把票据钉进 app，这样用户**离线**也能验证。**不公证 = 普通用户根本打不开**，这是 macOS 的硬门槛。
 
+### 省钱版：不加入 Apple 开发者计划（$99 不想付）
+
+不付费就没有 Developer ID、没法公证。后果：别人从 GitHub 下载你的 app，macOS 给它打上 `com.apple.quarantine`（隔离）标记，Gatekeeper 直接拦——提示「**已损坏，无法打开**」或「**无法验证开发者**」。
+
+**app 本身没坏，是被那个隔离标记挡了。让用户自己去掉标记就能开。** 两条路，写进你的 README / Release 说明告诉用户：
+
+**A. 右键打开**（最简单，对「无法验证开发者」有效）
+访达里**右键** app → 打开 → 弹窗里再点「打开」。macOS 记住后，以后双击就行。
+
+**B. `xattr` 去隔离标记**（对「已损坏、右键也打不开」有效）
+让用户在终端跑（app 装哪就写哪个路径）：
+```bash
+xattr -cr /Applications/Audie.app
+# 或只删隔离这一个属性：
+xattr -d com.apple.quarantine /Applications/Audie.app
+```
+- `-cr` = clear recursive，把所有扩展属性递归清掉（含隔离标记）。跑完正常双击打开。
+- 原理：从网上下载的文件都带 `com.apple.quarantine`，Gatekeeper 见它+没公证就拦；删掉这个属性 = 告诉系统「这是我主动信任的」。
+
+> ⚠️ 这是 **workaround，不是正经发版**。让普通用户跑终端命令很劝退、也显得不正规，只适合早期开源 / 技术向用户。真要面向大众，还是得走 Developer ID + 公证。
+> ❌ 别让用户 `sudo spctl --master-disable`（整个关掉 Gatekeeper）——太粗暴、降低他全机安全。只去单个 app 的隔离标记就够。
+> 💡 `tauri build` 默认会给产物 ad-hoc 签名（Apple Silicon 上不签根本跑不了），所以「已损坏」基本都是隔离标记的事，`xattr -cr` 一下就好。
+
 ### Tauri 里怎么配
 `tauri build`（打包 .app/.dmg）读 `tauri.conf.json` 的 `bundle.macOS`：
 
@@ -160,6 +183,7 @@ APPLE_TEAM_ID="CL54DSKC64"
 | ad-hoc 签名 | 临时章，每次编译都变，等于没固定身份 |
 | TCC | macOS 管「麦克风/辅助功能/屏幕录制」这些隐私授权的系统 |
 | Gatekeeper | 用户打开 app 时的「这 app 可信吗」门卫 |
+| 隔离标记 / quarantine | 从网上下载的文件被打的标，Gatekeeper 见它+没公证就拦；`xattr -cr <app>` 清掉就能开 |
 | Notarization 公证 | 把 app 交 Apple 扫毒、拿通行证，过了门卫才放行 |
 | Hardened Runtime | 一套运行时安全限制，公证的前提 |
 | Apple Development 证书 | 只给**自己机器**开发用（我们 dev 在用的） |
