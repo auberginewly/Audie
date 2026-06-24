@@ -79,6 +79,12 @@ struct HotkeyContext<'a> {
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_BOTTOM_MARGIN_PX: f64 = 4.0;
+// Last bottom-center origin (x, y) the overlay panel was placed at. The follow
+// loop compares the cursor-screen *target* to this — not the panel's live frame,
+// which macOS animates during Space switches — so it only moves on a real screen
+// change and never fights the swipe animation.
+#[cfg(target_os = "macos")]
+static OVERLAY_LAST_TARGET: parking_lot::Mutex<Option<(f64, f64)>> = parking_lot::Mutex::new(None);
 
 /// Hide a window's green zoom traffic light. The main window is fixed-size, so
 /// the zoom button can never do anything; hiding it reads cleaner than a grayed
@@ -788,11 +794,15 @@ fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNS
         let frame: NSRect = msg_send![panel, frame];
         let x = vf.origin.x + (vf.size.width - frame.size.width) / 2.0;
         let y = vf.origin.y + OVERLAY_BOTTOM_MARGIN_PX;
-        // Only move when the target actually changed (cursor crossed to another
-        // display). The follow thread polls at 150ms; skipping redundant
-        // setFrameOrigin keeps the panel from re-rendering — and flickering —
-        // during Space / Mission Control transitions where it shouldn't move.
-        if (frame.origin.x - x).abs() > 1.0 || (frame.origin.y - y).abs() > 1.0 {
+        // Move only when the *target* (cursor's screen) changed — never react to
+        // the panel's live frame, which macOS animates mid-swipe. Comparing the
+        // target keeps the follow loop from snapping the panel back during the
+        // Space-switch animation (the flicker the user saw).
+        let mut last = OVERLAY_LAST_TARGET.lock();
+        let changed = last.is_none_or(|(lx, ly)| (lx - x).abs() > 1.0 || (ly - y).abs() > 1.0);
+        if changed {
+            *last = Some((x, y));
+            drop(last);
             let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
         }
     }
