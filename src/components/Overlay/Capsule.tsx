@@ -177,7 +177,11 @@ export function Capsule() {
     <div
       role="status"
       className={[
-        "inline-flex h-12 min-w-[200px] items-center justify-center gap-2.5 px-2",
+        "inline-flex h-12 min-w-[200px] items-center gap-2.5 px-2",
+        // Recording pins ✕/✓ to the ends (justify-between) so each round button
+        // is concentric with the pill's rounded end-arc (8px on all sides);
+        // other states center their content.
+        view === "recording" ? "justify-between" : "justify-center",
         // No backdrop-blur: on the transparent macOS overlay window it renders as
         // an opaque white box instead of frosting the desktop. surface-capsule is
         // ~95% opaque dark, so the pill reads solid without it.
