@@ -734,6 +734,52 @@ fn convert_overlay_to_panel(app: &tauri::App) {
     );
 }
 
+/// Move the overlay panel to the bottom-center of the screen the cursor is on,
+/// so on a multi-display setup the capsule flies to the active screen. Done
+/// natively (NSEvent.mouseLocation + NSScreen, all in points / one coordinate
+/// space) to dodge winit's multi-scale physical-pixel pitfalls. Main thread only.
+#[cfg(target_os = "macos")]
+// `deprecated`: cocoa types. `unexpected_cfgs`: the old `objc` crate's msg_send!
+// expands a `cargo-clippy` cfg that newer rustc flags.
+#[allow(deprecated, unexpected_cfgs)]
+fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) {
+    use tauri_nspanel::cocoa::base::{id, nil};
+    use tauri_nspanel::cocoa::foundation::{NSPoint, NSRect};
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let screens: id = msg_send![class!(NSScreen), screens];
+        if screens == nil {
+            return;
+        }
+        let count: usize = msg_send![screens, count];
+        // Default to the main screen; override with the one under the cursor.
+        let mut target: id = msg_send![class!(NSScreen), mainScreen];
+        for i in 0..count {
+            let screen: id = msg_send![screens, objectAtIndex: i];
+            let f: NSRect = msg_send![screen, frame];
+            if mouse.x >= f.origin.x
+                && mouse.x <= f.origin.x + f.size.width
+                && mouse.y >= f.origin.y
+                && mouse.y <= f.origin.y + f.size.height
+            {
+                target = screen;
+                break;
+            }
+        }
+        if target == nil {
+            return;
+        }
+        // visibleFrame excludes the Dock/menu bar, so "贴底" sits above the Dock.
+        let vf: NSRect = msg_send![target, visibleFrame];
+        let frame: NSRect = msg_send![panel, frame];
+        let x = vf.origin.x + (vf.size.width - frame.size.width) / 2.0;
+        let y = vf.origin.y + OVERLAY_BOTTOM_MARGIN_PX;
+        let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
+    }
+}
+
 /// Place the capsule at the bottom-center of whichever monitor the cursor is on,
 /// so on a multi-display setup it follows the user to the active screen. Called
 /// at setup and again on every show. Interactivity is handled by the NSPanel
@@ -785,18 +831,16 @@ fn position_overlay(app: &AppHandle) -> AppResult<()> {
 // while show/hide are invoked from the hotkey + pipeline worker threads.
 #[cfg(target_os = "macos")]
 fn show_overlay(app: &AppHandle) -> AppResult<()> {
-    // Re-place on the cursor's monitor first, so the capsule follows the user
-    // across displays before it appears.
-    if let Err(err) = position_overlay(app) {
-        log::warn!("reposition overlay before show: {err:?}");
-    }
     let handle = app.clone();
     app.run_on_main_thread(move || {
         use tauri_nspanel::ManagerExt;
         match handle.get_webview_panel(OVERLAY_WINDOW_LABEL) {
-            // order_front_regardless shows it WITHOUT making it key, so the
-            // user's app stays frontmost for injection.
-            Ok(panel) => panel.order_front_regardless(),
+            Ok(panel) => {
+                // Fly to the screen the cursor is on, then show WITHOUT making it
+                // key (so the user's app stays frontmost for injection).
+                reposition_overlay_to_cursor_screen(&panel);
+                panel.order_front_regardless();
+            }
             Err(err) => log::error!("show_overlay: panel not found: {err:?}"),
         }
     })
