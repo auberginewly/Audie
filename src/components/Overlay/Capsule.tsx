@@ -5,11 +5,50 @@
 // (✕/✓/undo/retry) land in fe.8b/8c when the overlay becomes clickable.
 
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import { useAudioLevels, type LevelRing } from "../../hooks/useAudioLevels";
 import { useRecordingStore } from "../../store/recording";
 import type { AppState } from "../../types/events";
-import { Icon } from "../ui";
+import { Icon, type IconName } from "../ui";
+
+// Overlay → Rust. The overlay window is non-focusable, so these clicks don't
+// steal focus from the user's app (injection still targets it). Best-effort.
+function call(cmd: string) {
+  void invoke(cmd).catch((err) => console.error(`${cmd} failed:`, err));
+}
+
+// Small round control inside the capsule — color block, no outline.
+function CapsuleButton({
+  name,
+  label,
+  tone,
+  onClick,
+}: {
+  name: IconName;
+  label: string;
+  tone: "danger" | "accent";
+  onClick: () => void;
+}) {
+  const accent = tone === "accent";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={[
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 cursor-pointer",
+        "transition-colors duration-150 ease-[var(--ease-out)]",
+        accent
+          ? "bg-accent-fill text-text-on-accent hover:bg-accent-fill-hover"
+          : "bg-gray-alpha-200 text-text-secondary hover:bg-danger-bg hover:text-danger-text",
+      ].join(" ")}
+    >
+      <Icon name={name} size={16} strokeWidth={accent ? 2.25 : 2} />
+    </button>
+  );
+}
 
 type CapsuleView =
   | "recording"
@@ -138,7 +177,7 @@ export function Capsule() {
     <div
       role="status"
       className={[
-        "inline-flex h-12 min-w-[200px] items-center justify-center gap-2.5 px-4",
+        "inline-flex h-12 min-w-[200px] items-center justify-center gap-2.5 px-2",
         // No backdrop-blur: on the transparent macOS overlay window it renders as
         // an opaque white box instead of frosting the desktop. surface-capsule is
         // ~95% opaque dark, so the pill reads solid without it.
@@ -148,10 +187,16 @@ export function Capsule() {
       ].join(" ")}
     >
       {view === "recording" ? (
-        <div className="flex items-center gap-2.5 px-0.5">
-          <Waveform levels={levels} />
-          <span className="min-w-[34px] text-center font-mono text-xs text-text-tertiary">{formatElapsed(elapsed)}</span>
-        </div>
+        <>
+          <CapsuleButton name="x" label="取消" tone="danger" onClick={() => call("cancel_recording")} />
+          <div className="flex items-center gap-2.5 px-0.5">
+            <Waveform levels={levels} />
+            <span className="min-w-[34px] text-center font-mono text-xs text-text-tertiary">
+              {formatElapsed(elapsed)}
+            </span>
+          </div>
+          <CapsuleButton name="check" label="完成并润色" tone="accent" onClick={() => call("confirm_recording")} />
+        </>
       ) : null}
 
       {view === "transcribing" || view === "polishing" ? (

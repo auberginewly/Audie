@@ -148,6 +148,9 @@ pub fn run() {
             #[cfg(debug_assertions)]
             commands::test_doubao_streaming,
             provider_test::test_provider,
+            // Overlay capsule controls (fe.8b).
+            confirm_recording,
+            cancel_recording,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -323,6 +326,55 @@ fn finish_recording(ctx: &HotkeyContext<'_>) {
             enter_error(ctx.app.clone(), ctx.state.clone(), err);
         }
     }
+}
+
+/// Build a HotkeyContext from app state — the same wiring `build_hotkey_callback`
+/// uses — so the overlay's cancel/confirm commands drive the exact same pipeline.
+fn with_hotkey_ctx<R>(app: &AppHandle, f: impl FnOnce(&HotkeyContext<'_>) -> R) -> R {
+    let state = app.state::<Arc<StateMachine>>();
+    let audio = app.state::<Arc<AudioManager>>();
+    let transcription = app.state::<Arc<TranscriptionManager>>();
+    let enhance = app.state::<Arc<EnhanceManager>>();
+    let inject = app.state::<Arc<InjectManager>>();
+    let streaming = app.state::<ActiveStreamingSession>();
+    let ctx = HotkeyContext {
+        app,
+        state: state.inner(),
+        audio: audio.inner(),
+        transcription: transcription.inner(),
+        enhance: enhance.inner(),
+        inject: inject.inner(),
+        streaming: streaming.inner(),
+    };
+    f(&ctx)
+}
+
+/// ✓ on the capsule — finish the current take (same as a second hotkey press).
+#[tauri::command]
+fn confirm_recording(app: AppHandle) {
+    with_hotkey_ctx(&app, |ctx| {
+        if ctx.state.current() == AppState::Recording {
+            finish_recording(ctx);
+        }
+    });
+}
+
+/// ✕ on the capsule — discard the current recording and return to Idle. fe.8b
+/// only handles Recording; cancelling mid-pipeline (with undo) lands in fe.8c.
+#[tauri::command]
+fn cancel_recording(app: AppHandle) {
+    with_hotkey_ctx(&app, |ctx| {
+        if ctx.state.current() != AppState::Recording {
+            return;
+        }
+        clear_streaming_session(ctx.streaming);
+        if let Err(err) = ctx.audio.stop_capture() {
+            log::warn!("cancel stop_capture: {err:?}");
+        }
+        ctx.state
+            .transition(ctx.app, AppState::Cancel, Some("overlay-cancel"));
+        settle_to_idle(ctx.app, ctx.state, "cancelled");
+    });
 }
 
 /// Run the (blocking) transcription off the hotkey thread, then drive the
@@ -660,10 +712,15 @@ fn position_overlay(app: &AppHandle) -> AppResult<()> {
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|err| AppError::Internal(format!("set_position: {err}")))?;
 
-    // Click-through — the capsule must not steal events from the underlying app.
+    // Interactive overlay (fe.8b): receive clicks on the capsule buttons (✕/✓)…
     overlay
-        .set_ignore_cursor_events(true)
+        .set_ignore_cursor_events(false)
         .map_err(|err| AppError::Internal(format!("set_ignore_cursor_events: {err}")))?;
+    // …but never take key focus, so the clipboard-paste injection still targets
+    // the user's frontmost app rather than the overlay window.
+    overlay
+        .set_focusable(false)
+        .map_err(|err| AppError::Internal(format!("set_focusable: {err}")))?;
 
     Ok(())
 }

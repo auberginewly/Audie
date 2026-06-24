@@ -39,7 +39,7 @@
         "resizable": false,
         "focus": false,
         "shadow": false,
-        "acceptFirstMouse": false
+        "acceptFirstMouse": true
       }
     ],
     "security": {
