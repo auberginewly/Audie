@@ -719,6 +719,12 @@ fn convert_overlay_to_panel(app: &tauri::App) {
     };
     // NSWindowStyleMaskNonactivatingPanel = 1 << 7.
     panel.set_style_mask(1 << 7);
+    // RawNSPanel forces canBecomeKeyWindow = YES, so a button click would grab
+    // keyboard focus and the synthesized Cmd+V would paste into the panel, not
+    // the user's field. becomesKeyOnlyIfNeeded keeps key focus on their app.
+    panel.set_becomes_key_only_if_needed(true);
+    // Receive mouse-moved events so the ✕/✓ buttons get :hover states.
+    panel.set_accepts_mouse_moved_events(true);
     // Above app windows; visible across spaces and over fullscreen apps.
     panel.set_level(25); // NSStatusWindowLevel
     panel.set_collection_behaviour(
@@ -728,33 +734,49 @@ fn convert_overlay_to_panel(app: &tauri::App) {
     );
 }
 
+/// Place the capsule at the bottom-center of whichever monitor the cursor is on,
+/// so on a multi-display setup it follows the user to the active screen. Called
+/// at setup and again on every show. Interactivity is handled by the NSPanel
+/// conversion in `setup`, not here.
 fn position_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
         .ok_or_else(|| AppError::Internal("overlay window not found".into()))?;
 
-    let monitor = overlay
-        .primary_monitor()
-        .map_err(|err| AppError::Internal(format!("primary_monitor: {err}")))?
-        .ok_or_else(|| AppError::Internal("no primary monitor".into()))?;
+    let monitors = overlay
+        .available_monitors()
+        .map_err(|err| AppError::Internal(format!("available_monitors: {err}")))?;
+    let cursor = app.cursor_position().ok();
+    let monitor = cursor
+        .and_then(|c| {
+            monitors.iter().find(|m| {
+                let p = m.position();
+                let s = m.size();
+                c.x >= p.x as f64
+                    && c.x < (p.x + s.width as i32) as f64
+                    && c.y >= p.y as f64
+                    && c.y < (p.y + s.height as i32) as f64
+            })
+        })
+        .or_else(|| monitors.first())
+        .ok_or_else(|| AppError::Internal("no monitor available".into()))?;
 
-    let monitor_size = monitor.size();
+    let m_pos = monitor.position();
+    let m_size = monitor.size();
     let scale = monitor.scale_factor();
-
     let win_size = overlay
         .outer_size()
         .map_err(|err| AppError::Internal(format!("outer_size: {err}")))?;
 
+    // Offset by the monitor origin so the position is correct in the global
+    // multi-display coordinate space.
     let bottom_margin_px = (OVERLAY_BOTTOM_MARGIN_PX * scale).round() as i32;
-    let x = (monitor_size.width as i32 - win_size.width as i32) / 2;
-    let y = monitor_size.height as i32 - win_size.height as i32 - bottom_margin_px;
+    let x = m_pos.x + (m_size.width as i32 - win_size.width as i32) / 2;
+    let y = m_pos.y + m_size.height as i32 - win_size.height as i32 - bottom_margin_px;
 
     overlay
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|err| AppError::Internal(format!("set_position: {err}")))?;
-
-    // Interactivity (clicks on ✕/✓ without activating Audie) is handled by the
-    // non-activating NSPanel conversion in `setup`, not here.
     Ok(())
 }
 
@@ -763,6 +785,11 @@ fn position_overlay(app: &AppHandle) -> AppResult<()> {
 // while show/hide are invoked from the hotkey + pipeline worker threads.
 #[cfg(target_os = "macos")]
 fn show_overlay(app: &AppHandle) -> AppResult<()> {
+    // Re-place on the cursor's monitor first, so the capsule follows the user
+    // across displays before it appears.
+    if let Err(err) = position_overlay(app) {
+        log::warn!("reposition overlay before show: {err:?}");
+    }
     let handle = app.clone();
     app.run_on_main_thread(move || {
         use tauri_nspanel::ManagerExt;
