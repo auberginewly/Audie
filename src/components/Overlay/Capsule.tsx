@@ -30,7 +30,9 @@ function deriveView(state: AppState, enhancePhase: string | undefined): CapsuleV
     case "RECORDING":
       return "recording";
     case "PROCESSING":
-      return enhancePhase === "started" ? "polishing" : "transcribing";
+      // Treat polish "completed" as still polishing so the capsule jumps
+      // straight to 已插入 (SUCCESS) — no transient "润色完成" step.
+      return enhancePhase === "started" || enhancePhase === "completed" ? "polishing" : "transcribing";
     case "SUCCESS":
       return enhancePhase === "failed" ? "polish-unavailable" : "success";
     case "ERROR":
@@ -145,7 +147,7 @@ export function Capsule() {
               <Icon name="loader" size={15} strokeWidth={2} />
             </span>
           )}
-          <span className={LABEL}>{enhanceProgress?.message ?? (view === "polishing" ? "润色中…" : "转写中…")}</span>
+          <span className={LABEL}>{view === "polishing" ? "润色中…" : "转写中…"}</span>
         </div>
       ) : null}
 
