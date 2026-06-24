@@ -25,13 +25,14 @@ type CapsuleView =
 // Resting/peak bar heights in px — center tallest, mirrored to the edges.
 const BASE_H = [11, 20, 28, 34, 28, 20, 11];
 const CENTER = 3; // (7 - 1) / 2
-// Rust sends raw audio peaks (~0.05–0.4 for normal speech), so map → bar scale
-// with a boost or the bars barely move:
-//   GAIN  — overall multiplier before clamp (↑ = louder swing)
-//   GAMMA — curve <1 lifts quiet speech (↓ = punchier)
+// Rust sends the raw audio peak (max|sample| over ~33ms, ~0.05–0.4 for normal
+// speech). That value is honest but small, so map → bar scale with a boost or
+// the bars barely move. THIS is the sensitivity knob:
+//   GAIN  — sensitivity: how tall bars get per loudness (↑ = more reactive)
+//   GAMMA — curve <1 lifts quiet speech so soft sounds register (↓ = punchier)
 //   FLOOR — resting scaleY when silent
-const LEVEL_GAIN = 1.8;
-const LEVEL_GAMMA = 0.55;
+const LEVEL_GAIN = 2.6;
+const LEVEL_GAMMA = 0.5;
 const LEVEL_FLOOR = 0.1;
 
 function barScale(level: number): number {
