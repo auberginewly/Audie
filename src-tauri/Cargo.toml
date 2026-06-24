@@ -70,5 +70,8 @@ tauri-plugin-macos-permissions = "2.3.0"
 # Hide the dead green zoom traffic light on the fixed-size main window via a
 # direct NSWindow msg_send. objc2 0.6 is already in the tree (Tauri depends on it).
 objc2 = "0.6"
+# Convert the recording overlay into a non-activating NSPanel so clicking the
+# capsule buttons (✕/✓) doesn't activate Audie / steal focus from the user's app.
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 security-framework = "3.7.0"
 security-framework-sys = "2.17.0"

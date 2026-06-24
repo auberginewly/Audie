@@ -160,6 +160,11 @@ pub fn run() {
                 return Err(Box::new(std::io::Error::other(format!("{err:?}"))));
             }
 
+            // Convert the overlay into a non-activating NSPanel so clicking the
+            // capsule buttons (✕/✓) never activates Audie / steals focus (fe.8b-2).
+            #[cfg(target_os = "macos")]
+            convert_overlay_to_panel(app);
+
             // The main window is fixed-size (resizable/maximizable off), so the
             // green zoom traffic light is dead — hide it instead of showing it
             // grayed out (macOS only).
@@ -687,6 +692,42 @@ fn duration_ms(audio: &AudioData) -> u64 {
     }
 }
 
+/// Swizzle the overlay `NSWindow` into a non-activating `NSPanel`. Clicking the
+/// capsule then never activates Audie, so clipboard injection keeps targeting
+/// the user's frontmost app. `cocoa` is deprecated (→ objc2-app-kit) but the
+/// crate's `set_collection_behaviour` still takes its type; the API works.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn convert_overlay_to_panel(app: &tauri::App) {
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::{WebviewPanelManager, WebviewWindowExt};
+
+    app.manage(WebviewPanelManager::default());
+    let overlay = match app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        Some(overlay) => overlay,
+        None => {
+            log::error!("overlay window missing for panel conversion");
+            return;
+        }
+    };
+    let panel = match overlay.to_panel() {
+        Ok(panel) => panel,
+        Err(err) => {
+            log::error!("overlay to_panel failed: {err:?}");
+            return;
+        }
+    };
+    // NSWindowStyleMaskNonactivatingPanel = 1 << 7.
+    panel.set_style_mask(1 << 7);
+    // Above app windows; visible across spaces and over fullscreen apps.
+    panel.set_level(25); // NSStatusWindowLevel
+    panel.set_collection_behaviour(
+        NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
+    );
+}
+
 fn position_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
@@ -712,19 +753,43 @@ fn position_overlay(app: &AppHandle) -> AppResult<()> {
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|err| AppError::Internal(format!("set_position: {err}")))?;
 
-    // Interactive overlay (fe.8b): receive clicks on the capsule buttons (✕/✓)…
-    overlay
-        .set_ignore_cursor_events(false)
-        .map_err(|err| AppError::Internal(format!("set_ignore_cursor_events: {err}")))?;
-    // …but never take key focus, so the clipboard-paste injection still targets
-    // the user's frontmost app rather than the overlay window.
-    overlay
-        .set_focusable(false)
-        .map_err(|err| AppError::Internal(format!("set_focusable: {err}")))?;
-
+    // Interactivity (clicks on ✕/✓ without activating Audie) is handled by the
+    // non-activating NSPanel conversion in `setup`, not here.
     Ok(())
 }
 
+// The overlay is an NSPanel on macOS (see setup). Show/hide go through the
+// panel's order-front/order-out — AppKit calls that must run on the main thread,
+// while show/hide are invoked from the hotkey + pipeline worker threads.
+#[cfg(target_os = "macos")]
+fn show_overlay(app: &AppHandle) -> AppResult<()> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        use tauri_nspanel::ManagerExt;
+        match handle.get_webview_panel(OVERLAY_WINDOW_LABEL) {
+            // order_front_regardless shows it WITHOUT making it key, so the
+            // user's app stays frontmost for injection.
+            Ok(panel) => panel.order_front_regardless(),
+            Err(err) => log::error!("show_overlay: panel not found: {err:?}"),
+        }
+    })
+    .map_err(|err| AppError::Internal(format!("run_on_main_thread: {err}")))
+}
+
+#[cfg(target_os = "macos")]
+fn hide_overlay(app: &AppHandle) -> AppResult<()> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        use tauri_nspanel::ManagerExt;
+        match handle.get_webview_panel(OVERLAY_WINDOW_LABEL) {
+            Ok(panel) => panel.order_out(None),
+            Err(err) => log::error!("hide_overlay: panel not found: {err:?}"),
+        }
+    })
+    .map_err(|err| AppError::Internal(format!("run_on_main_thread: {err}")))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn show_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
@@ -735,6 +800,7 @@ fn show_overlay(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn hide_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
