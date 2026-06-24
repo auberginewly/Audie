@@ -15,6 +15,7 @@ mod platform;
 mod provider_test;
 mod state;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
@@ -34,9 +35,30 @@ use crate::platform::{current_platform, HotkeyCallback, HotkeyEvent, HotkeyRegis
 use crate::state::{AppState, StateMachine};
 
 const SUCCESS_HOLD_MS: u64 = 150;
-const ERROR_HOLD_MS: u64 = 2500;
+// Terminal toasts (error / cancelled / polish-unavailable) carry actions
+// (重试 / 撤销操作 / 去设置), so they linger long enough to read and click before
+// the overlay auto-settles to Idle. A user action transitions the state first,
+// which turns the pending settle into a no-op (see `settle_to_idle`).
+const TERMINAL_HOLD_MS: u64 = 6000;
 
 type ActiveStreamingSession = Arc<parking_lot::Mutex<Option<TranscriptStream>>>;
+
+/// The last utterance, kept so a terminal toast can resume it: 撤销操作 (after a
+/// cancel), 重试 (after an error), or 插入原文. Stored the moment recording
+/// finishes; `transcript` fills in once ASR returns (None if it never got there).
+#[derive(Clone)]
+struct LastTake {
+    audio: AudioData,
+    transcript: Option<String>,
+    duration_ms: u64,
+}
+
+type LastTakeSlot = Arc<parking_lot::Mutex<Option<LastTake>>>;
+
+/// Monotonic id of the take that may still inject. A worker captures its id when
+/// it spawns and only injects while the shared counter still equals it; tapping ✕
+/// mid-Processing bumps the counter, superseding the worker without racing it.
+type TakeGen = Arc<AtomicU64>;
 
 #[derive(Serialize, Clone)]
 struct FinalTranscript {
@@ -75,10 +97,18 @@ struct HotkeyContext<'a> {
     enhance: &'a Arc<EnhanceManager>,
     inject: &'a Arc<InjectManager>,
     streaming: &'a ActiveStreamingSession,
+    last_take: &'a LastTakeSlot,
+    take_gen: &'a TakeGen,
 }
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
-const OVERLAY_BOTTOM_MARGIN_PX: f64 = 16.0;
+const OVERLAY_BOTTOM_MARGIN_PX: f64 = 4.0;
+// Last bottom-center origin (x, y) the overlay panel was placed at. The follow
+// loop compares the cursor-screen *target* to this — not the panel's live frame,
+// which macOS animates during Space switches — so it only moves on a real screen
+// change and never fights the swipe animation.
+#[cfg(target_os = "macos")]
+static OVERLAY_LAST_TARGET: parking_lot::Mutex<Option<(f64, f64)>> = parking_lot::Mutex::new(None);
 
 /// Hide a window's green zoom traffic light. The main window is fixed-size, so
 /// the zoom button can never do anything; hiding it reads cleaner than a grayed
@@ -148,6 +178,13 @@ pub fn run() {
             #[cfg(debug_assertions)]
             commands::test_doubao_streaming,
             provider_test::test_provider,
+            // Overlay capsule controls (fe.8b / fe.8c).
+            confirm_recording,
+            cancel_recording,
+            undo_last,
+            retry_last,
+            insert_raw_last,
+            open_main_window,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -155,6 +192,15 @@ pub fn run() {
             if let Err(err) = position_overlay(&app_handle) {
                 log::error!("position overlay failed: {err:?}");
                 return Err(Box::new(std::io::Error::other(format!("{err:?}"))));
+            }
+
+            // Convert the overlay into a non-activating NSPanel so clicking the
+            // capsule buttons (✕/✓) never activates Audie / steals focus (fe.8b-2),
+            // then start the thread that keeps it on the cursor's display.
+            #[cfg(target_os = "macos")]
+            {
+                convert_overlay_to_panel(app);
+                spawn_overlay_follow_thread(app.handle().clone());
             }
 
             // The main window is fixed-size (resizable/maximizable off), so the
@@ -188,6 +234,10 @@ pub fn run() {
             app.manage(registry_for_setup.clone());
             app.manage(platform.clone());
             app.manage(Arc::new(parking_lot::Mutex::new(None::<TranscriptStream>)));
+            // fe.8c: last-take store (undo / retry / insert-raw) + take generation
+            // counter (mid-Processing cancel supersedes the in-flight worker).
+            app.manage(Arc::new(parking_lot::Mutex::new(None::<LastTake>)));
+            app.manage(Arc::new(AtomicU64::new(0)));
 
             let hotkey = commands::load_hotkey(&app_handle);
             if let Err(err) =
@@ -217,6 +267,8 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
         let enhance = app.state::<Arc<EnhanceManager>>();
         let inject = app.state::<Arc<InjectManager>>();
         let streaming = app.state::<ActiveStreamingSession>();
+        let last_take = app.state::<LastTakeSlot>();
+        let take_gen = app.state::<TakeGen>();
         let ctx = HotkeyContext {
             app: &app,
             state: state.inner(),
@@ -225,112 +277,333 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
             enhance: enhance.inner(),
             inject: inject.inner(),
             streaming: streaming.inner(),
+            last_take: last_take.inner(),
+            take_gen: take_gen.inner(),
         };
         handle_hotkey(&ctx, event);
     })
 }
 
 fn handle_hotkey(ctx: &HotkeyContext<'_>, event: HotkeyEvent) {
-    match event {
-        HotkeyEvent::Pressed => {
-            // Press enters the front half of the pipeline: permission gate →
-            // open cpal stream → Recording state → overlay. No ASR happens until
-            // Release, because P1 still uses batch transcription.
-            // Gate on mic permission before recording: a denial otherwise
-            // captures silence and the user only sees a Whisper hallucination.
-            // Flash red instead (§3.7 Permission).
-            let platform = ctx.app.state::<Arc<dyn Platform>>();
-            if !platform.ensure_microphone_permission() {
-                let _ = show_overlay(ctx.app);
-                enter_error(
-                    ctx.app.clone(),
-                    ctx.state.clone(),
-                    AppError::Permission("请授予麦克风权限".into()),
-                );
-                return;
-            }
-            // Start capture BEFORE the Idle→Recording transition: a cpal failure
-            // (no input device, build_input_stream blew up, etc.) needs to surface
-            // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
-            // transition first would strand us in Recording with a dead stream.
-            let streaming_start =
-                start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
-            let capture_result = match streaming_start {
-                Some(chunk_tx) => ctx.audio.start_capture_streaming(ctx.app.clone(), chunk_tx),
-                None => ctx.audio.start_capture(ctx.app.clone()),
-            };
-            if let Err(err) = capture_result {
-                log::error!("start capture: {err:?}");
-                clear_streaming_session(ctx.streaming);
-                let _ = show_overlay(ctx.app);
-                enter_error(ctx.app.clone(), ctx.state.clone(), err);
-                return;
+    // Toggle control model: each hotkey *press* starts a take (from Idle) or
+    // finishes it (from Recording). Key-up is ignored — holding no longer
+    // auto-stops; the user presses again to finish. A press mid-pipeline
+    // (Processing/Success/Error/Cancel) is a no-op.
+    if !matches!(event, HotkeyEvent::Pressed) {
+        return;
+    }
+    match ctx.state.current() {
+        AppState::Idle => start_recording(ctx),
+        AppState::Recording => finish_recording(ctx),
+        _ => {}
+    }
+}
+
+/// Enter the front half of the pipeline: permission gate → open cpal stream →
+/// Recording state → overlay. No ASR happens until finish, because P1 uses
+/// batch transcription.
+fn start_recording(ctx: &HotkeyContext<'_>) {
+    // Gate on mic permission before recording: a denial otherwise captures
+    // silence and the user only sees a Whisper hallucination. Flash red
+    // instead (§3.7 Permission).
+    let platform = ctx.app.state::<Arc<dyn Platform>>();
+    // Snapshot the frontmost app NOW — before the permission gate (whose first-run
+    // TCC prompt changes frontmost) and before the overlay shows. The ✓ / 撤销 /
+    // 重试 button paths later make Audie frontmost, so inject needs this
+    // pre-recording target to restore focus and paste at the user's caret.
+    platform.capture_focus_target();
+
+    if !platform.ensure_microphone_permission() {
+        let _ = show_overlay(ctx.app);
+        enter_error(
+            ctx.app.clone(),
+            ctx.state.clone(),
+            AppError::Permission("请授予麦克风权限".into()),
+        );
+        return;
+    }
+    // Start capture BEFORE the Idle→Recording transition: a cpal failure
+    // (no input device, build_input_stream blew up, etc.) needs to surface
+    // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
+    // transition first would strand us in Recording with a dead stream.
+    let streaming_start = start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
+    let capture_result = match streaming_start {
+        Some(chunk_tx) => ctx.audio.start_capture_streaming(ctx.app.clone(), chunk_tx),
+        None => ctx.audio.start_capture(ctx.app.clone()),
+    };
+    if let Err(err) = capture_result {
+        log::error!("start capture: {err:?}");
+        clear_streaming_session(ctx.streaming);
+        let _ = show_overlay(ctx.app);
+        enter_error(ctx.app.clone(), ctx.state.clone(), err);
+        return;
+    }
+    if ctx
+        .state
+        .transition(ctx.app, AppState::Recording, Some("toggle-start"))
+    {
+        if let Err(err) = show_overlay(ctx.app) {
+            log::error!("show overlay: {err:?}");
+        }
+    } else {
+        // Transition rejected (shouldn't happen — we just confirmed Idle).
+        // Tear down the capture we just opened.
+        clear_streaming_session(ctx.streaming);
+        if let Err(err) = ctx.audio.stop_capture() {
+            log::warn!("rollback stop_capture: {err:?}");
+        }
+    }
+}
+
+/// Close the audio session and hand one complete utterance to the pipeline
+/// tail. The overlay stays visible through Processing/Success/Error so the
+/// user sees the result; it's hidden only when we settle back to Idle.
+fn finish_recording(ctx: &HotkeyContext<'_>) {
+    if !ctx
+        .state
+        .transition(ctx.app, AppState::Processing, Some("toggle-finish"))
+    {
+        return;
+    }
+    let streaming_result = take_streaming_session(ctx.streaming);
+    // Claim a fresh take id: this worker injects only while the counter still
+    // equals it, so a mid-Processing ✕ (which bumps the counter) supersedes it.
+    let my_gen = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    match ctx.audio.stop_capture() {
+        Ok(recorded) => {
+            spawn_transcription(
+                ctx.app.clone(),
+                ctx.state.clone(),
+                ctx.transcription.clone(),
+                ctx.enhance.clone(),
+                ctx.inject.clone(),
+                ctx.last_take.clone(),
+                ctx.take_gen.clone(),
+                my_gen,
+                recorded,
+                streaming_result,
+            );
+        }
+        Err(err) => {
+            log::error!("stop capture: {err:?}");
+            enter_error(ctx.app.clone(), ctx.state.clone(), err);
+        }
+    }
+}
+
+/// Build a HotkeyContext from app state — the same wiring `build_hotkey_callback`
+/// uses — so the overlay's cancel/confirm commands drive the exact same pipeline.
+fn with_hotkey_ctx<R>(app: &AppHandle, f: impl FnOnce(&HotkeyContext<'_>) -> R) -> R {
+    let state = app.state::<Arc<StateMachine>>();
+    let audio = app.state::<Arc<AudioManager>>();
+    let transcription = app.state::<Arc<TranscriptionManager>>();
+    let enhance = app.state::<Arc<EnhanceManager>>();
+    let inject = app.state::<Arc<InjectManager>>();
+    let streaming = app.state::<ActiveStreamingSession>();
+    let last_take = app.state::<LastTakeSlot>();
+    let take_gen = app.state::<TakeGen>();
+    let ctx = HotkeyContext {
+        app,
+        state: state.inner(),
+        audio: audio.inner(),
+        transcription: transcription.inner(),
+        enhance: enhance.inner(),
+        inject: inject.inner(),
+        streaming: streaming.inner(),
+        last_take: last_take.inner(),
+        take_gen: take_gen.inner(),
+    };
+    f(&ctx)
+}
+
+/// ✓ on the capsule — finish the current take (same as a second hotkey press).
+#[tauri::command]
+fn confirm_recording(app: AppHandle) {
+    with_hotkey_ctx(&app, |ctx| {
+        if ctx.state.current() == AppState::Recording {
+            finish_recording(ctx);
+        }
+    });
+}
+
+/// ✕ on the capsule — cancel into a "已取消" toast that offers 撤销操作. The take
+/// is always kept (lazy: from Recording we just stash the raw audio without
+/// transcribing; mid-Processing the worker already stored it), so undo can
+/// resume it. The toast auto-settles to Idle after `TERMINAL_HOLD_MS`.
+#[tauri::command]
+fn cancel_recording(app: AppHandle) {
+    with_hotkey_ctx(&app, |ctx| match ctx.state.current() {
+        AppState::Recording => {
+            // Lazy cancel: stop capture and keep the raw buffer; undo re-runs batch
+            // ASR on it, so we don't burn a transcription the user may not want.
+            clear_streaming_session(ctx.streaming);
+            match ctx.audio.stop_capture() {
+                Ok(recorded) => {
+                    let duration_ms = duration_ms(&recorded);
+                    *ctx.last_take.lock() = Some(LastTake {
+                        audio: recorded,
+                        transcript: None,
+                        duration_ms,
+                    });
+                }
+                Err(err) => log::warn!("cancel stop_capture: {err:?}"),
             }
             if ctx
                 .state
-                .transition(ctx.app, AppState::Recording, Some("hotkey-down"))
+                .transition(ctx.app, AppState::Cancel, Some("overlay-cancel"))
             {
-                if let Err(err) = show_overlay(ctx.app) {
-                    log::error!("show overlay: {err:?}");
-                }
-            } else {
-                // Transition rejected (shouldn't happen — we just confirmed Idle
-                // implicitly by reaching here). Tear down the capture we just opened.
-                clear_streaming_session(ctx.streaming);
-                if let Err(err) = ctx.audio.stop_capture() {
-                    log::warn!("rollback stop_capture: {err:?}");
-                }
+                spawn_settle_after(ctx.app.clone(), ctx.state.clone(), TERMINAL_HOLD_MS);
             }
         }
-        HotkeyEvent::Released => {
-            // Release closes the audio session and hands one complete utterance
-            // to the pipeline tail. From here on the overlay remains visible so
-            // the user sees Processing/Success/Error instead of a blink.
-            if !ctx
+        AppState::Processing => {
+            // Mid-pipeline: bump the take id so the in-flight worker skips injection
+            // (it already stored the take), then show the cancelled toast.
+            ctx.take_gen.fetch_add(1, Ordering::SeqCst);
+            if ctx
                 .state
-                .transition(ctx.app, AppState::Processing, Some("hotkey-up"))
+                .transition(ctx.app, AppState::Cancel, Some("overlay-cancel-processing"))
             {
+                spawn_settle_after(ctx.app.clone(), ctx.state.clone(), TERMINAL_HOLD_MS);
+            }
+        }
+        _ => {}
+    });
+}
+
+/// Resume the kept take from a terminal toast: 撤销操作 / 重试 run the full pipeline
+/// (transcribe if needed → enhance → inject); `raw_only` (插入原文) injects the
+/// transcript verbatim, skipping enhance. Re-enters via Cancel/Error → Processing.
+fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
+    with_hotkey_ctx(app, |ctx| {
+        let take = match ctx.last_take.lock().clone() {
+            Some(take) => take,
+            None => return,
+        };
+        if !ctx
+            .state
+            .transition(ctx.app, AppState::Processing, Some("resume"))
+        {
+            return;
+        }
+        // Fresh take id so a ✕ during this resume can supersede it too.
+        let my_gen = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        let app = ctx.app.clone();
+        let state = ctx.state.clone();
+        let transcription = ctx.transcription.clone();
+        let enhance = ctx.enhance.clone();
+        let inject = ctx.inject.clone();
+        let take_gen = ctx.take_gen.clone();
+        thread::spawn(move || {
+            let text = match take.transcript {
+                Some(text) => text,
+                None => {
+                    // Re-transcribe with the SAME model the live path picks: doubao
+                    // when configured, else the user's batch asr_provider. Never
+                    // silently swap to a different model (单模型不降级).
+                    let config =
+                        doubao_streaming_config(&app).unwrap_or_else(|| transcription_config(&app));
+                    match transcription.transcribe(&take.audio, &config) {
+                        Ok(text) => text,
+                        Err(err) => {
+                            log::error!("resume transcription failed: {err:?}");
+                            enter_error(app, state, err);
+                            return;
+                        }
+                    }
+                }
+            };
+            if take_gen.load(Ordering::SeqCst) != my_gen {
+                return; // superseded by a ✕ during the resume
+            }
+            // Mirror a normal finish: surface the raw transcript before enhance, so
+            // undo / retry log + emit it the same way the first pass would have.
+            let _ = app.emit(
+                "final-transcript",
+                FinalTranscript {
+                    text: text.clone(),
+                    duration_ms: take.duration_ms,
+                },
+            );
+            let (to_inject, polish_unavailable) = if raw_only {
+                (text.clone(), false)
+            } else {
+                maybe_enhance_text(&app, &enhance, &text)
+            };
+            if let Err(err) = inject.inject(&app, &to_inject) {
+                log::error!("resume inject failed: {err:?}");
+                enter_error(app, state, err);
                 return;
             }
-            // Overlay stays up through Processing/Success/Error so the user can
-            // see the result; it's hidden only when we settle back to Idle.
-            let streaming_result = take_streaming_session(ctx.streaming);
-            match ctx.audio.stop_capture() {
-                Ok(recorded) => {
-                    spawn_transcription(
-                        ctx.app.clone(),
-                        ctx.state.clone(),
-                        ctx.transcription.clone(),
-                        ctx.enhance.clone(),
-                        ctx.inject.clone(),
-                        recorded,
-                        streaming_result,
-                    );
-                }
-                Err(err) => {
-                    log::error!("stop capture: {err:?}");
-                    enter_error(ctx.app.clone(), ctx.state.clone(), err);
-                }
-            }
-        }
+            state.transition(&app, AppState::Success, Some("resumed"));
+            let hold = if polish_unavailable {
+                TERMINAL_HOLD_MS
+            } else {
+                SUCCESS_HOLD_MS
+            };
+            thread::sleep(Duration::from_millis(hold));
+            settle_to_idle(&app, &state, "done");
+        });
+    });
+}
+
+/// 撤销操作 on the cancelled toast — resume the kept take through the full pipeline.
+#[tauri::command]
+fn undo_last(app: AppHandle) {
+    resume_from_last_take(&app, false);
+}
+
+/// 重试 on the error toast — re-run the full pipeline on the kept take.
+#[tauri::command]
+fn retry_last(app: AppHandle) {
+    resume_from_last_take(&app, false);
+}
+
+/// 插入原文 on the error toast — inject the raw transcript, skipping enhance.
+#[tauri::command]
+fn insert_raw_last(app: AppHandle) {
+    resume_from_last_take(&app, true);
+}
+
+/// 去设置 on the polish-unavailable toast — surface the main window and ask it to
+/// open Settings (the overlay is a separate webview, so it signals via an event).
+#[tauri::command]
+fn open_main_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
     }
+    let _ = app.emit("open-settings", ());
 }
 
 /// Run the (blocking) transcription off the hotkey thread, then drive the
 /// P1 pipeline tail: ASR → `final-transcript` event → optional LLM enhance →
 /// inject at the caret → Success → Idle. Any failure is mapped to `error` and
 /// recovers through the same Idle exit. PROJECT_SPEC.md §3.2 / §3.3 / §4.3.
+#[allow(clippy::too_many_arguments)] // pipeline tail wiring; splitting it would
+                                     // just shuffle the same handles around.
 fn spawn_transcription(
     app: AppHandle,
     state: Arc<StateMachine>,
     transcription: Arc<TranscriptionManager>,
     enhance: Arc<EnhanceManager>,
     inject: Arc<InjectManager>,
+    last_take: LastTakeSlot,
+    take_gen: TakeGen,
+    my_gen: u64,
     audio: AudioData,
     streaming_result: Option<TranscriptStream>,
 ) {
     thread::spawn(move || {
         let duration_ms = duration_ms(&audio);
+
+        // Keep the take from the start so a terminal toast can always resume it,
+        // even if ASR fails (重试 re-transcribes) or the user cancels mid-flight.
+        *last_take.lock() = Some(LastTake {
+            audio: audio.clone(),
+            transcript: None,
+            duration_ms,
+        });
 
         // AirPods on A2DP (no HFP switch yet) and a few other broken-mic states
         // produce a buffer of literal zeros. Sending that to Whisper costs an API
@@ -358,14 +631,37 @@ fn spawn_transcription(
             }
         };
 
-        if let Err(err) = finish_pipeline_tail(&app, &enhance, &inject, &text, duration_ms) {
-            log::error!("inject failed: {err:?}");
-            enter_error(app, state, err);
+        // Fill the transcript in so 插入原文 / 重试 (after an inject failure) and
+        // 撤销操作 (after a mid-Processing cancel) resume without re-transcribing.
+        if let Some(take) = last_take.lock().as_mut() {
+            take.transcript = Some(text.clone());
+        }
+
+        // Superseded by a ✕ during Processing — keep the take, skip injection, and
+        // stay in the cancelled toast (which offers 撤销操作).
+        if take_gen.load(Ordering::SeqCst) != my_gen {
             return;
         }
 
+        let polish_unavailable =
+            match finish_pipeline_tail(&app, &enhance, &inject, &text, duration_ms) {
+                Ok(failed) => failed,
+                Err(err) => {
+                    log::error!("inject failed: {err:?}");
+                    enter_error(app, state, err);
+                    return;
+                }
+            };
+
         state.transition(&app, AppState::Success, Some("injected"));
-        thread::sleep(Duration::from_millis(SUCCESS_HOLD_MS));
+        // polish-unavailable is a Success that shows the amber 去设置 toast, so it
+        // needs the longer hold; a clean success just flashes ✓.
+        let hold = if polish_unavailable {
+            TERMINAL_HOLD_MS
+        } else {
+            SUCCESS_HOLD_MS
+        };
+        thread::sleep(Duration::from_millis(hold));
         settle_to_idle(&app, &state, "done");
     });
 }
@@ -392,13 +688,15 @@ fn resolve_transcript(
     transcription.transcribe(audio, &config)
 }
 
+/// Returns `true` when enhance fell back to the raw transcript (polish-unavailable
+/// → the amber 去设置 toast); `false` for a clean inject.
 fn finish_pipeline_tail(
     app: &AppHandle,
     enhance: &EnhanceManager,
     inject: &InjectManager,
     text: &str,
     duration_ms: u64,
-) -> AppResult<()> {
+) -> AppResult<bool> {
     // P0.3 acceptance: the transcript shows up in the console.
     println!("[transcript] {text}");
     log::info!("transcript ({duration_ms} ms): {text}");
@@ -410,30 +708,32 @@ fn finish_pipeline_tail(
         },
     );
 
-    let text_to_inject = maybe_enhance_text(app, enhance, text);
+    let (text_to_inject, enhance_failed) = maybe_enhance_text(app, enhance, text);
 
     // P0.4: inject at the caret. On failure the text is still on the
     // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
-    inject.inject(app, &text_to_inject)
+    inject.inject(app, &text_to_inject)?;
+    Ok(enhance_failed)
 }
 
-fn maybe_enhance_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> String {
+/// Returns the text to inject and whether enhance failed (raw fallback).
+fn maybe_enhance_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> (String, bool) {
     let config = enhance_config(app);
     if !config.enhance_enabled {
-        return text.to_string();
+        return (text.to_string(), false);
     }
 
     emit_enhance_progress(app, "started", "润色中…");
     match enhance.enhance(text, &config) {
         Ok(enhanced) => {
             emit_enhance_progress(app, "completed", "润色完成");
-            enhanced
+            (enhanced, false)
         }
         Err(err) => {
             log::warn!("enhance failed, injecting original transcript: {err:?}");
             let fallback = fallback_after_enhance_failure(text, &err);
             emit_enhance_progress(app, "failed", &fallback.message);
-            fallback.text_to_inject
+            (fallback.text_to_inject, true)
         }
     }
 }
@@ -585,8 +885,9 @@ fn read_optional_secret(platform: &dyn Platform, key_id: &str) -> Option<String>
         .filter(|value| !value.is_empty())
 }
 
-/// Emit the error, flash Error, and recover to Idle after a hold. Spawns its own
-/// thread so callers on the hotkey path don't block.
+/// Emit the error, flash the Error toast, and auto-settle to Idle after the
+/// terminal hold (the toast's 重试 / 插入原文 can act first). Spawns its own thread
+/// so callers on the hotkey path don't block.
 fn enter_error(app: AppHandle, state: Arc<StateMachine>, err: AppError) {
     let _ = app.emit(
         "error",
@@ -597,18 +898,28 @@ fn enter_error(app: AppHandle, state: Arc<StateMachine>, err: AppError) {
         },
     );
     state.transition(&app, AppState::Error, Some("error"));
+    spawn_settle_after(app, state, TERMINAL_HOLD_MS);
+}
+
+/// Auto-settle a terminal state to Idle after a hold. If the user acts first
+/// (撤销 / 重试 → Processing), `settle_to_idle` finds a non-terminal state and
+/// the timer is a no-op, so the live capsule isn't yanked away mid-resume.
+fn spawn_settle_after(app: AppHandle, state: Arc<StateMachine>, hold_ms: u64) {
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(ERROR_HOLD_MS));
+        thread::sleep(Duration::from_millis(hold_ms));
         settle_to_idle(&app, &state, "recovered");
     });
 }
 
 /// Transition to Idle and hide the overlay window. The single exit point for the
-/// pipeline — overlay visibility mirrors "not Idle".
+/// pipeline — overlay visibility mirrors "not Idle". Hides ONLY when the Idle
+/// transition actually applied: a stale settle timer firing after the user tapped
+/// 撤销 / 重试 (now Processing) must not hide the capsule out from under them.
 fn settle_to_idle(app: &AppHandle, state: &Arc<StateMachine>, reason: &str) {
-    state.transition(app, AppState::Idle, Some(reason));
-    if let Err(err) = hide_overlay(app) {
-        log::error!("hide overlay: {err:?}");
+    if state.transition(app, AppState::Idle, Some(reason)) {
+        if let Err(err) = hide_overlay(app) {
+            log::error!("hide overlay: {err:?}");
+        }
     }
 }
 
@@ -626,39 +937,213 @@ fn duration_ms(audio: &AudioData) -> u64 {
     }
 }
 
+/// Swizzle the overlay `NSWindow` into a non-activating `NSPanel`. Clicking the
+/// capsule then never activates Audie, so clipboard injection keeps targeting
+/// the user's frontmost app. `cocoa` is deprecated (→ objc2-app-kit) but the
+/// crate's `set_collection_behaviour` still takes its type; the API works.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn convert_overlay_to_panel(app: &tauri::App) {
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::{WebviewPanelManager, WebviewWindowExt};
+
+    app.manage(WebviewPanelManager::default());
+    let overlay = match app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        Some(overlay) => overlay,
+        None => {
+            log::error!("overlay window missing for panel conversion");
+            return;
+        }
+    };
+    let panel = match overlay.to_panel() {
+        Ok(panel) => panel,
+        Err(err) => {
+            log::error!("overlay to_panel failed: {err:?}");
+            return;
+        }
+    };
+    // NSWindowStyleMaskNonactivatingPanel = 1 << 7.
+    panel.set_style_mask(1 << 7);
+    // RawNSPanel forces canBecomeKeyWindow = YES, so a button click would grab
+    // keyboard focus and the synthesized Cmd+V would paste into the panel, not
+    // the user's field. becomesKeyOnlyIfNeeded keeps key focus on their app.
+    panel.set_becomes_key_only_if_needed(true);
+    // Receive mouse-moved events so the ✕/✓ buttons get :hover states.
+    panel.set_accepts_mouse_moved_events(true);
+    // NSPanel hides on app deactivation by default. Our overlay is non-activating
+    // so Audie is never the active app — without this it would hide+show (flicker)
+    // on every Space/app switch.
+    panel.set_hides_on_deactivate(false);
+    // Above app windows; visible across spaces and over fullscreen apps.
+    panel.set_level(25); // NSStatusWindowLevel
+    panel.set_collection_behaviour(
+        NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
+    );
+}
+
+/// Move the overlay panel to the bottom-center of the screen the cursor is on,
+/// so on a multi-display setup the capsule flies to the active screen. Done
+/// natively (NSEvent.mouseLocation + NSScreen, all in points / one coordinate
+/// space) to dodge winit's multi-scale physical-pixel pitfalls. Main thread only.
+#[cfg(target_os = "macos")]
+// `deprecated`: cocoa types. `unexpected_cfgs`: the old `objc` crate's msg_send!
+// expands a `cargo-clippy` cfg that newer rustc flags.
+#[allow(deprecated, unexpected_cfgs)]
+fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) {
+    use tauri_nspanel::cocoa::appkit::{NSEvent, NSScreen};
+    use tauri_nspanel::cocoa::base::{id, nil};
+    use tauri_nspanel::cocoa::foundation::{NSPoint, NSRect};
+    use tauri_nspanel::objc::{msg_send, sel, sel_impl};
+
+    unsafe {
+        let mouse: NSPoint = NSEvent::mouseLocation(nil);
+        let screens: id = NSScreen::screens(nil);
+        if screens == nil {
+            return;
+        }
+        let count: usize = msg_send![screens, count];
+        // Find the screen whose frame contains the cursor; fall back to main.
+        let mut target: id = nil;
+        for i in 0..count {
+            let screen: id = msg_send![screens, objectAtIndex: i];
+            let f: NSRect = NSScreen::frame(screen);
+            if mouse.x >= f.origin.x
+                && mouse.x <= f.origin.x + f.size.width
+                && mouse.y >= f.origin.y
+                && mouse.y <= f.origin.y + f.size.height
+            {
+                target = screen;
+                break;
+            }
+        }
+        if target == nil {
+            target = NSScreen::mainScreen(nil);
+        }
+        if target == nil {
+            return;
+        }
+        // visibleFrame excludes the Dock/menu bar, so "贴底" sits above the Dock.
+        let vf: NSRect = NSScreen::visibleFrame(target);
+        let frame: NSRect = msg_send![panel, frame];
+        let x = vf.origin.x + (vf.size.width - frame.size.width) / 2.0;
+        let y = vf.origin.y + OVERLAY_BOTTOM_MARGIN_PX;
+        // Move only when the *target* (cursor's screen) changed — never react to
+        // the panel's live frame, which macOS animates mid-swipe. Comparing the
+        // target keeps the follow loop from snapping the panel back during the
+        // Space-switch animation (the flicker the user saw).
+        let mut last = OVERLAY_LAST_TARGET.lock();
+        let changed = last.is_none_or(|(lx, ly)| (lx - x).abs() > 1.0 || (ly - y).abs() > 1.0);
+        if changed {
+            *last = Some((x, y));
+            drop(last);
+            let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
+        }
+    }
+}
+
+/// Live multi-display follow: while the capsule is visible, poll the cursor and
+/// re-place the panel on its screen, so it flies to whatever display the user
+/// moves to mid-recording. Re-placing to the same spot is a no-op, so the panel
+/// only actually moves when the cursor crosses to another screen.
+#[cfg(target_os = "macos")]
+fn spawn_overlay_follow_thread(app: AppHandle) {
+    use tauri_nspanel::ManagerExt;
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(150));
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Ok(panel) = app2.get_webview_panel(OVERLAY_WINDOW_LABEL) {
+                if panel.is_visible() {
+                    reposition_overlay_to_cursor_screen(&panel);
+                }
+            }
+        });
+    });
+}
+
+/// Place the capsule at the bottom-center of whichever monitor the cursor is on,
+/// so on a multi-display setup it follows the user to the active screen. Called
+/// at setup and again on every show. Interactivity is handled by the NSPanel
+/// conversion in `setup`, not here.
 fn position_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
         .ok_or_else(|| AppError::Internal("overlay window not found".into()))?;
 
-    let monitor = overlay
-        .primary_monitor()
-        .map_err(|err| AppError::Internal(format!("primary_monitor: {err}")))?
-        .ok_or_else(|| AppError::Internal("no primary monitor".into()))?;
+    let monitors = overlay
+        .available_monitors()
+        .map_err(|err| AppError::Internal(format!("available_monitors: {err}")))?;
+    let cursor = app.cursor_position().ok();
+    let monitor = cursor
+        .and_then(|c| {
+            monitors.iter().find(|m| {
+                let p = m.position();
+                let s = m.size();
+                c.x >= p.x as f64
+                    && c.x < (p.x + s.width as i32) as f64
+                    && c.y >= p.y as f64
+                    && c.y < (p.y + s.height as i32) as f64
+            })
+        })
+        .or_else(|| monitors.first())
+        .ok_or_else(|| AppError::Internal("no monitor available".into()))?;
 
-    let monitor_size = monitor.size();
+    let m_pos = monitor.position();
+    let m_size = monitor.size();
     let scale = monitor.scale_factor();
-
     let win_size = overlay
         .outer_size()
         .map_err(|err| AppError::Internal(format!("outer_size: {err}")))?;
 
+    // Offset by the monitor origin so the position is correct in the global
+    // multi-display coordinate space.
     let bottom_margin_px = (OVERLAY_BOTTOM_MARGIN_PX * scale).round() as i32;
-    let x = (monitor_size.width as i32 - win_size.width as i32) / 2;
-    let y = monitor_size.height as i32 - win_size.height as i32 - bottom_margin_px;
+    let x = m_pos.x + (m_size.width as i32 - win_size.width as i32) / 2;
+    let y = m_pos.y + m_size.height as i32 - win_size.height as i32 - bottom_margin_px;
 
     overlay
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|err| AppError::Internal(format!("set_position: {err}")))?;
-
-    // Click-through — the capsule must not steal events from the underlying app.
-    overlay
-        .set_ignore_cursor_events(true)
-        .map_err(|err| AppError::Internal(format!("set_ignore_cursor_events: {err}")))?;
-
     Ok(())
 }
 
+// The overlay is an NSPanel on macOS (see setup). Show/hide go through the
+// panel's order-front/order-out — AppKit calls that must run on the main thread,
+// while show/hide are invoked from the hotkey + pipeline worker threads.
+#[cfg(target_os = "macos")]
+fn show_overlay(app: &AppHandle) -> AppResult<()> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        use tauri_nspanel::ManagerExt;
+        match handle.get_webview_panel(OVERLAY_WINDOW_LABEL) {
+            Ok(panel) => {
+                // Fly to the screen the cursor is on, then show WITHOUT making it
+                // key (so the user's app stays frontmost for injection).
+                reposition_overlay_to_cursor_screen(&panel);
+                panel.order_front_regardless();
+            }
+            Err(err) => log::error!("show_overlay: panel not found: {err:?}"),
+        }
+    })
+    .map_err(|err| AppError::Internal(format!("run_on_main_thread: {err}")))
+}
+
+#[cfg(target_os = "macos")]
+fn hide_overlay(app: &AppHandle) -> AppResult<()> {
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        use tauri_nspanel::ManagerExt;
+        match handle.get_webview_panel(OVERLAY_WINDOW_LABEL) {
+            Ok(panel) => panel.order_out(None),
+            Err(err) => log::error!("hide_overlay: panel not found: {err:?}"),
+        }
+    })
+    .map_err(|err| AppError::Internal(format!("run_on_main_thread: {err}")))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn show_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
@@ -669,6 +1154,7 @@ fn show_overlay(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn hide_overlay(app: &AppHandle) -> AppResult<()> {
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)

@@ -209,6 +209,8 @@ pub fn parse_server_packet(data: &[u8]) -> Result<ServerPacket, CodecError> {
             }
             let raw = &data[cursor..cursor + payload_size];
             let payload = decompress(raw, compression)?;
+            // Doubao flags its closing recognition with LAST_AUDIO_PACKET (frame
+            // flags 0x3) or a negative sequence; both are checked here.
             let is_final = (message_flags & flags::LAST_AUDIO_PACKET) != 0
                 || header_sequence.map(|s| s < 0).unwrap_or(false);
             if payload.is_empty() {
@@ -221,17 +223,13 @@ pub fn parse_server_packet(data: &[u8]) -> Result<ServerPacket, CodecError> {
             let value: serde_json::Value =
                 serde_json::from_slice(&payload).map_err(|e| CodecError::Json(e.to_string()))?;
             let text = extract_text(&value);
-            // JSON-level `is_final` overrides frame flags if it says true.
-            let json_final = value
-                .get("is_final")
-                .and_then(|v| v.as_bool())
-                .or_else(|| {
-                    value
-                        .get("result")
-                        .and_then(|r| r.get("is_final"))
-                        .and_then(|v| v.as_bool())
-                })
-                .unwrap_or(false);
+            // Doubao marks the closing recognition with `is_last_package: true`
+            // (often nested under `result`/`audio_info`), NOT `is_final` — so search
+            // the whole JSON tree for it. Without this the receive loop never breaks
+            // and the take hangs until the 20s timeout (matches Voxt's `isLastPackage`).
+            // Some payloads still carry `is_final`, so honor both.
+            let json_final = json_contains_true_flag(&value, "is_last_package")
+                || json_contains_true_flag(&value, "is_final");
             Ok(ServerPacket::Response {
                 text,
                 is_final: is_final || json_final,
@@ -262,6 +260,22 @@ pub fn parse_server_packet(data: &[u8]) -> Result<ServerPacket, CodecError> {
             })
         }
         other => Err(CodecError::UnsupportedMessageType(other)),
+    }
+}
+
+/// Recursively search a JSON value for `key` set to boolean true. Doubao buries
+/// `is_last_package` at varying depths depending on the response shape, so a flat
+/// `.get(key)` misses it.
+fn json_contains_true_flag(value: &serde_json::Value, key: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get(key).and_then(|v| v.as_bool()) == Some(true) {
+                return true;
+            }
+            map.values().any(|v| json_contains_true_flag(v, key))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|v| json_contains_true_flag(v, key)),
+        _ => false,
     }
 }
 
@@ -431,6 +445,23 @@ mod tests {
             } => {
                 assert!(is_final);
                 assert_eq!(sequence, Some(-4));
+            }
+            other => panic!("expected Response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_marks_final_when_is_last_package_nested() {
+        // Doubao signals the closing recognition with `is_last_package: true` nested
+        // under `result`, on a *positive* sequence with no last-audio flag — the exact
+        // shape that used to hang the receive loop until the 20s timeout.
+        let json = br#"{"result":{"text":"done","is_last_package":true}}"#;
+        let frame = build_synthetic_response(json, flags::POSITIVE_SEQUENCE, 9, compression::NONE);
+        let parsed = parse_server_packet(&frame).unwrap();
+        match parsed {
+            ServerPacket::Response { text, is_final, .. } => {
+                assert!(is_final, "is_last_package must mark the response final");
+                assert_eq!(text.as_deref(), Some("done"));
             }
             other => panic!("expected Response, got {other:?}"),
         }

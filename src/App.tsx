@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useSettings } from "./hooks/useSettings";
@@ -51,6 +52,23 @@ function App() {
   const [setupDone, setSetupDone] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>("available");
   const [updateOpen, setUpdateOpen] = useState(false);
+
+  // The overlay's 去设置 (polish-unavailable toast) shows + focuses this window
+  // via the backend, then fires `open-settings` so we surface the Settings dialog.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listen("open-settings", () => setSettingsOpen(true))
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => console.error("failed to subscribe open-settings:", err));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const handleUpdate = useCallback(() => {
     if (updateState === "available") {

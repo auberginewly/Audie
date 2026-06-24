@@ -74,6 +74,23 @@ impl ChunkSink {
             is_final: false,
         }));
     }
+
+    /// Send an end-of-input sentinel so the streaming consumer's recv loop ends
+    /// deterministically at stop. We must NOT rely on the Sender's Drop for this:
+    /// the cpal callback holds a ChunkSink clone whose release can lag past stop,
+    /// so the doubao loop would block on recv forever and never send its closing
+    /// frame — the take then hangs until the 20s timeout. An explicit is_final
+    /// chunk breaks the loop now.
+    fn finish(&self) {
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        let _ = self.tx.send(Ok(AudioChunk {
+            samples: Vec::new(),
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            sequence,
+            is_final: true,
+        }));
+    }
 }
 
 struct CaptureSession {
@@ -347,6 +364,12 @@ fn run_capture_thread(
         thread::sleep(Duration::from_millis(SHUTDOWN_POLL_MS));
     }
     drop(stream);
+    // Stream is stopped — no more `forward` calls. Tell the streaming consumer the
+    // input is done so its recv loop ends now (see `ChunkSink::finish`). No-op on
+    // the batch path, where `chunk_sink` is None.
+    if let Some(sink) = chunk_sink.as_deref() {
+        sink.finish();
+    }
 }
 
 fn run_emit_thread(app: AppHandle, accum: Arc<Mutex<LevelAccum>>, shutdown: Arc<AtomicBool>) {
