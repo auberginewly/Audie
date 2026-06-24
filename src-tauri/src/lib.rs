@@ -743,22 +743,23 @@ fn convert_overlay_to_panel(app: &tauri::App) {
 // expands a `cargo-clippy` cfg that newer rustc flags.
 #[allow(deprecated, unexpected_cfgs)]
 fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNSPanel) {
+    use tauri_nspanel::cocoa::appkit::{NSEvent, NSScreen};
     use tauri_nspanel::cocoa::base::{id, nil};
     use tauri_nspanel::cocoa::foundation::{NSPoint, NSRect};
-    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::objc::{msg_send, sel, sel_impl};
 
     unsafe {
-        let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-        let screens: id = msg_send![class!(NSScreen), screens];
+        let mouse: NSPoint = NSEvent::mouseLocation(nil);
+        let screens: id = NSScreen::screens(nil);
         if screens == nil {
             return;
         }
         let count: usize = msg_send![screens, count];
-        // Default to the main screen; override with the one under the cursor.
-        let mut target: id = msg_send![class!(NSScreen), mainScreen];
+        // Find the screen whose frame contains the cursor; fall back to main.
+        let mut target: id = nil;
         for i in 0..count {
             let screen: id = msg_send![screens, objectAtIndex: i];
-            let f: NSRect = msg_send![screen, frame];
+            let f: NSRect = NSScreen::frame(screen);
             if mouse.x >= f.origin.x
                 && mouse.x <= f.origin.x + f.size.width
                 && mouse.y >= f.origin.y
@@ -769,13 +770,20 @@ fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNS
             }
         }
         if target == nil {
+            target = NSScreen::mainScreen(nil);
+        }
+        if target == nil {
             return;
         }
         // visibleFrame excludes the Dock/menu bar, so "贴底" sits above the Dock.
-        let vf: NSRect = msg_send![target, visibleFrame];
+        let vf: NSRect = NSScreen::visibleFrame(target);
         let frame: NSRect = msg_send![panel, frame];
         let x = vf.origin.x + (vf.size.width - frame.size.width) / 2.0;
         let y = vf.origin.y + OVERLAY_BOTTOM_MARGIN_PX;
+        log::info!(
+            "overlay reposition: mouse=({:.0},{:.0}) screens={} visibleFrame=({:.0},{:.0} {:.0}x{:.0}) -> origin=({:.0},{:.0})",
+            mouse.x, mouse.y, count, vf.origin.x, vf.origin.y, vf.size.width, vf.size.height, x, y
+        );
         let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
     }
 }
