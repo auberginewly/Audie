@@ -1,8 +1,8 @@
-// Subscribe to Rust `audio-level` events. Returns a 3-slot ring so the
-// capsule can render 3 bars where bar[0] = newest level, bar[2] = oldest.
-// At ~30 FPS that's ~100ms of history — enough motion for a placeholder
-// waveform without needing animation logic on the React side.
-// PROJECT_SPEC.md §3.6 / §3.8 (typeless-style strip lands in P3).
+// Subscribe to Rust `audio-level` events. Returns a 4-slot ring (newest →
+// oldest) that the capsule folds around its center: bar distance d from the
+// middle reads ring[d], so the newest peak pulses the center and ripples out.
+// At ~30 FPS that's ~130ms of history — enough motion without React-side
+// animation. PROJECT_SPEC.md §3.6 / §3.8.
 
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -12,9 +12,9 @@ import {
   type AudioLevel,
 } from "../types/events";
 
-export type LevelRing = readonly [number, number, number];
+export type LevelRing = readonly [number, number, number, number];
 
-const ZERO: LevelRing = [0, 0, 0];
+const ZERO: LevelRing = [0, 0, 0, 0];
 
 export function useAudioLevels(): LevelRing {
   const [levels, setLevels] = useState<LevelRing>(ZERO);
@@ -29,7 +29,7 @@ export function useAudioLevels(): LevelRing {
         console.warn("invalid audio-level payload", parsed.error, event.payload);
         return;
       }
-      setLevels((prev) => [parsed.data.level, prev[0], prev[1]]);
+      setLevels((prev) => [parsed.data.level, prev[0], prev[1], prev[2]]);
     })
       .then((fn) => {
         if (cancelled) {
