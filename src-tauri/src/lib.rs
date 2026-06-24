@@ -161,9 +161,13 @@ pub fn run() {
             }
 
             // Convert the overlay into a non-activating NSPanel so clicking the
-            // capsule buttons (✕/✓) never activates Audie / steals focus (fe.8b-2).
+            // capsule buttons (✕/✓) never activates Audie / steals focus (fe.8b-2),
+            // then start the thread that keeps it on the cursor's display.
             #[cfg(target_os = "macos")]
-            convert_overlay_to_panel(app);
+            {
+                convert_overlay_to_panel(app);
+                spawn_overlay_follow_thread(app.handle().clone());
+            }
 
             // The main window is fixed-size (resizable/maximizable off), so the
             // green zoom traffic light is dead — hide it instead of showing it
@@ -780,12 +784,28 @@ fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNS
         let frame: NSRect = msg_send![panel, frame];
         let x = vf.origin.x + (vf.size.width - frame.size.width) / 2.0;
         let y = vf.origin.y + OVERLAY_BOTTOM_MARGIN_PX;
-        log::info!(
-            "overlay reposition: mouse=({:.0},{:.0}) screens={} visibleFrame=({:.0},{:.0} {:.0}x{:.0}) -> origin=({:.0},{:.0})",
-            mouse.x, mouse.y, count, vf.origin.x, vf.origin.y, vf.size.width, vf.size.height, x, y
-        );
         let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
     }
+}
+
+/// Live multi-display follow: while the capsule is visible, poll the cursor and
+/// re-place the panel on its screen, so it flies to whatever display the user
+/// moves to mid-recording. Re-placing to the same spot is a no-op, so the panel
+/// only actually moves when the cursor crosses to another screen.
+#[cfg(target_os = "macos")]
+fn spawn_overlay_follow_thread(app: AppHandle) {
+    use tauri_nspanel::ManagerExt;
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(150));
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Ok(panel) = app2.get_webview_panel(OVERLAY_WINDOW_LABEL) {
+                if panel.is_visible() {
+                    reposition_overlay_to_cursor_screen(&panel);
+                }
+            }
+        });
+    });
 }
 
 /// Place the capsule at the bottom-center of whichever monitor the cursor is on,
