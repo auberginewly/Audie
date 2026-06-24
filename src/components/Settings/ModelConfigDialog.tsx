@@ -20,20 +20,21 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// A keychain-backed password field that loads + saves on its own.
+// A keychain-backed password field. Shows whether a key is already stored via the
+// no-read `has_secret` presence check (which never asks macOS to unlock + reveal
+// the secret), and only writes a NEW value through save(). We deliberately do NOT
+// read the decrypted key back into the input: that data-read triggered a macOS
+// Keychain password prompt every time a model config opened. Leaving an already-
+// configured field blank keeps the stored key as-is (save() skips empty inputs).
 function KeyInput({ keyId, placeholder }: { keyId: SecretKeyId; placeholder: string }) {
   const [value, setValue] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [configured, setConfigured] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     invoke("has_secret", { keyId })
-      .then(async (raw) => {
-        if (cancelled || typeof raw !== "boolean") return;
-        setSaved(raw);
-        if (!raw) return;
-        const secret = await invoke("get_secret_for_settings", { keyId });
-        if (!cancelled && typeof secret === "string") setValue(secret);
+      .then((raw) => {
+        if (!cancelled && typeof raw === "boolean") setConfigured(raw);
       })
       .catch(() => {});
     return () => {
@@ -47,7 +48,7 @@ function KeyInput({ keyId, placeholder }: { keyId: SecretKeyId; placeholder: str
       type="password"
       value={value}
       onChange={(e) => setValue(e.target.value)}
-      placeholder={saved ? "已保存 key" : placeholder}
+      placeholder={configured ? "已配置（留空则保持不变）" : placeholder}
       data-key-id={keyId}
     />
   );
