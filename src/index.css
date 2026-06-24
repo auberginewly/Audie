@@ -11,13 +11,6 @@
 @import "./styles/tokens/typography.css";
 @import "./styles/tokens/base.css";
 
-/* daisyUI stays during the migration — the existing Capsule/Settings still
- * depend on its `nord` classes. Deliberate transitional state; dropped once
- * those screens move onto the design-system components. */
-@plugin "daisyui" {
-  themes: nord --default;
-}
-
 /* ---------------------------------------------------------------------------
  * Bridge the design tokens into Tailwind v4 utilities. `inline` keeps the
  * var() reference in generated classes, so `.theme-light` overrides still work.
