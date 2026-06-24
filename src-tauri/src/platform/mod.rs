@@ -85,6 +85,12 @@ pub trait Platform: Send + Sync {
         None
     }
 
+    /// Remember the frontmost app at recording start so injection can restore
+    /// focus to it if an overlay-button click later steals key focus to us. macOS
+    /// overrides this; other platforms don't fight a non-activating panel, so the
+    /// default no-op keeps their impl unchanged (fe.8c).
+    fn capture_focus_target(&self) {}
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;

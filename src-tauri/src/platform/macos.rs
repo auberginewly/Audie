@@ -18,6 +18,7 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+use parking_lot::Mutex;
 use security_framework_sys::access_control::kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
 use security_framework_sys::base::{errSecDuplicateItem, errSecItemNotFound, errSecSuccess};
 use security_framework_sys::item::{
@@ -37,11 +38,18 @@ use crate::error::{AppError, AppResult};
 
 pub struct MacosPlatform {
     registry: Arc<HotkeyRegistry>,
+    // The app that was frontmost when recording started. Clicking an overlay
+    // button makes Audie frontmost (stealing key focus), so inject restores this
+    // app first or the synthesized Cmd+V would paste into nothing. Voxt's pattern.
+    focus_target_pid: Mutex<Option<i32>>,
 }
 
 impl MacosPlatform {
     pub fn new(registry: Arc<HotkeyRegistry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            focus_target_pid: Mutex::new(None),
+        }
     }
 }
 
@@ -102,8 +110,15 @@ impl Platform for MacosPlatform {
             ));
         }
 
-        // Give the pasteboard a beat to settle before the synthetic paste.
-        std::thread::sleep(Duration::from_millis(20));
+        // If a panel-button click stole key focus to us, hand it back to the app
+        // that was frontmost at record start, or the synthetic Cmd+V pastes into
+        // nothing. Hotkey path: we're not frontmost → no-op, keep the 20ms settle.
+        // When restored, give AppKit ~50ms for the activation handoff (Voxt ~40ms).
+        let restored = match *self.focus_target_pid.lock() {
+            Some(pid) => restore_focus_if_stolen(pid),
+            None => false,
+        };
+        std::thread::sleep(Duration::from_millis(if restored { 50 } else { 20 }));
         simulate_cmd_v()?;
 
         // The frontmost app reads the pasteboard asynchronously on Cmd+V;
@@ -116,6 +131,12 @@ impl Platform for MacosPlatform {
         }
 
         Ok(())
+    }
+
+    fn capture_focus_target(&self) {
+        let pid = current_frontmost_pid();
+        *self.focus_target_pid.lock() = pid;
+        log::debug!("capture_focus_target: frontmost pid = {pid:?}");
     }
 
     fn preferred_input_device_name(&self) -> Option<String> {
@@ -602,6 +623,66 @@ fn simulate_cmd_v() -> AppResult<()> {
     key_up.post(CGEventTapLocation::HID);
 
     Ok(())
+}
+
+/// PID of the frontmost application right now, via NSWorkspace. Captured at record
+/// start so inject can restore focus to the user's app. `objc`/`cocoa` dialect to
+/// match lib.rs (NSWorkspace/NSRunningApplication aren't in the cocoa bindings).
+#[allow(deprecated, unexpected_cfgs)]
+fn current_frontmost_pid() -> Option<i32> {
+    use tauri_nspanel::cocoa::base::{id, nil};
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    // SAFETY: read-only AppKit class accessors; NSWorkspace is process-wide and
+    // safe to query off the main thread.
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace == nil {
+            return None;
+        }
+        let app: id = msg_send![workspace, frontmostApplication];
+        if app == nil {
+            return None;
+        }
+        let pid: i32 = msg_send![app, processIdentifier]; // pid_t == i32
+        Some(pid)
+    }
+}
+
+/// If Audie is the current frontmost app (a panel-button click stole key focus),
+/// reactivate `target_pid` so the upcoming Cmd+V lands there. Returns true only
+/// when it actually reactivated, so the caller can wait for the handoff. No-op
+/// when we were never frontmost (hotkey path) or the target app is gone.
+#[allow(deprecated, unexpected_cfgs)]
+fn restore_focus_if_stolen(target_pid: i32) -> bool {
+    use tauri_nspanel::cocoa::base::{id, nil, BOOL};
+    use tauri_nspanel::objc::{class, msg_send, sel, sel_impl};
+    let own_pid = std::process::id() as i32;
+    // SAFETY: read-only accessors + activateWithOptions:0 (a cross-process request,
+    // == Voxt's activate(options: [])); none mutate our own view hierarchy.
+    unsafe {
+        let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace == nil {
+            return false;
+        }
+        let frontmost: id = msg_send![workspace, frontmostApplication];
+        if frontmost == nil {
+            return false;
+        }
+        let frontmost_pid: i32 = msg_send![frontmost, processIdentifier];
+        if frontmost_pid != own_pid {
+            return false; // focus wasn't stolen — leave the user's app alone
+        }
+        let target: id = msg_send![
+            class!(NSRunningApplication),
+            runningApplicationWithProcessIdentifier: target_pid
+        ];
+        if target == nil {
+            return false;
+        }
+        // cocoa's BOOL is a Rust bool on this target — return it directly.
+        let activated: BOOL = msg_send![target, activateWithOptions: 0u64];
+        activated
+    }
 }
 
 #[cfg(test)]

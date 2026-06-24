@@ -16,6 +16,9 @@ use crate::error::{AppError, AppResult};
 /// One captured utterance, as interleaved f32 samples in [-1.0, 1.0].
 /// Providers are responsible for encoding this into whatever wire format their
 /// API expects (Groq wants a WAV/MP3 file part).
+// Clone so the pipeline can keep a copy in `LastTake` for undo / retry while
+// still transcribing the original (fe.8c).
+#[derive(Clone)]
 pub struct AudioData {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
