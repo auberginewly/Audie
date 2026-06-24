@@ -78,7 +78,7 @@ struct HotkeyContext<'a> {
 }
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
-const OVERLAY_BOTTOM_MARGIN_PX: f64 = 16.0;
+const OVERLAY_BOTTOM_MARGIN_PX: f64 = 4.0;
 
 /// Hide a window's green zoom traffic light. The main window is fixed-size, so
 /// the zoom button can never do anything; hiding it reads cleaner than a grayed
@@ -231,87 +231,96 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
 }
 
 fn handle_hotkey(ctx: &HotkeyContext<'_>, event: HotkeyEvent) {
-    match event {
-        HotkeyEvent::Pressed => {
-            // Press enters the front half of the pipeline: permission gate →
-            // open cpal stream → Recording state → overlay. No ASR happens until
-            // Release, because P1 still uses batch transcription.
-            // Gate on mic permission before recording: a denial otherwise
-            // captures silence and the user only sees a Whisper hallucination.
-            // Flash red instead (§3.7 Permission).
-            let platform = ctx.app.state::<Arc<dyn Platform>>();
-            if !platform.ensure_microphone_permission() {
-                let _ = show_overlay(ctx.app);
-                enter_error(
-                    ctx.app.clone(),
-                    ctx.state.clone(),
-                    AppError::Permission("请授予麦克风权限".into()),
-                );
-                return;
-            }
-            // Start capture BEFORE the Idle→Recording transition: a cpal failure
-            // (no input device, build_input_stream blew up, etc.) needs to surface
-            // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
-            // transition first would strand us in Recording with a dead stream.
-            let streaming_start =
-                start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
-            let capture_result = match streaming_start {
-                Some(chunk_tx) => ctx.audio.start_capture_streaming(ctx.app.clone(), chunk_tx),
-                None => ctx.audio.start_capture(ctx.app.clone()),
-            };
-            if let Err(err) = capture_result {
-                log::error!("start capture: {err:?}");
-                clear_streaming_session(ctx.streaming);
-                let _ = show_overlay(ctx.app);
-                enter_error(ctx.app.clone(), ctx.state.clone(), err);
-                return;
-            }
-            if ctx
-                .state
-                .transition(ctx.app, AppState::Recording, Some("hotkey-down"))
-            {
-                if let Err(err) = show_overlay(ctx.app) {
-                    log::error!("show overlay: {err:?}");
-                }
-            } else {
-                // Transition rejected (shouldn't happen — we just confirmed Idle
-                // implicitly by reaching here). Tear down the capture we just opened.
-                clear_streaming_session(ctx.streaming);
-                if let Err(err) = ctx.audio.stop_capture() {
-                    log::warn!("rollback stop_capture: {err:?}");
-                }
-            }
+    // Toggle control model: each hotkey *press* starts a take (from Idle) or
+    // finishes it (from Recording). Key-up is ignored — holding no longer
+    // auto-stops; the user presses again to finish. A press mid-pipeline
+    // (Processing/Success/Error/Cancel) is a no-op.
+    if !matches!(event, HotkeyEvent::Pressed) {
+        return;
+    }
+    match ctx.state.current() {
+        AppState::Idle => start_recording(ctx),
+        AppState::Recording => finish_recording(ctx),
+        _ => {}
+    }
+}
+
+/// Enter the front half of the pipeline: permission gate → open cpal stream →
+/// Recording state → overlay. No ASR happens until finish, because P1 uses
+/// batch transcription.
+fn start_recording(ctx: &HotkeyContext<'_>) {
+    // Gate on mic permission before recording: a denial otherwise captures
+    // silence and the user only sees a Whisper hallucination. Flash red
+    // instead (§3.7 Permission).
+    let platform = ctx.app.state::<Arc<dyn Platform>>();
+    if !platform.ensure_microphone_permission() {
+        let _ = show_overlay(ctx.app);
+        enter_error(
+            ctx.app.clone(),
+            ctx.state.clone(),
+            AppError::Permission("请授予麦克风权限".into()),
+        );
+        return;
+    }
+    // Start capture BEFORE the Idle→Recording transition: a cpal failure
+    // (no input device, build_input_stream blew up, etc.) needs to surface
+    // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
+    // transition first would strand us in Recording with a dead stream.
+    let streaming_start = start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
+    let capture_result = match streaming_start {
+        Some(chunk_tx) => ctx.audio.start_capture_streaming(ctx.app.clone(), chunk_tx),
+        None => ctx.audio.start_capture(ctx.app.clone()),
+    };
+    if let Err(err) = capture_result {
+        log::error!("start capture: {err:?}");
+        clear_streaming_session(ctx.streaming);
+        let _ = show_overlay(ctx.app);
+        enter_error(ctx.app.clone(), ctx.state.clone(), err);
+        return;
+    }
+    if ctx
+        .state
+        .transition(ctx.app, AppState::Recording, Some("toggle-start"))
+    {
+        if let Err(err) = show_overlay(ctx.app) {
+            log::error!("show overlay: {err:?}");
         }
-        HotkeyEvent::Released => {
-            // Release closes the audio session and hands one complete utterance
-            // to the pipeline tail. From here on the overlay remains visible so
-            // the user sees Processing/Success/Error instead of a blink.
-            if !ctx
-                .state
-                .transition(ctx.app, AppState::Processing, Some("hotkey-up"))
-            {
-                return;
-            }
-            // Overlay stays up through Processing/Success/Error so the user can
-            // see the result; it's hidden only when we settle back to Idle.
-            let streaming_result = take_streaming_session(ctx.streaming);
-            match ctx.audio.stop_capture() {
-                Ok(recorded) => {
-                    spawn_transcription(
-                        ctx.app.clone(),
-                        ctx.state.clone(),
-                        ctx.transcription.clone(),
-                        ctx.enhance.clone(),
-                        ctx.inject.clone(),
-                        recorded,
-                        streaming_result,
-                    );
-                }
-                Err(err) => {
-                    log::error!("stop capture: {err:?}");
-                    enter_error(ctx.app.clone(), ctx.state.clone(), err);
-                }
-            }
+    } else {
+        // Transition rejected (shouldn't happen — we just confirmed Idle).
+        // Tear down the capture we just opened.
+        clear_streaming_session(ctx.streaming);
+        if let Err(err) = ctx.audio.stop_capture() {
+            log::warn!("rollback stop_capture: {err:?}");
+        }
+    }
+}
+
+/// Close the audio session and hand one complete utterance to the pipeline
+/// tail. The overlay stays visible through Processing/Success/Error so the
+/// user sees the result; it's hidden only when we settle back to Idle.
+fn finish_recording(ctx: &HotkeyContext<'_>) {
+    if !ctx
+        .state
+        .transition(ctx.app, AppState::Processing, Some("toggle-finish"))
+    {
+        return;
+    }
+    let streaming_result = take_streaming_session(ctx.streaming);
+    match ctx.audio.stop_capture() {
+        Ok(recorded) => {
+            spawn_transcription(
+                ctx.app.clone(),
+                ctx.state.clone(),
+                ctx.transcription.clone(),
+                ctx.enhance.clone(),
+                ctx.inject.clone(),
+                recorded,
+                streaming_result,
+            );
+        }
+        Err(err) => {
+            log::error!("stop capture: {err:?}");
+            enter_error(ctx.app.clone(), ctx.state.clone(), err);
         }
     }
 }
