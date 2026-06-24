@@ -185,7 +185,11 @@ export function Capsule() {
         // No backdrop-blur: on the transparent macOS overlay window it renders as
         // an opaque white box instead of frosting the desktop. surface-capsule is
         // ~95% opaque dark, so the pill reads solid without it.
-        "rounded-full border-0 bg-surface-capsule text-text-primary shadow-capsule",
+        // corner-shape: iOS-style continuous (squircle) corners — curvature ramps
+        // in smoothly instead of jumping at the arc/line join. Tune the exponent:
+        // 2 = plain round, ~3 = soft iOS squircle, higher = flatter. Needs a recent
+        // WebKit; older ones ignore it and fall back to rounded-full.
+        "rounded-full [corner-shape:superellipse(3)] border-0 bg-surface-capsule text-text-primary shadow-capsule",
         "transition-all duration-200 ease-[var(--ease-out)]",
         visible ? "opacity-100 translate-y-0" : "pointer-events-none translate-y-2 opacity-0",
       ].join(" ")}
