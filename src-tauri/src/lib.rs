@@ -784,7 +784,13 @@ fn reposition_overlay_to_cursor_screen(panel: &tauri_nspanel::raw_nspanel::RawNS
         let frame: NSRect = msg_send![panel, frame];
         let x = vf.origin.x + (vf.size.width - frame.size.width) / 2.0;
         let y = vf.origin.y + OVERLAY_BOTTOM_MARGIN_PX;
-        let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
+        // Only move when the target actually changed (cursor crossed to another
+        // display). The follow thread polls at 150ms; skipping redundant
+        // setFrameOrigin keeps the panel from re-rendering — and flickering —
+        // during Space / Mission Control transitions where it shouldn't move.
+        if (frame.origin.x - x).abs() > 1.0 || (frame.origin.y - y).abs() > 1.0 {
+            let _: () = msg_send![panel, setFrameOrigin: NSPoint { x, y }];
+        }
     }
 }
 
