@@ -82,22 +82,25 @@ impl Platform for MacosPlatform {
     }
 
     fn inject_text(&self, app: &AppHandle, text: &str) -> AppResult<()> {
-        // Clipboard method: most compatible across apps. Save the user's current
-        // clipboard, paste our text, then restore. `read_text` fails when the
-        // clipboard holds non-text (e.g. an image) — treat that as "nothing to
-        // restore" rather than an error.
-        let original = app.clipboard().read_text().ok();
-
+        // Clipboard method: most compatible across apps. We write the transcript to
+        // the clipboard and simulate Cmd+V — and DELIBERATELY do not restore the old
+        // clipboard. macOS silently drops the synthetic Cmd+V when Accessibility is
+        // missing or stale (CGEvent::post is void, so there's no way to tell a
+        // dropped paste from a landed one), so leaving the transcript on the
+        // pasteboard guarantees the user can always manually Cmd+V — the text is
+        // never lost even when the paste doesn't land. Trade-off: each dictation
+        // overwrites the system clipboard (standard for dictation tools).
         app.clipboard()
             .write_text(text.to_string())
             .map_err(|err| AppError::Inject(format!("clipboard write failed: {err}")))?;
 
         // Preflight Accessibility BEFORE simulating Cmd+V. Without that permission
-        // CGEvent::post() silently drops the keystroke — paste never lands AND the
-        // text would still get clobbered by clipboard restore. SPEC §3.7 says
-        // "inject failed → text stays on clipboard for manual paste", so on a
-        // preflight miss we keep the text on the pasteboard and return Permission
-        // instead of touching restore.
+        // CGEvent::post() silently drops the keystroke and the paste never lands.
+        // The transcript is already on the clipboard (above), so on a preflight miss
+        // we return Permission so the user knows to grant access / paste manually
+        // (§3.7). NOTE: a *stale* grant (e.g. after a code-signature change) makes
+        // preflight return true while events are still dropped — undetectable here;
+        // the clipboard fallback is what saves the text in that case.
         if !preflight_post_event_access() {
             // Best-effort: ask macOS to add Audie to the Accessibility list so the
             // user can flip the switch. Result is ignored — even if it returns
@@ -121,15 +124,8 @@ impl Platform for MacosPlatform {
         std::thread::sleep(Duration::from_millis(if restored { 50 } else { 20 }));
         simulate_cmd_v()?;
 
-        // The frontmost app reads the pasteboard asynchronously on Cmd+V;
-        // restoring too early clobbers our text before it lands.
-        std::thread::sleep(Duration::from_millis(120));
-        if let Some(prev) = original {
-            if let Err(err) = app.clipboard().write_text(prev) {
-                log::warn!("failed to restore clipboard after inject: {err}");
-            }
-        }
-
+        // No clipboard restore: the transcript stays on the pasteboard as a
+        // manual-paste fallback (see the method-opening comment).
         Ok(())
     }
 
