@@ -1,24 +1,25 @@
 // The recording capsule — Audie's signature overlay. Pure mirror of the Rust
-// state machine (no business logic; PROJECT_SPEC §3.8 / §6.2). fe.8a restores
-// the design's visuals (7-bar symmetric waveform, spinners, self-drawing check,
-// colored status pills) mapped from the existing events. Interactive controls
-// (✕/✓/undo/retry) land in fe.8b/8c when the overlay becomes clickable.
+// state machine (no business logic; PROJECT_SPEC §3.8 / §6.2). Live states render
+// the pill (recording / transcribing / polishing / success); terminal states
+// render a rounded toast card with actions (cancelled→撤销 / polish-unavailable→
+// 去设置 / error→插入原文·重试). The backend keeps the take so those actions can
+// resume it (fe.8c).
 
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { useAudioLevels, type LevelRing } from "../../hooks/useAudioLevels";
 import { useRecordingStore } from "../../store/recording";
-import type { AppState } from "../../types/events";
+import type { AppState, ErrorCode } from "../../types/events";
 import { Icon, type IconName } from "../ui";
 
-// Overlay → Rust. The overlay window is non-focusable, so these clicks don't
+// Overlay → Rust. The overlay is a non-activating NSPanel, so these clicks never
 // steal focus from the user's app (injection still targets it). Best-effort.
 function call(cmd: string) {
   void invoke(cmd).catch((err) => console.error(`${cmd} failed:`, err));
 }
 
-// Small round control inside the capsule — color block, no outline.
+// Small round control inside the pill — color block, no outline.
 function CapsuleButton({
   name,
   label,
@@ -36,6 +37,10 @@ function CapsuleButton({
       type="button"
       aria-label={label}
       title={label}
+      // Don't take focus on click: a focused web control makes the overlay panel
+      // key, stealing keyboard focus from the user's app so the synthesized Cmd+V
+      // would paste into nothing. preventDefault keeps their app key; onClick still fires.
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={[
         "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 cursor-pointer",
@@ -46,6 +51,38 @@ function CapsuleButton({
       ].join(" ")}
     >
       <Icon name={name} size={16} strokeWidth={accent ? 2.25 : 2} />
+    </button>
+  );
+}
+
+// Filled / ghost text button inside a terminal toast card.
+function CardButton({
+  label,
+  tone,
+  onClick,
+}: {
+  label: string;
+  tone: "ghost" | "accent";
+  onClick: () => void;
+}) {
+  const accent = tone === "accent";
+  return (
+    <button
+      type="button"
+      // Keep the user's app key so 撤销 / 重试 / 插入原文 inject lands at the caret
+      // (see CapsuleButton).
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={[
+        "inline-flex h-[34px] shrink-0 items-center justify-center rounded-[10px] border-0 px-4 cursor-pointer",
+        "text-[13px] font-medium whitespace-nowrap",
+        "transition-colors duration-150 ease-[var(--ease-out)]",
+        accent
+          ? "bg-accent-fill text-text-on-accent hover:bg-accent-fill-hover"
+          : "bg-gray-alpha-200 text-text-primary hover:bg-gray-alpha-300",
+      ].join(" ")}
+    >
+      {label}
     </button>
   );
 }
@@ -140,6 +177,51 @@ function DrawCheck() {
 
 const LABEL = "text-[13px] text-text-secondary whitespace-nowrap";
 
+// Terminal-state card: centered title (+ subtitle) over a row of action buttons.
+function ToastCard({
+  title,
+  subtitle,
+  buttons,
+}: {
+  title: string;
+  subtitle?: string;
+  buttons: ReactNode;
+}) {
+  return (
+    <div
+      role="status"
+      className={[
+        "inline-flex min-w-[200px] max-w-[320px] flex-col items-center gap-3 p-4",
+        "rounded-[14px] [corner-shape:superellipse(3)] border-0 bg-surface-capsule text-text-primary shadow-capsule",
+      ].join(" ")}
+      style={{ animation: "audie-rise 0.22s var(--ease-out)" }}
+    >
+      <div className="flex flex-col items-center gap-0.5 text-center">
+        <span className="text-[13px] font-medium text-balance">{title}</span>
+        {subtitle ? <span className="text-xs text-text-tertiary">{subtitle}</span> : null}
+      </div>
+      {buttons ? <div className="flex flex-wrap items-center justify-center gap-2">{buttons}</div> : null}
+    </div>
+  );
+}
+
+// Error toast actions by category: inject failed → 插入原文 (re-paste) + 重试;
+// network / provider failed → 重试; permission / device / internal → message only.
+function errorActions(code: ErrorCode | undefined): ReactNode {
+  if (code === "inject") {
+    return (
+      <>
+        <CardButton label="插入原文" tone="ghost" onClick={() => call("insert_raw_last")} />
+        <CardButton label="重试" tone="accent" onClick={() => call("retry_last")} />
+      </>
+    );
+  }
+  if (code === "network" || code === "provider") {
+    return <CardButton label="重试" tone="accent" onClick={() => call("retry_last")} />;
+  }
+  return null;
+}
+
 function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
@@ -153,7 +235,6 @@ export function Capsule() {
   const levels = useAudioLevels();
 
   const view = deriveView(state, enhanceProgress?.phase);
-  const visible = view !== null;
 
   // View-only elapsed timer: counts while recording, resets otherwise.
   const [elapsed, setElapsed] = useState(0);
@@ -173,25 +254,47 @@ export function Capsule() {
     return () => window.clearInterval(id);
   }, [state]);
 
+  if (view === null) return null;
+
+  // ── Terminal toasts (rounded card, keyed so it re-mounts → rises in) ──
+  if (view === "cancelled") {
+    return (
+      <ToastCard
+        key="toast"
+        title="转录已取消"
+        buttons={<CardButton label="撤销操作" tone="accent" onClick={() => call("undo_last")} />}
+      />
+    );
+  }
+  if (view === "polish-unavailable") {
+    return (
+      <ToastCard
+        key="toast"
+        title={enhanceProgress?.message ?? "已插入原文"}
+        subtitle="未配置润色模型"
+        buttons={<CardButton label="去设置" tone="ghost" onClick={() => call("open_main_window")} />}
+      />
+    );
+  }
+  if (view === "error") {
+    return <ToastCard key="toast" title={error?.message ?? "模型出错了"} buttons={errorActions(error?.code)} />;
+  }
+
+  // ── Live pill (recording / transcribing / polishing / success) ──
   return (
     <div
+      key="pill"
       role="status"
       className={[
         "inline-flex h-12 min-w-[200px] items-center gap-2.5 px-2",
-        // Recording pins ✕/✓ to the ends (justify-between) so each round button
-        // is concentric with the pill's rounded end-arc (8px on all sides);
-        // other states center their content.
-        view === "recording" ? "justify-between" : "justify-center",
-        // No backdrop-blur: on the transparent macOS overlay window it renders as
-        // an opaque white box instead of frosting the desktop. surface-capsule is
-        // ~95% opaque dark, so the pill reads solid without it.
-        // corner-shape: iOS-style continuous (squircle) corners — curvature ramps
-        // in smoothly instead of jumping at the arc/line join. Tune the exponent:
-        // 2 = plain round, ~3 = soft iOS squircle, higher = flatter. Needs a recent
-        // WebKit; older ones ignore it and fall back to rounded-full.
+        // Recording + processing pin ✕ to the left and a matching spacer to the
+        // right, so the center content is concentric with the pill's end-arcs;
+        // success has no controls and centers its content.
+        view === "success" ? "justify-center" : "justify-between",
+        // No backdrop-blur: on the transparent macOS overlay it renders as an
+        // opaque white box. surface-capsule is ~95% opaque dark, so the pill reads
+        // solid without it. corner-shape: iOS-style continuous (squircle) corners.
         "rounded-full [corner-shape:superellipse(3)] border-0 bg-surface-capsule text-text-primary shadow-capsule",
-        "transition-all duration-200 ease-[var(--ease-out)]",
-        visible ? "opacity-100 translate-y-0" : "pointer-events-none translate-y-2 opacity-0",
       ].join(" ")}
     >
       {view === "recording" ? (
@@ -208,18 +311,23 @@ export function Capsule() {
       ) : null}
 
       {view === "transcribing" || view === "polishing" ? (
-        <div className="inline-flex items-center gap-2 px-1.5">
-          {view === "polishing" ? (
-            <span className="inline-flex text-aubergine-900" style={{ animation: "audie-twinkle 1.3s var(--ease-out) infinite" }}>
-              <Icon name="sparkles" size={15} strokeWidth={2} />
-            </span>
-          ) : (
-            <span className="inline-flex text-aubergine-900" style={{ animation: "audie-spin 0.8s linear infinite" }}>
-              <Icon name="loader" size={15} strokeWidth={2} />
-            </span>
-          )}
-          <span className={LABEL}>{view === "polishing" ? "润色中…" : "转写中…"}</span>
-        </div>
+        <>
+          <CapsuleButton name="x" label="取消" tone="danger" onClick={() => call("cancel_recording")} />
+          <div className="inline-flex items-center gap-2 px-1.5">
+            {view === "polishing" ? (
+              <span className="inline-flex text-aubergine-900" style={{ animation: "audie-twinkle 1.3s var(--ease-out) infinite" }}>
+                <Icon name="sparkles" size={15} strokeWidth={2} />
+              </span>
+            ) : (
+              <span className="inline-flex text-aubergine-900" style={{ animation: "audie-spin 0.8s linear infinite" }}>
+                <Icon name="loader" size={15} strokeWidth={2} />
+              </span>
+            )}
+            <span className={LABEL}>{view === "polishing" ? "润色中…" : "转写中…"}</span>
+          </div>
+          {/* 32px spacer mirrors the ✕ so the spinner+label stays centered. */}
+          <span className="w-8 shrink-0" aria-hidden="true" />
+        </>
       ) : null}
 
       {view === "success" ? (
@@ -228,22 +336,6 @@ export function Capsule() {
           <span className={LABEL}>已插入</span>
         </div>
       ) : null}
-
-      {view === "polish-unavailable" ? (
-        <div className="inline-flex items-center gap-2 px-2.5">
-          <Icon name="alert" size={15} strokeWidth={2} className="text-warning-text" />
-          <span className={LABEL}>{enhanceProgress?.message ?? "已插入原文"}</span>
-        </div>
-      ) : null}
-
-      {view === "error" ? (
-        <div className="inline-flex items-center gap-2 px-2.5">
-          <Icon name="alert" size={15} strokeWidth={2} className="text-danger-text" />
-          <span className="truncate text-[13px] text-danger-text">{error?.message ?? "出错了"}</span>
-        </div>
-      ) : null}
-
-      {view === "cancelled" ? <span className={LABEL}>已取消</span> : null}
     </div>
   );
 }

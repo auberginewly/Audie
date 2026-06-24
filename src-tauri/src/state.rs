@@ -97,6 +97,9 @@ fn is_legal(from: AppState, to: AppState) -> bool {
         // P0.4+ will wire Recording -> Processing -> Success/Error -> Idle.
         (Recording, Processing | Idle | Cancel) => true,
         (Processing, Success | Error | Cancel) => true,
+        // fe.8c: a terminal toast can re-enter the pipeline — 撤销操作 (from Cancel)
+        // and 重试 / 插入原文 (from Error) resume the kept take.
+        (Error | Cancel, Processing) => true,
         (Success | Error | Cancel, Idle) => true,
         _ => false,
     }

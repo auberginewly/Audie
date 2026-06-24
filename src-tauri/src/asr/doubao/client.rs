@@ -80,10 +80,17 @@ impl AsrProvider for DoubaoStreamingProvider {
         "doubao_stream"
     }
 
-    fn transcribe(&self, _audio: &AudioData) -> AppResult<String> {
-        Err(AppError::Internal(
-            "doubao streaming provider does not support batch transcription".into(),
-        ))
+    fn transcribe(&self, audio: &AudioData) -> AppResult<String> {
+        // Batch (whole-buffer) doubao for 撤销/重试 re-transcribe, so a doubao take
+        // never falls back to a different ASR model (单模型不降级). Same ws protocol
+        // as the live path via transcribe_pcm16, on a private current-thread runtime
+        // like run_streaming_runtime (we're already off the main async loop).
+        let pcm16 = pcm16_from_samples(&audio.samples, audio.sample_rate, audio.channels)?;
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| AppError::Internal(format!("build doubao runtime: {err}")))?
+            .block_on(transcribe_pcm16(&self.config, &pcm16))
     }
 
     fn transcribe_stream(&self, chunks: AudioChunkStream) -> AppResult<TranscriptStream> {
@@ -198,6 +205,9 @@ pub async fn transcribe_audio_chunks(
         }
     }
 
+    // Input is done (is_final sentinel from the audio thread, or the channel
+    // closed): tell Doubao no more audio is coming so it emits its final result.
+    log::debug!("doubao: input closed after seq={sequence}, sending final frame");
     let final_sequence = codec::final_sequence_value(sequence);
     write
         .send(Message::Binary(codec::build_final_audio(final_sequence)))
@@ -320,8 +330,14 @@ fn build_full_request_payload(request_id: &str) -> AppResult<Vec<u8>> {
 }
 
 fn audio_chunk_to_pcm16(chunk: &AudioChunk) -> AppResult<Vec<u8>> {
-    let mono = downmix_to_mono(&chunk.samples, chunk.channels);
-    let resampled = resample_linear(&mono, chunk.sample_rate, config::STREAMING_SAMPLE_RATE)?;
+    pcm16_from_samples(&chunk.samples, chunk.sample_rate, chunk.channels)
+}
+
+/// Downmix to mono, resample to Doubao's 16 kHz, and encode as little-endian
+/// 16-bit PCM. Shared by the live chunk path and the whole-buffer batch path.
+fn pcm16_from_samples(samples: &[f32], sample_rate: u32, channels: u16) -> AppResult<Vec<u8>> {
+    let mono = downmix_to_mono(samples, channels);
+    let resampled = resample_linear(&mono, sample_rate, config::STREAMING_SAMPLE_RATE)?;
     let mut pcm = Vec::with_capacity(resampled.len() * 2);
     for sample in resampled {
         let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
