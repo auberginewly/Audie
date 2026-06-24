@@ -21,9 +21,23 @@ type CapsuleView =
   | "cancelled"
   | null;
 
-// Odd count → a true center bar, so the waveform is left/right symmetric.
-const BASE_H = [9, 15, 21, 26, 21, 15, 9];
+// ── Waveform tuning (tweak these to taste) ──────────────────────────────────
+// Resting/peak bar heights in px — center tallest, mirrored to the edges.
+const BASE_H = [11, 20, 28, 34, 28, 20, 11];
 const CENTER = 3; // (7 - 1) / 2
+// Rust sends raw audio peaks (~0.05–0.4 for normal speech), so map → bar scale
+// with a boost or the bars barely move:
+//   GAIN  — overall multiplier before clamp (↑ = louder swing)
+//   GAMMA — curve <1 lifts quiet speech (↓ = punchier)
+//   FLOOR — resting scaleY when silent
+const LEVEL_GAIN = 1.8;
+const LEVEL_GAMMA = 0.55;
+const LEVEL_FLOOR = 0.1;
+
+function barScale(level: number): number {
+  const raw = Math.min(1, level * LEVEL_GAIN);
+  return LEVEL_FLOOR + (1 - LEVEL_FLOOR) * Math.pow(raw, LEVEL_GAMMA);
+}
 
 function deriveView(state: AppState, enhancePhase: string | undefined): CapsuleView {
   switch (state) {
@@ -46,15 +60,15 @@ function deriveView(state: AppState, enhancePhase: string | undefined): CapsuleV
 
 function Waveform({ levels }: { levels: LevelRing }) {
   return (
-    <div className="flex h-7 items-center gap-[3px]">
+    <div className="flex h-9 items-center gap-[3px]">
       {BASE_H.map((h, i) => {
         const d = Math.abs(i - CENTER);
-        const lvl = Math.max(0.12, Math.min(1, levels[d] ?? 0));
+        const scale = barScale(levels[d] ?? 0);
         return (
           <span
             key={i}
             className="w-[3px] rounded-full bg-aubergine-900"
-            style={{ height: `${h}px`, transform: `scaleY(${lvl})`, transition: "transform 80ms linear" }}
+            style={{ height: `${h}px`, transform: `scaleY(${scale})`, transition: "transform 80ms linear" }}
           />
         );
       })}
@@ -124,8 +138,11 @@ export function Capsule() {
       role="status"
       className={[
         "inline-flex h-12 min-w-[200px] items-center justify-center gap-2.5 px-4",
+        // No backdrop-blur: on the transparent macOS overlay window it renders as
+        // an opaque white box instead of frosting the desktop. surface-capsule is
+        // ~95% opaque dark, so the pill reads solid without it.
         "rounded-full border-0 bg-surface-capsule text-text-primary shadow-capsule",
-        "backdrop-blur-lg transition-all duration-200 ease-[var(--ease-out)]",
+        "transition-all duration-200 ease-[var(--ease-out)]",
         visible ? "opacity-100 translate-y-0" : "pointer-events-none translate-y-2 opacity-0",
       ].join(" ")}
     >
