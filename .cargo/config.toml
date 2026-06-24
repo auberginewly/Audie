@@ -1,0 +1,23 @@
+# Dev-only code signing for `tauri dev` (which runs `cargo run`).
+#
+# The cargo-built dev binary (target/debug/audie) is ad-hoc/unsigned, and its
+# signature changes on every rebuild. macOS pins a Keychain "Always Allow" ACL to
+# the app's designated requirement (derived from the signature), so an unstable
+# signature means the ACL never matches twice — the user is re-prompted for the
+# Keychain password on every restart/rebuild.
+#
+# Fix: run every freshly-built dev binary through scripts/dev-sign-run.sh, which
+# codesigns it with a stable Apple Development identity (designated requirement
+# pinned to the bundle id + signing cert, stable across rebuilds with that cert)
+# and then execs it. Contributors without the cert fall through and run unsigned.
+#
+# Cargo resolves a relative runner path against the directory that holds .cargo/
+# (the repo root), NOT the cwd — so "scripts/dev-sign-run.sh" resolves to
+# <repo-root>/scripts/dev-sign-run.sh. macOS only; the script is a no-op (plain
+# exec) on other platforms.
+
+[target.aarch64-apple-darwin]
+runner = ["scripts/dev-sign-run.sh"]
+
+[target.x86_64-apple-darwin]
+runner = ["scripts/dev-sign-run.sh"]

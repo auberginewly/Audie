@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local-only codesigning identity for the dev runner (scripts/dev-sign-run.sh).
+# Contains a personal cert name/hash — never commit. The runner + .cargo/config.toml
+# ARE committed (contributor-safe; they fall back to unsigned without an identity).
+.cargo/sign-identity
