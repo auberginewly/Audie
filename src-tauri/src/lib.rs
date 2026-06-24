@@ -729,6 +729,10 @@ fn convert_overlay_to_panel(app: &tauri::App) {
     panel.set_becomes_key_only_if_needed(true);
     // Receive mouse-moved events so the ✕/✓ buttons get :hover states.
     panel.set_accepts_mouse_moved_events(true);
+    // NSPanel hides on app deactivation by default. Our overlay is non-activating
+    // so Audie is never the active app — without this it would hide+show (flicker)
+    // on every Space/app switch.
+    panel.set_hides_on_deactivate(false);
     // Above app windows; visible across spaces and over fullscreen apps.
     panel.set_level(25); // NSStatusWindowLevel
     panel.set_collection_behaviour(
