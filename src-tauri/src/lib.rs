@@ -1,9 +1,9 @@
 // Tauri entry. `main.rs` only calls `run()` — all setup happens here.
 //
-// P0.1 wiring:
-//   - global-shortcut plugin → dispatches into `HotkeyRegistry`
+// Trigger wiring (P3.9):
+//   - Platform CGEventTap → HotkeyEvent::Pressed → handle_hotkey toggle
 //   - Press → state Idle→Recording → show overlay window
-//   - Release → state Recording→Idle → hide overlay window
+//   - Second press → Recording→Processing → transcribe/inject
 //   - Overlay window positioned bottom-center, click-through
 
 mod asr;
@@ -22,7 +22,6 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
-use tauri_plugin_global_shortcut::ShortcutState;
 
 use crate::asr::doubao::config as doubao_config;
 use crate::asr::{AudioData, TranscriptStream};
@@ -31,7 +30,7 @@ use crate::managers::audio::AudioManager;
 use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
 use crate::managers::inject::InjectManager;
 use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
-use crate::platform::{current_platform, HotkeyCallback, HotkeyEvent, HotkeyRegistry, Platform};
+use crate::platform::{current_platform, HotkeyCallback, Platform};
 use crate::state::{AppState, StateMachine};
 
 const SUCCESS_HOLD_MS: u64 = 150;
@@ -142,22 +141,7 @@ pub fn run() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
 
-    let registry = Arc::new(HotkeyRegistry::default());
-    let registry_for_handler = registry.clone();
-    let registry_for_setup = registry.clone();
-
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |_app, shortcut, event| {
-                    let hk = match event.state() {
-                        ShortcutState::Pressed => HotkeyEvent::Pressed,
-                        ShortcutState::Released => HotkeyEvent::Released,
-                    };
-                    registry_for_handler.dispatch(shortcut, hk);
-                })
-                .build(),
-        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -223,8 +207,7 @@ pub fn run() {
             let audio = Arc::new(AudioManager::new());
             let transcription = Arc::new(TranscriptionManager::new());
             let enhance = Arc::new(EnhanceManager::new());
-            let platform: Arc<dyn Platform> =
-                Arc::from(current_platform(registry_for_setup.clone()));
+            let platform: Arc<dyn Platform> = Arc::from(current_platform());
             let inject = Arc::new(InjectManager::new(platform.clone()));
 
             // This is the backend object graph for the P1 pipeline:
@@ -239,7 +222,6 @@ pub fn run() {
             app.manage(transcription);
             app.manage(enhance);
             app.manage(inject);
-            app.manage(registry_for_setup.clone());
             app.manage(platform.clone());
             app.manage(Arc::new(parking_lot::Mutex::new(None::<TranscriptStream>)));
             // fe.8c: last-take store (undo / retry / insert-raw) + take generation
@@ -267,12 +249,12 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Build the press/release callback for the global hotkey. Resolves managers
-/// off the app state instead of capturing clones, so it can be rebuilt verbatim
-/// when the hotkey changes — see `commands::update_settings`.
+/// Build the trigger-tap callback. Resolves managers off the app state instead of
+/// capturing clones, so it can be rebuilt verbatim when the trigger changes —
+/// see `commands::update_settings`.
 pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
     let app = app.clone();
-    Box::new(move |event| {
+    Box::new(move || {
         let state = app.state::<Arc<StateMachine>>();
         let audio = app.state::<Arc<AudioManager>>();
         let transcription = app.state::<Arc<TranscriptionManager>>();
@@ -292,18 +274,14 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
             last_take: last_take.inner(),
             take_gen: take_gen.inner(),
         };
-        handle_hotkey(&ctx, event);
+        handle_hotkey(&ctx);
     })
 }
 
-fn handle_hotkey(ctx: &HotkeyContext<'_>, event: HotkeyEvent) {
-    // Toggle control model: each hotkey *press* starts a take (from Idle) or
-    // finishes it (from Recording). Key-up is ignored — holding no longer
-    // auto-stops; the user presses again to finish. A press mid-pipeline
-    // (Processing/Success/Error/Cancel) is a no-op.
-    if !matches!(event, HotkeyEvent::Pressed) {
-        return;
-    }
+fn handle_hotkey(ctx: &HotkeyContext<'_>) {
+    // Toggle control model: each trigger tap starts a take (from Idle) or finishes
+    // it (from Recording). A tap mid-pipeline (Processing/Success/Error/Cancel) is
+    // a no-op.
     match ctx.state.current() {
         AppState::Idle => start_recording(ctx),
         AppState::Recording => finish_recording(ctx),

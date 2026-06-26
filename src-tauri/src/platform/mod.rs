@@ -8,52 +8,18 @@
 // P0.1 only uses `register_hotkey` / `unregister_all_hotkeys`. inject_text lands
 // in P0.4; keychain methods are filled in during P1.
 
-use std::{collections::HashMap, sync::Arc};
-
-use parking_lot::Mutex;
 use tauri::AppHandle;
-use tauri_plugin_global_shortcut::Shortcut;
 
 use crate::error::AppResult;
 
-/// Callback fired on hotkey press / release.
-pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send + Sync + 'static>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HotkeyEvent {
-    Pressed,
-    Released,
-}
-
-/// Shared dispatch table — the global-shortcut plugin's single `with_handler`
-/// closure dispatches into this registry by looking up the parsed `Shortcut`.
-/// `MacosPlatform::register_hotkey` inserts; the plugin handler reads.
-#[derive(Default)]
-pub struct HotkeyRegistry {
-    callbacks: Mutex<HashMap<Shortcut, HotkeyCallback>>,
-}
-
-impl HotkeyRegistry {
-    pub fn insert(&self, shortcut: Shortcut, callback: HotkeyCallback) {
-        self.callbacks.lock().insert(shortcut, callback);
-    }
-
-    pub fn dispatch(&self, shortcut: &Shortcut, event: HotkeyEvent) {
-        if let Some(callback) = self.callbacks.lock().get(shortcut) {
-            callback(event);
-        }
-    }
-
-    #[allow(dead_code)] // Used by Platform::unregister_all_hotkeys in later slices.
-    pub fn clear(&self) {
-        self.callbacks.lock().clear();
-    }
-}
+/// Callback fired on a trigger tap (fn / single / combo). Tap-toggle only — there
+/// is no separate release event since the control model is press-to-toggle.
+pub type HotkeyCallback = Box<dyn Fn() + Send + Sync + 'static>;
 
 #[allow(dead_code)] // Trait surface defined whole per SPEC §3.4; later slices fill in callers.
 pub trait Platform: Send + Sync {
-    /// Register a global hotkey combo (e.g. "Ctrl+Shift+Space"). The callback
-    /// fires on both press and release so press-to-talk works.
+    /// Register the trigger key (e.g. "Fn", "F13", "Ctrl+Shift+Space"). The
+    /// callback fires once per tap (press-to-toggle).
     fn register_hotkey(
         &self,
         app: &AppHandle,
@@ -111,19 +77,19 @@ pub trait Platform: Send + Sync {
 }
 
 #[cfg(target_os = "macos")]
-pub fn current_platform(registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
-    Box::new(macos::MacosPlatform::new(registry))
+pub fn current_platform() -> Box<dyn Platform> {
+    Box::new(macos::MacosPlatform::new())
 }
 
 #[cfg(target_os = "windows")]
-pub fn current_platform(_registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
+pub fn current_platform() -> Box<dyn Platform> {
     // Windows keeps the same trait shape so the Rust pipeline remains portable;
     // the concrete Win32/Credential Manager calls are intentionally deferred to P4.
     Box::new(windows::WindowsPlatform::new())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn current_platform(_registry: Arc<HotkeyRegistry>) -> Box<dyn Platform> {
+pub fn current_platform() -> Box<dyn Platform> {
     panic!("unsupported platform — Audie targets macOS (P0–P3) and Windows (P4).")
 }
 

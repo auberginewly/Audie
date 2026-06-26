@@ -1,14 +1,14 @@
 // macOS implementation of trait Platform.
 //
-// P0.1: hotkey via tauri-plugin-global-shortcut. The callback is parked in the
-// shared HotkeyRegistry — the plugin's `with_handler` (built in lib.rs) is the
-// single entry that dispatches into the registry.
+// P3.9: the trigger key (fn / single / combo) is driven by a CGEventTap on a
+// dedicated run-loop thread — global-shortcut is gone. A clean fn "tap" or a
+// matching combo keyDown fires the same HotkeyEvent::Pressed callback. Needs
+// Input Monitoring.
 //
 // P0.4 adds clipboard-method inject (save → write → Cmd+V → restore). P1 adds
 // Keychain Services for BYOK secrets.
 
 use std::ffi::c_void;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use core_foundation::base::{CFType, TCFType};
@@ -34,14 +34,13 @@ use security_framework_sys::keychain_item::{
 };
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_macos_permissions::{check_microphone_permission, request_microphone_permission};
 
-use super::{HotkeyCallback, HotkeyEvent, HotkeyRegistry, Platform};
+use super::{HotkeyCallback, Platform};
 use crate::error::{AppError, AppResult};
 
+#[derive(Default)]
 pub struct MacosPlatform {
-    registry: Arc<HotkeyRegistry>,
     // The app that was frontmost when recording started. Clicking an overlay
     // button makes Audie frontmost (stealing key focus), so inject restores this
     // app first or the synthesized Cmd+V would paste into nothing. Voxt's pattern.
@@ -49,55 +48,31 @@ pub struct MacosPlatform {
     // P3.8 dev-only trigger-key probe: holds the run loop (to stop it cross-thread)
     // and the thread the CGEventTap runs on. None when not probing.
     probe: Mutex<Option<EventTapHandle>>,
-    // P3.9 production trigger (M1: fn). Same tap+runloop machinery as the probe,
-    // but it drives the real toggle callback instead of emitting raw events.
+    // P3.9 production trigger: fn / single / combo, all via one CGEventTap that
+    // drives the real toggle callback. None when no trigger is registered.
     trigger: Mutex<Option<EventTapHandle>>,
 }
 
 impl MacosPlatform {
-    pub fn new(registry: Arc<HotkeyRegistry>) -> Self {
-        Self {
-            registry,
-            focus_target_pid: Mutex::new(None),
-            probe: Mutex::new(None),
-            trigger: Mutex::new(None),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
 impl Platform for MacosPlatform {
     fn register_hotkey(
         &self,
-        app: &AppHandle,
+        _app: &AppHandle,
         combo: &str,
         callback: HotkeyCallback,
     ) -> AppResult<()> {
-        // P3.9 (M1): fn drives a CGEventTap trigger — global-shortcut can't register
-        // a bare modifier. Classic combos still take the global-shortcut path until
-        // M2 unifies everything onto the tap. Both end up calling the same callback.
-        if combo.eq_ignore_ascii_case("fn") {
-            return self.start_fn_trigger(callback);
-        }
-
-        let shortcut: Shortcut = combo
-            .parse()
-            .map_err(|err| AppError::Internal(format!("invalid hotkey combo {combo:?}: {err}")))?;
-
-        self.registry.insert(shortcut, callback);
-
-        app.global_shortcut()
-            .register(shortcut)
-            .map_err(|err| AppError::Internal(format!("failed to register hotkey: {err}")))?;
-
-        Ok(())
+        // P3.9: one CGEventTap handles every trigger shape (fn / single / combo).
+        let spec = parse_trigger(combo)?;
+        self.start_trigger(spec, callback)
     }
 
-    fn unregister_all_hotkeys(&self, app: &AppHandle) -> AppResult<()> {
-        self.stop_fn_trigger();
-        if let Err(err) = app.global_shortcut().unregister_all() {
-            log::warn!("failed to unregister all shortcuts: {err}");
-        }
-        self.registry.clear();
+    fn unregister_all_hotkeys(&self, _app: &AppHandle) -> AppResult<()> {
+        self.stop_trigger();
         Ok(())
     }
 
@@ -282,13 +257,14 @@ impl Platform for MacosPlatform {
     }
 }
 
-// ---- P3.9 production trigger (M1: fn) ---------------------------------------
+// ---- P3.9 production trigger (fn / single / combo) --------------------------
 //
-// Upgrades the dev probe into the real trigger: a listen-only CGEventTap watches
-// the fn modifier and fires the existing toggle callback on a clean tap. fn has
-// no app-visible effect once the user disables "按🌐键用来" (onboarding, P3.12),
-// so listen-only is enough — no event to swallow. Combos join this tap in M2.
-// Needs Input Monitoring; a missing grant returns Permission, never panics.
+// One CGEventTap on a dedicated run-loop thread replaces global-shortcut. A clean
+// fn "tap" or a matching combo/single keyDown fires HotkeyEvent::Pressed. The tap
+// is listen-only: fn is inert once the user disables "按🌐键用来" (P3.12), and a
+// combo trigger may also reach the foreground app — an accepted simplification vs
+// an active tap that swallows (which would risk system-wide input jank). Needs
+// Input Monitoring; a missing grant returns Permission, never panics.
 
 /// Max fn hold that still counts as a "tap": longer presses (resting on fn) and
 /// fn+key combos don't toggle. SPEC §5.8 P3.9.
@@ -300,9 +276,121 @@ struct FnTapState {
     other_pressed: bool,
 }
 
+/// Mask a CGEvent's flags down to the modifier bits a trigger can require, so
+/// caps-lock / numpad / coalescing bits don't break combo matching.
+fn relevant_mods(flags: CGEventFlags) -> CGEventFlags {
+    flags
+        & (CGEventFlags::CGEventFlagControl
+            | CGEventFlags::CGEventFlagShift
+            | CGEventFlags::CGEventFlagAlternate
+            | CGEventFlags::CGEventFlagCommand
+            | CGEventFlags::CGEventFlagSecondaryFn)
+}
+
+/// A parsed trigger: bare fn (tap semantics) or a main key with exact modifiers.
+#[derive(Clone, Copy)]
+enum TriggerSpec {
+    Fn,
+    Combo {
+        keycode: CGKeyCode,
+        mods: CGEventFlags,
+    },
+}
+
+/// Parse a stored trigger string ("Fn" / "F13" / "Ctrl+Shift+Space") into a spec.
+/// Unknown keys / no main key are `Internal` errors so validation can reject them.
+fn parse_trigger(combo: &str) -> AppResult<TriggerSpec> {
+    if combo.eq_ignore_ascii_case("fn") {
+        return Ok(TriggerSpec::Fn);
+    }
+    let mut mods = CGEventFlags::empty();
+    let mut main: Option<CGKeyCode> = None;
+    for part in combo.split('+') {
+        let token = part.trim();
+        if token.is_empty() {
+            continue;
+        }
+        match token.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods |= CGEventFlags::CGEventFlagControl,
+            "alt" | "opt" | "option" => mods |= CGEventFlags::CGEventFlagAlternate,
+            "shift" => mods |= CGEventFlags::CGEventFlagShift,
+            "cmd" | "command" | "meta" | "super" => mods |= CGEventFlags::CGEventFlagCommand,
+            _ => {
+                let keycode = keycode_for(token)
+                    .ok_or_else(|| AppError::Internal(format!("unknown trigger key: {token:?}")))?;
+                if main.is_some() {
+                    return Err(AppError::Internal(format!(
+                        "trigger {combo:?} has more than one main key"
+                    )));
+                }
+                main = Some(keycode);
+            }
+        }
+    }
+    match main {
+        Some(keycode) => Ok(TriggerSpec::Combo { keycode, mods }),
+        None => Err(AppError::Internal(format!(
+            "trigger {combo:?} has no main key"
+        ))),
+    }
+}
+
+/// Virtual keycodes (kVK_*) for the keys a trigger may use. Letters/digits are
+/// intentionally omitted — listen-only doesn't swallow, so they'd also type into
+/// apps; the M3 recorder steers users to fn / function keys instead.
+fn keycode_for(name: &str) -> Option<CGKeyCode> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "space" => 49,
+        "return" | "enter" => 36,
+        "tab" => 48,
+        "escape" | "esc" => 53,
+        "left" => 123,
+        "right" => 124,
+        "down" => 125,
+        "up" => 126,
+        "f1" => 122,
+        "f2" => 120,
+        "f3" => 99,
+        "f4" => 118,
+        "f5" => 96,
+        "f6" => 97,
+        "f7" => 98,
+        "f8" => 100,
+        "f9" => 101,
+        "f10" => 109,
+        "f11" => 103,
+        "f12" => 111,
+        "f13" => 105,
+        "f14" => 107,
+        "f15" => 113,
+        "f16" => 106,
+        "f17" => 64,
+        "f18" => 79,
+        "f19" => 80,
+        "f20" => 90,
+        _ => return None,
+    })
+}
+
+/// A combo/single trigger fires on the main key's keyDown with exactly its
+/// modifiers held (so Ctrl+Shift+Space doesn't fire on Ctrl+Space).
+fn detect_combo(
+    keycode: CGKeyCode,
+    mods: CGEventFlags,
+    event_type: CGEventType,
+    event: &CGEvent,
+) -> bool {
+    if !matches!(event_type, CGEventType::KeyDown) {
+        return false;
+    }
+    let pressed = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as CGKeyCode;
+    pressed == keycode && relevant_mods(event.get_flags()) == mods
+}
+
 impl MacosPlatform {
-    fn start_fn_trigger(&self, callback: HotkeyCallback) -> AppResult<()> {
-        // Idempotent: re-registering the live trigger is a no-op.
+    /// Start the production trigger tap for `spec`. Idempotent; needs Input
+    /// Monitoring (a denial returns Permission so startup can keep going).
+    fn start_trigger(&self, spec: TriggerSpec, callback: HotkeyCallback) -> AppResult<()> {
         if self.trigger.lock().is_some() {
             return Ok(());
         }
@@ -322,10 +410,10 @@ impl MacosPlatform {
         }
 
         // Same tap-on-a-runloop-thread pattern as the dev probe; hand the run loop
-        // back so stop_fn_trigger can stop it cross-thread.
+        // back so stop_trigger can stop it cross-thread.
         let (tx, rx) = std::sync::mpsc::channel::<Option<CFRunLoop>>();
         let thread = std::thread::Builder::new()
-            .name("fn-trigger".into())
+            .name("trigger".into())
             .spawn(move || {
                 let state = Mutex::new(FnTapState::default());
                 let tap = CGEventTap::new(
@@ -338,8 +426,14 @@ impl MacosPlatform {
                         CGEventType::FlagsChanged,
                     ],
                     move |_proxy, event_type, event| {
-                        if detect_fn_tap(&state, event_type, event) {
-                            callback(HotkeyEvent::Pressed);
+                        let fire = match spec {
+                            TriggerSpec::Fn => detect_fn_tap(&state, event_type, event),
+                            TriggerSpec::Combo { keycode, mods } => {
+                                detect_combo(keycode, mods, event_type, event)
+                            }
+                        };
+                        if fire {
+                            callback();
                         }
                         None
                     },
@@ -364,9 +458,9 @@ impl MacosPlatform {
                 }
                 tap.enable();
                 let _ = tx.send(Some(runloop));
-                CFRunLoop::run_current(); // blocks until stop_fn_trigger
+                CFRunLoop::run_current(); // blocks until stop_trigger
             })
-            .map_err(|err| AppError::Internal(format!("spawn fn-trigger thread: {err}")))?;
+            .map_err(|err| AppError::Internal(format!("spawn trigger thread: {err}")))?;
 
         match rx.recv() {
             Ok(Some(runloop)) => {
@@ -374,25 +468,25 @@ impl MacosPlatform {
                     runloop,
                     thread: Some(thread),
                 });
-                log::info!("fn trigger started");
+                log::info!("trigger started");
                 Ok(())
             }
             _ => {
                 let _ = thread.join();
                 Err(AppError::Internal(
-                    "failed to create CGEventTap for fn trigger".into(),
+                    "failed to create CGEventTap for trigger".into(),
                 ))
             }
         }
     }
 
-    fn stop_fn_trigger(&self) {
+    fn stop_trigger(&self) {
         if let Some(mut handle) = self.trigger.lock().take() {
             handle.runloop.stop();
             if let Some(thread) = handle.thread.take() {
                 let _ = thread.join();
             }
-            log::info!("fn trigger stopped");
+            log::info!("trigger stopped");
         }
     }
 }
@@ -1157,6 +1251,58 @@ mod tests {
             FnSignal::FnUp,
             t2 + Duration::from_millis(80)
         ));
+    }
+
+    // ---- P3.9 trigger string parsing ---------------------------------------
+
+    #[test]
+    fn parse_fn_is_case_insensitive() {
+        assert!(matches!(parse_trigger("fn").unwrap(), TriggerSpec::Fn));
+        assert!(matches!(parse_trigger("Fn").unwrap(), TriggerSpec::Fn));
+        assert!(matches!(parse_trigger("FN").unwrap(), TriggerSpec::Fn));
+    }
+
+    #[test]
+    fn parse_combo_collects_mods_and_main_key() {
+        match parse_trigger("Ctrl+Shift+Space").unwrap() {
+            TriggerSpec::Combo { keycode, mods } => {
+                assert_eq!(keycode, 49); // kVK_Space
+                assert_eq!(
+                    mods,
+                    CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagShift
+                );
+            }
+            TriggerSpec::Fn => panic!("expected combo"),
+        }
+    }
+
+    #[test]
+    fn parse_single_function_key_has_no_mods() {
+        match parse_trigger("F13").unwrap() {
+            TriggerSpec::Combo { keycode, mods } => {
+                assert_eq!(keycode, 105); // kVK_F13
+                assert_eq!(mods, CGEventFlags::empty());
+            }
+            TriggerSpec::Fn => panic!("expected combo"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_key_and_missing_main() {
+        assert!(parse_trigger("Ctrl+Q").is_err()); // letters intentionally unsupported
+        assert!(parse_trigger("Ctrl+Shift").is_err()); // no main key
+    }
+
+    #[test]
+    fn relevant_mods_masks_capslock_noise() {
+        // capslock (AlphaShift) must not leak into combo matching.
+        let noisy = CGEventFlags::CGEventFlagControl
+            | CGEventFlags::CGEventFlagShift
+            | CGEventFlags::CGEventFlagAlphaShift;
+        assert_eq!(
+            relevant_mods(noisy),
+            CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagShift
+        );
     }
 
     #[test]
