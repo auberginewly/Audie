@@ -348,8 +348,9 @@ fn parse_trigger(combo: &str) -> AppResult<TriggerSpec> {
 }
 
 /// Virtual keycodes (kVK_*) for the keys a trigger may use. Letters/digits are
-/// intentionally omitted — listen-only doesn't swallow, so they'd also type into
-/// apps; the M3 recorder steers users to fn / function keys instead.
+/// allowed only as the main key of a *combo* — the recorder requires a modifier,
+/// so they never fire bare (a bare letter would also type, since listen-only taps
+/// don't swallow). fn / function keys are the safe bare triggers.
 fn keycode_for(name: &str) -> Option<CGKeyCode> {
     Some(match name.to_ascii_lowercase().as_str() {
         "space" => 49,
@@ -380,6 +381,43 @@ fn keycode_for(name: &str) -> Option<CGKeyCode> {
         "f18" => 79,
         "f19" => 80,
         "f20" => 90,
+        // kVK_ANSI_* letters + digits (US layout) — combo main keys.
+        "a" => 0,
+        "b" => 11,
+        "c" => 8,
+        "d" => 2,
+        "e" => 14,
+        "f" => 3,
+        "g" => 5,
+        "h" => 4,
+        "i" => 34,
+        "j" => 38,
+        "k" => 40,
+        "l" => 37,
+        "m" => 46,
+        "n" => 45,
+        "o" => 31,
+        "p" => 35,
+        "q" => 12,
+        "r" => 15,
+        "s" => 1,
+        "t" => 17,
+        "u" => 32,
+        "v" => 9,
+        "w" => 13,
+        "x" => 7,
+        "y" => 16,
+        "z" => 6,
+        "0" => 29,
+        "1" => 18,
+        "2" => 19,
+        "3" => 20,
+        "4" => 21,
+        "5" => 23,
+        "6" => 22,
+        "7" => 26,
+        "8" => 28,
+        "9" => 25,
         _ => return None,
     })
 }
@@ -1301,8 +1339,23 @@ mod tests {
 
     #[test]
     fn parse_rejects_unknown_key_and_missing_main() {
-        assert!(parse_trigger("Ctrl+Q").is_err()); // letters intentionally unsupported
+        assert!(parse_trigger("Ctrl+F21").is_err()); // F21 is out of the supported range
         assert!(parse_trigger("Ctrl+Shift").is_err()); // no main key
+    }
+
+    #[test]
+    fn parse_accepts_letter_combo() {
+        // Letters are valid as a combo main key (the recorder requires a modifier).
+        match parse_trigger("Ctrl+Shift+D").unwrap() {
+            TriggerSpec::Combo { keycode, mods } => {
+                assert_eq!(keycode, 2); // kVK_ANSI_D
+                assert_eq!(
+                    mods,
+                    CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagShift
+                );
+            }
+            TriggerSpec::Fn => panic!("expected combo"),
+        }
     }
 
     #[test]
