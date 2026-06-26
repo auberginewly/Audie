@@ -813,6 +813,7 @@ fn doubao_streaming_config(app: &AppHandle) -> Option<TranscriptionConfig> {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
     doubao_streaming_config_from_settings(
+        &settings.asr_provider,
         settings.doubao_endpoint,
         settings.doubao_resource_id,
         |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
@@ -820,10 +821,17 @@ fn doubao_streaming_config(app: &AppHandle) -> Option<TranscriptionConfig> {
 }
 
 fn doubao_streaming_config_from_settings(
+    asr_provider: &str,
     endpoint: String,
     resource_id: String,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> Option<TranscriptionConfig> {
+    // Doubao streaming is opt-in: it only kicks in when the user explicitly picks
+    // doubao in the model selector (asr_provider == "doubao_stream"). A saved token
+    // alone must NOT hijack every recording — picking Groq/Whisper has to win.
+    if asr_provider != "doubao_stream" {
+        return None;
+    }
     let api_key_or_access_token = read_secret(doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN)?;
     let app_id = read_secret(doubao_config::SECRET_APP_ID);
 
@@ -1227,6 +1235,7 @@ mod tests {
         let mut requested = Vec::new();
 
         let config = doubao_streaming_config_from_settings(
+            "doubao_stream",
             "wss://example.test".into(),
             "resource".into(),
             |key_id| {
@@ -1243,10 +1252,31 @@ mod tests {
     }
 
     #[test]
+    fn doubao_streaming_config_skips_when_provider_not_doubao_stream() {
+        let mut requested = Vec::new();
+
+        // A saved token must not activate streaming when the user picked another
+        // provider — and we must not even touch the keychain in that case.
+        let config = doubao_streaming_config_from_settings(
+            "groq",
+            "wss://example.test".into(),
+            "resource".into(),
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        );
+
+        assert!(config.is_none());
+        assert!(requested.is_empty());
+    }
+
+    #[test]
     fn doubao_streaming_config_reads_token_then_optional_app_id_by_default() {
         let mut requested = Vec::new();
 
         let config = doubao_streaming_config_from_settings(
+            "doubao_stream",
             "wss://example.test".into(),
             "resource".into(),
             |key_id| {

@@ -2,7 +2,8 @@
 // cards. The active pick maps to the real provider enum where one exists; rating/
 // tags/configured-status are mock (see models.ts + plan).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import type { UseSettings } from "../../hooks/useSettings";
 import { Badge, Button, Icon, Segmented } from "../ui";
@@ -13,11 +14,13 @@ type Source = "all" | "cloud" | "local";
 
 function ModelCard({
   m,
+  status,
   inUse,
   onPick,
   onConfigure,
 }: {
   m: ModelMeta;
+  status: ModelMeta["status"];
   inUse: boolean;
   onPick: () => void;
   onConfigure: () => void;
@@ -30,7 +33,7 @@ function ModelCard({
           <Badge tone="neutral">{m.source === "local" ? "本地" : "云端"}</Badge>
           {inUse ? (
             <Badge tone="accent">使用中</Badge>
-          ) : m.status === "configured" ? (
+          ) : status === "configured" ? (
             <Badge tone="success">已配置</Badge>
           ) : (
             <Badge tone="neutral">未配置</Badge>
@@ -38,7 +41,7 @@ function ModelCard({
         </div>
         <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{m.model}</div>
       </div>
-      {!inUse && m.status === "configured" ? (
+      {!inUse && status === "configured" ? (
         <Button size="sm" variant="secondary" onClick={onPick}>
           选用
         </Button>
@@ -56,16 +59,38 @@ export function ModelSection({ data }: { data: UseSettings }) {
   const [source, setSource] = useState<Source>("all");
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
 
+  // Real "已配置" state for doubao: presence-check the streaming token (no-read,
+  // never unlocks the keychain) so the badge can't claim configured when it isn't.
+  // The mock `status` on every other card is visual-only (see models.ts).
+  const [doubaoConfigured, setDoubaoConfigured] = useState<boolean | null>(null);
+  const refreshDoubao = () => {
+    invoke("has_secret", { keyId: "doubao_access_token" })
+      .then((raw) => setDoubaoConfigured(typeof raw === "boolean" ? raw : false))
+      .catch(() => {});
+  };
+  useEffect(() => {
+    refreshDoubao();
+  }, []);
+
   // Active pick: ASR derives from the real provider; LLM is visual (one slot).
   const [pickedLlm, setPickedLlm] = useState("deepseek");
   const pickedAsr = settings ? modelIdForAsrProvider(settings.asr_provider) : "doubao";
   const picked: Record<ModelType, string> = { asr: pickedAsr, llm: pickedLlm };
 
+  // doubao's badge tracks the keychain; all others keep their mock status.
+  const statusOf = (m: ModelMeta): ModelMeta["status"] =>
+    m.id === "doubao" && doubaoConfigured !== null
+      ? doubaoConfigured
+        ? "configured"
+        : "unconfigured"
+      : m.status;
+
   const onPick = (m: ModelMeta) => {
     if (m.type === "asr") {
       const provider = asrProviderForModelId(m.id);
+      // doubao → "doubao_stream"; the backend activates streaming only when this
+      // is selected AND a token exists, otherwise it surfaces a Provider error.
       if (provider) update({ asr_provider: provider });
-      // doubao = streaming overlay (auto when token set) → visual only
     } else {
       setPickedLlm(m.id);
       update({ llm_provider: "openai_compatible" });
@@ -108,6 +133,7 @@ export function ModelSection({ data }: { data: UseSettings }) {
             <ModelCard
               key={m.id}
               m={m}
+              status={statusOf(m)}
               inUse={picked[m.type] === m.id}
               onPick={() => onPick(m)}
               onConfigure={() => setConfigModel(m)}
@@ -124,7 +150,14 @@ export function ModelSection({ data }: { data: UseSettings }) {
         )}
       </div>
 
-      <ModelConfigDialog model={configModel} data={data} onClose={() => setConfigModel(null)} />
+      <ModelConfigDialog
+        model={configModel}
+        data={data}
+        onClose={() => {
+          setConfigModel(null);
+          refreshDoubao(); // a just-saved token should flip the badge to 已配置
+        }}
+      />
     </section>
   );
 }

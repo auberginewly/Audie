@@ -28,11 +28,13 @@ export const MODELS: ModelMeta[] = [
   { id: "openai", name: "OpenAI", type: "llm", source: "cloud", icon: "sparkles", model: "gpt-4o-mini", rating: "4.7", tags: ["云端", "兼容"], status: "unconfigured" },
 ];
 
-// Design model id → backend ASR provider enum (null = no real slot, e.g. doubao
-// streaming is auto when its token is set, so picking it is visual-only).
+// Design model id → backend ASR provider enum (null = card with no real slot).
+// Picking doubao now selects the streaming provider explicitly; the backend only
+// activates streaming when asr_provider == "doubao_stream" AND a token is stored.
 export function asrProviderForModelId(id: string): AsrProviderId | null {
   if (id === "groq") return "groq";
   if (id === "whisper-local") return "whisper_cpp";
+  if (id === "doubao") return "doubao_stream";
   return null;
 }
 
@@ -40,5 +42,6 @@ export function asrProviderForModelId(id: string): AsrProviderId | null {
 export function modelIdForAsrProvider(provider: AsrProviderId): string {
   if (provider === "groq") return "groq";
   if (provider === "whisper_cpp") return "whisper-local";
+  if (provider === "doubao_stream") return "doubao";
   return "doubao"; // openai ASR has no card — fall back to the streaming default
 }

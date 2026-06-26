@@ -178,12 +178,7 @@ fn read_bool_setting(app: &AppHandle, key: &str, default: bool) -> bool {
 pub fn load_settings(app: &AppHandle) -> Settings {
     Settings {
         hotkey: load_hotkey(app),
-        asr_provider: read_provider_setting(
-            app,
-            KEY_ASR_PROVIDER,
-            DEFAULT_ASR_PROVIDER,
-            &available_asr_providers(),
-        ),
+        asr_provider: read_asr_provider_setting(app),
         llm_provider: read_provider_setting(
             app,
             KEY_LLM_PROVIDER,
@@ -232,6 +227,23 @@ fn read_provider_setting(
         stored
     } else {
         default.to_string()
+    }
+}
+
+/// ASR is read separately because `doubao_stream` is a valid, selectable choice
+/// that's deliberately absent from `available_asr_providers` (streaming-only, not
+/// a batch provider). The generic reader would otherwise reset it to the default
+/// on every load — which silently undid picking doubao.
+fn read_asr_provider_setting(app: &AppHandle) -> String {
+    let stored = read_string_setting(app, KEY_ASR_PROVIDER, DEFAULT_ASR_PROVIDER);
+    if stored == "doubao_stream"
+        || available_asr_providers()
+            .iter()
+            .any(|provider| provider.id == stored)
+    {
+        stored
+    } else {
+        DEFAULT_ASR_PROVIDER.to_string()
     }
 }
 
@@ -376,9 +388,13 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
             settings.hotkey
         )));
     }
-    if !available_asr_providers()
-        .iter()
-        .any(|provider| provider.id == settings.asr_provider)
+    // `doubao_stream` is a real, selectable ASR choice (the model picker writes it)
+    // but it's streaming-only, not a batch provider, so it stays out of
+    // `available_asr_providers` / `list_asr_providers`. Accept it explicitly here.
+    if settings.asr_provider != "doubao_stream"
+        && !available_asr_providers()
+            .iter()
+            .any(|provider| provider.id == settings.asr_provider)
     {
         return Err(AppError::Internal(format!(
             "unsupported ASR provider: {}",
