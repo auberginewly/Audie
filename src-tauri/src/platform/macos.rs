@@ -299,10 +299,13 @@ fn relevant_mods(flags: CGEventFlags) -> CGEventFlags {
             | CGEventFlags::CGEventFlagSecondaryFn)
 }
 
-/// A parsed trigger: bare fn (tap semantics) or a main key with exact modifiers.
+/// A parsed trigger: a bare modifier (fn / shift / ctrl / alt / cmd — fires on a
+/// clean tap) or a main key with exact modifiers (mods may be empty for a bare key).
 #[derive(Clone, Copy)]
 enum TriggerSpec {
-    Fn,
+    ModifierTap {
+        flag: CGEventFlags,
+    },
     Combo {
         keycode: CGKeyCode,
         mods: CGEventFlags,
@@ -313,7 +316,9 @@ enum TriggerSpec {
 /// Unknown keys / no main key are `Internal` errors so validation can reject them.
 fn parse_trigger(combo: &str) -> AppResult<TriggerSpec> {
     if combo.eq_ignore_ascii_case("fn") {
-        return Ok(TriggerSpec::Fn);
+        return Ok(TriggerSpec::ModifierTap {
+            flag: CGEventFlags::CGEventFlagSecondaryFn,
+        });
     }
     let mut mods = CGEventFlags::empty();
     let mut main: Option<CGKeyCode> = None;
@@ -341,16 +346,19 @@ fn parse_trigger(combo: &str) -> AppResult<TriggerSpec> {
     }
     match main {
         Some(keycode) => Ok(TriggerSpec::Combo { keycode, mods }),
+        // No main key: a single bare modifier (e.g. "Shift") is a tap trigger like
+        // fn; two+ modifiers with no key is ambiguous → reject.
+        None if mods.bits().count_ones() == 1 => Ok(TriggerSpec::ModifierTap { flag: mods }),
         None => Err(AppError::Internal(format!(
             "trigger {combo:?} has no main key"
         ))),
     }
 }
 
-/// Virtual keycodes (kVK_*) for the keys a trigger may use. Letters/digits are
-/// allowed only as the main key of a *combo* — the recorder requires a modifier,
-/// so they never fire bare (a bare letter would also type, since listen-only taps
-/// don't swallow). fn / function keys are the safe bare triggers.
+/// Virtual keycodes (kVK_*) for the keys a trigger may use, including bare letters /
+/// digits. A bare typing key also types into the focused app when pressed (the tap
+/// is listen-only and doesn't swallow) — that's the user's choice; fn / other
+/// modifiers / function keys are the bare triggers that don't type.
 fn keycode_for(name: &str) -> Option<CGKeyCode> {
     Some(match name.to_ascii_lowercase().as_str() {
         "space" => 49,
@@ -477,7 +485,9 @@ impl MacosPlatform {
                     ],
                     move |_proxy, event_type, event| {
                         let fire = match spec {
-                            TriggerSpec::Fn => detect_fn_tap(&state, event_type, event),
+                            TriggerSpec::ModifierTap { flag } => {
+                                detect_modifier_tap(&state, flag, event_type, event)
+                            }
                             TriggerSpec::Combo { keycode, mods } => {
                                 detect_combo(keycode, mods, event_type, event)
                             }
@@ -575,16 +585,20 @@ fn fn_tap_transition(state: &mut FnTapState, signal: FnSignal, at: Instant) -> b
     }
 }
 
-/// Thin CGEvent boundary: classify the event, then run the pure state machine.
-/// fn arrives as a flagsChanged on KVK_FUNCTION (not a keyDown).
-fn detect_fn_tap(state: &Mutex<FnTapState>, event_type: CGEventType, event: &CGEvent) -> bool {
+/// Thin CGEvent boundary for a bare-modifier trigger: classify the event against the
+/// `target` modifier flag, then run the pure tap state machine. The modifier (fn /
+/// shift / ctrl / alt / cmd) arrives as a flagsChanged; a tap = down→up with no other
+/// key in between.
+fn detect_modifier_tap(
+    state: &Mutex<FnTapState>,
+    target: CGEventFlags,
+    event_type: CGEventType,
+    event: &CGEvent,
+) -> bool {
     let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
     let signal = match event_type {
-        CGEventType::FlagsChanged if keycode == KVK_FUNCTION => {
-            if event
-                .get_flags()
-                .contains(CGEventFlags::CGEventFlagSecondaryFn)
-            {
+        CGEventType::FlagsChanged if modifier_flag_for_keycode(keycode) == Some(target) => {
+            if event.get_flags().contains(target) {
                 FnSignal::FnDown
             } else {
                 FnSignal::FnUp
@@ -1307,9 +1321,22 @@ mod tests {
 
     #[test]
     fn parse_fn_is_case_insensitive() {
-        assert!(matches!(parse_trigger("fn").unwrap(), TriggerSpec::Fn));
-        assert!(matches!(parse_trigger("Fn").unwrap(), TriggerSpec::Fn));
-        assert!(matches!(parse_trigger("FN").unwrap(), TriggerSpec::Fn));
+        for s in ["fn", "Fn", "FN"] {
+            match parse_trigger(s).unwrap() {
+                TriggerSpec::ModifierTap { flag } => {
+                    assert_eq!(flag, CGEventFlags::CGEventFlagSecondaryFn)
+                }
+                TriggerSpec::Combo { .. } => panic!("expected fn modifier tap"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_bare_modifier_is_a_tap() {
+        match parse_trigger("Shift").unwrap() {
+            TriggerSpec::ModifierTap { flag } => assert_eq!(flag, CGEventFlags::CGEventFlagShift),
+            TriggerSpec::Combo { .. } => panic!("expected shift modifier tap"),
+        }
     }
 
     #[test]
@@ -1322,7 +1349,7 @@ mod tests {
                     CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagShift
                 );
             }
-            TriggerSpec::Fn => panic!("expected combo"),
+            TriggerSpec::ModifierTap { .. } => panic!("expected combo"),
         }
     }
 
@@ -1333,7 +1360,7 @@ mod tests {
                 assert_eq!(keycode, 105); // kVK_F13
                 assert_eq!(mods, CGEventFlags::empty());
             }
-            TriggerSpec::Fn => panic!("expected combo"),
+            TriggerSpec::ModifierTap { .. } => panic!("expected combo"),
         }
     }
 
@@ -1354,7 +1381,7 @@ mod tests {
                     CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagShift
                 );
             }
-            TriggerSpec::Fn => panic!("expected combo"),
+            TriggerSpec::ModifierTap { .. } => panic!("expected combo"),
         }
     }
 

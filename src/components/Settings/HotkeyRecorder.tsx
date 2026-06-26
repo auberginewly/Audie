@@ -1,10 +1,12 @@
 // Trigger-key recorder (P3.9). One box showing the current trigger (default fn).
-// Click it → "按下快捷键…" → press any key to set it: combos (⌃⌥⇧⌘ + key) are
-// captured here in the webview, while fn — which the webview can't see as a key
-// event — is captured natively: begin_trigger_capture swaps the live trigger for a
-// capture trigger that emits `trigger-record-fn` on an fn tap. The stored value IS
-// the backend trigger string (parse_trigger is the gate). A recorded combo must
-// carry a modifier, or a bare letter key would also type into the focused app.
+// Click it → "按下快捷键…" → press any key to set it. Anything goes (no forced
+// modifier): a bare modifier tap (fn / shift / ctrl / alt / cmd), a single key
+// (F13, a letter…), or a combo (⌃⌥⇧⌘ + key). fn — which the webview can't see as a
+// key event — is captured natively: begin_trigger_capture swaps the live trigger
+// for a capture trigger that emits `trigger-record-fn` on an fn tap. Other modifiers
+// are caught here via their keyup (a clean tap with no other key in between). The
+// stored value IS the backend trigger string (parse_trigger is the gate). A bare
+// typing key (letter/space) will also type into apps when pressed — the user's call.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,6 +16,15 @@ import type { Hotkey } from "../../types/settings";
 import { KeyCombo } from "../ui";
 
 const FUNCTION_KEY = /^F([1-9]|1[0-9]|20)$/;
+
+// Browser modifier key → backend modifier name. A clean tap of one of these (down →
+// up with nothing in between) is a bare-modifier trigger.
+const MOD_NAMES: Record<string, string> = {
+  Control: "Ctrl",
+  Alt: "Alt",
+  Shift: "Shift",
+  Meta: "Cmd",
+};
 
 // Map a browser key to the backend's key name (keycode_for in macos.rs), or null
 // when it isn't a key a trigger can use.
@@ -28,10 +39,8 @@ function mainKeyName(e: KeyboardEvent): string | null {
   return null;
 }
 
-// Build a backend trigger string from a keydown, or an error to show (empty string
-// = still holding modifiers, wait for the main key).
+// Build a backend trigger string from a non-modifier keydown (combo or bare key).
 function eventToTrigger(e: KeyboardEvent): { trigger: string } | { error: string } {
-  if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return { error: "" };
   const mods: string[] = [];
   if (e.ctrlKey) mods.push("Ctrl");
   if (e.altKey) mods.push("Alt");
@@ -39,9 +48,6 @@ function eventToTrigger(e: KeyboardEvent): { trigger: string } | { error: string
   if (e.metaKey) mods.push("Cmd");
   const main = mainKeyName(e);
   if (!main) return { error: "不支持这个键，换一个" };
-  if (mods.length === 0 && !FUNCTION_KEY.test(main)) {
-    return { error: "请配合 ⌃ ⌥ ⇧ ⌘ 一起按（单个键会被打出来）" };
-  }
   return { trigger: [...mods, main].join("+") };
 }
 
@@ -71,12 +77,20 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
   useEffect(() => {
     if (!recording) return;
     ref.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
+    let pendingMod: string | null = null; // a modifier held alone, awaiting a clean keyup
+
+    const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
         stop(); // cancel
         return;
       }
+      if (e.key in MOD_NAMES) {
+        const held = [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey].filter(Boolean).length;
+        pendingMod = held === 1 ? e.key : null; // only a lone modifier can be a tap
+        return;
+      }
+      pendingMod = null; // a real key joined → not a bare-modifier tap
       const res = eventToTrigger(e);
       if ("error" in res) {
         if (res.error) setHint(res.error);
@@ -85,13 +99,24 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
       setHint(null);
       stop(res.trigger);
     };
-    window.addEventListener("keydown", onKey, true);
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key in MOD_NAMES && pendingMod === e.key) {
+        pendingMod = null;
+        setHint(null);
+        stop(MOD_NAMES[e.key]); // bare modifier tap, e.g. "Shift"
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
     const unlisten = listen("trigger-record-fn", () => {
       setHint(null);
       stop("Fn");
     });
     return () => {
-      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
       void unlisten.then((f) => f());
     };
   }, [recording, stop]);
