@@ -171,6 +171,8 @@ pub fn run() {
             commands::stop_trigger_probe,
             commands::get_input_monitoring_status,
             commands::request_input_monitoring_permission,
+            begin_trigger_capture,
+            end_trigger_capture,
             provider_test::test_provider,
             // Overlay capsule controls (fe.8b / fe.8c).
             confirm_recording,
@@ -278,6 +280,30 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
         };
         handle_hotkey(&ctx);
     })
+}
+
+/// P3.9 trigger recorder: while the Settings recorder is open, swap the live
+/// trigger for a capture trigger that *emits* `trigger-record-fn` on an fn tap
+/// instead of dictating — so pressing fn there sets the trigger to fn (the webview
+/// can't see fn as a key event). Combos are captured in the webview; only fn needs
+/// this native path. `end_trigger_capture` restores the real trigger.
+#[tauri::command]
+fn begin_trigger_capture(app: AppHandle) -> AppResult<()> {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.unregister_all_hotkeys(&app)?;
+    let emit_app = app.clone();
+    let capture: HotkeyCallback = Box::new(move || {
+        let _ = emit_app.emit("trigger-record-fn", ());
+    });
+    platform.register_hotkey(&app, "Fn", capture)
+}
+
+#[tauri::command]
+fn end_trigger_capture(app: AppHandle) -> AppResult<()> {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.unregister_all_hotkeys(&app)?;
+    let hotkey = commands::load_hotkey(&app);
+    platform.register_hotkey(&app, &hotkey, build_hotkey_callback(&app))
 }
 
 fn handle_hotkey(ctx: &HotkeyContext<'_>) {

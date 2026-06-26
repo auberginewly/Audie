@@ -42,17 +42,17 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
   return (
     <>
       <SettingSection icon="command" title="触发键">
-        <div className="px-3.5 py-3">
-          <div className="mb-2 text-xs text-text-tertiary">
-            按一下开始录音，再按一下结束。默认 fn（需输入监控权限）。
+        <SettingRow
+          label="触发键"
+          description="按一下开始录音，再按一下结束。点右侧框可改键"
+          divider={false}
+          control={<HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />}
+        />
+        {settings.hotkey === "Fn" ? (
+          <div className="px-3.5 pb-3 text-xs text-warning-text">
+            提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
           </div>
-          <HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />
-          {settings.hotkey === "Fn" ? (
-            <div className="mt-2.5 text-xs text-warning-text">
-              提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
-            </div>
-          ) : null}
-        </div>
+        ) : null}
       </SettingSection>
 
       <SettingSection icon="globe" title="语言" cardStyle={{ overflow: "visible" }}>

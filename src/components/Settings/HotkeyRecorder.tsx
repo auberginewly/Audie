@@ -1,11 +1,14 @@
-// Trigger-key recorder (P3.9). One control: click it and press any modifier combo
-// (⌃⌥⇧⌘ + key) to set the trigger. The factory default is fn, which a browser can't
-// capture as a key event — so "重置为 fn" restores it. The stored value IS the
-// backend trigger string (parse_trigger is the gate). A recorded combo must carry a
-// modifier, or a bare letter key would also type into the focused app (the tap is
-// listen-only and doesn't swallow non-fn keys).
+// Trigger-key recorder (P3.9). One box showing the current trigger (default fn).
+// Click it → "按下快捷键…" → press any key to set it: combos (⌃⌥⇧⌘ + key) are
+// captured here in the webview, while fn — which the webview can't see as a key
+// event — is captured natively: begin_trigger_capture swaps the live trigger for a
+// capture trigger that emits `trigger-record-fn` on an fn tap. The stored value IS
+// the backend trigger string (parse_trigger is the gate). A recorded combo must
+// carry a modifier, or a bare letter key would also type into the focused app.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import type { Hotkey } from "../../types/settings";
 import { KeyCombo } from "../ui";
@@ -42,8 +45,8 @@ function eventToTrigger(e: KeyboardEvent): { trigger: string } | { error: string
   return { trigger: [...mods, main].join("+") };
 }
 
-const RECORDER_BASE =
-  "inline-flex min-h-8 items-center gap-1.5 rounded-sm border px-2.5 py-1 cursor-pointer transition-colors duration-150 ease-[var(--ease-out)]";
+const BOX =
+  "inline-flex min-h-8 min-w-[92px] items-center justify-center rounded-sm border px-2.5 py-1 cursor-pointer transition-colors duration-150 ease-[var(--ease-out)]";
 
 type HotkeyRecorderProps = {
   value: Hotkey;
@@ -55,61 +58,78 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
 
+  // End capture (restore the real trigger) and optionally apply the new key.
+  const stop = useCallback(
+    (next?: string) => {
+      void invoke("end_trigger_capture").catch((err) => console.error("end capture failed:", err));
+      setRecording(false);
+      if (next) onChange(next as Hotkey);
+    },
+    [onChange],
+  );
+
   useEffect(() => {
     if (!recording) return;
     ref.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       e.preventDefault();
+      if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+        stop(); // cancel
+        return;
+      }
       const res = eventToTrigger(e);
       if ("error" in res) {
         if (res.error) setHint(res.error);
         return;
       }
-      setRecording(false);
       setHint(null);
-      onChange(res.trigger as Hotkey);
+      stop(res.trigger);
     };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, onChange]);
+    const unlisten = listen("trigger-record-fn", () => {
+      setHint(null);
+      stop("Fn");
+    });
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      void unlisten.then((f) => f());
+    };
+  }, [recording, stop]);
+
+  const start = async () => {
+    setHint(null);
+    try {
+      await invoke("begin_trigger_capture");
+      setRecording(true);
+    } catch {
+      setHint("需要输入监控权限才能录制");
+    }
+  };
 
   const keys = value.split("+").map((k) => k.trim().toLowerCase());
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          ref={ref}
-          type="button"
-          onClick={() => {
-            setRecording(true);
-            setHint(null);
-          }}
-          onBlur={() => setRecording(false)}
-          className={[
-            RECORDER_BASE,
-            recording ? "border-accent-fill bg-accent-bg" : "border-transparent bg-gray-200",
-          ].join(" ")}
-        >
-          {recording ? (
-            <span className="text-[13px] text-accent-text">按下快捷键…</span>
-          ) : (
-            <KeyCombo keys={keys} size="sm" />
-          )}
-        </button>
-        {value !== "Fn" && !recording ? (
-          <button
-            type="button"
-            className="text-xs text-text-tertiary hover:text-text-secondary cursor-pointer"
-            onClick={() => {
-              setHint(null);
-              onChange("Fn" as Hotkey);
-            }}
-          >
-            重置为 fn
-          </button>
-        ) : null}
-      </div>
+    <div className="flex flex-col items-end gap-1">
+      <button
+        ref={ref}
+        type="button"
+        onClick={() => {
+          if (!recording) void start();
+        }}
+        onBlur={() => {
+          if (recording) stop();
+        }}
+        className={[
+          BOX,
+          recording ? "border-accent-fill bg-accent-bg" : "border-transparent bg-gray-200",
+        ].join(" ")}
+      >
+        {recording ? (
+          <span className="text-[13px] text-accent-text">按下快捷键…</span>
+        ) : (
+          <KeyCombo keys={keys} size="sm" />
+        )}
+      </button>
       {hint ? <span className="text-[11px] text-warning-text">{hint}</span> : null}
     </div>
   );
