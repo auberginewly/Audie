@@ -171,6 +171,10 @@ pub fn run() {
             commands::import_config,
             commands::list_asr_providers,
             commands::list_llm_providers,
+            commands::list_microphones,
+            commands::auto_input_device,
+            commands::start_mic_monitor,
+            commands::stop_mic_monitor,
             commands::set_secret,
             commands::has_secret,
             commands::get_secret_for_settings,
@@ -326,6 +330,8 @@ fn start_recording(ctx: &HotkeyContext<'_>) {
     // (no input device, build_input_stream blew up, etc.) needs to surface
     // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
     // transition first would strand us in Recording with a dead stream.
+    // Free the mic if the Settings preview monitor is running — recording owns it.
+    ctx.audio.stop_monitor();
     let streaming_start = start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
     let capture_result = match streaming_start {
         Some(chunk_tx) => ctx.audio.start_capture_streaming(ctx.app.clone(), chunk_tx),

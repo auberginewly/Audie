@@ -15,12 +15,24 @@ export const SettingsSchema = z.object({
   openai_compatible_model: z.string().min(1),
   doubao_endpoint: z.string().min(1),
   doubao_resource_id: z.string().min(1),
+  input_device: z.string(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
 export type Hotkey = Settings["hotkey"];
 export type AsrProviderId = Settings["asr_provider"];
 export type LlmProviderId = Settings["llm_provider"];
+
+// Microphone enumerated by `list_microphones` (Rust). `id` is the cpal device
+// name and the value persisted into `input_device`; "" / "auto" = automatic.
+export const AudioDeviceSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+});
+export type AudioDevice = z.infer<typeof AudioDeviceSchema>;
+
+// auto_input_device (Rust): the device the automatic path resolves to, or null.
+export const AutoDeviceSchema = z.string().nullable();
 
 export const ProviderMetadataSchema = z.object({
   id: z.string(),

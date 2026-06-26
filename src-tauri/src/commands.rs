@@ -25,6 +25,7 @@ const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
 const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
 const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
 const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
+const KEY_INPUT_DEVICE: &str = "input_device";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
 // Doubao credentials live in the keychain, so they're listed here for export
 // placeholders / import refill. `doubao_access_token` stores either new-console
@@ -62,6 +63,10 @@ pub struct Settings {
     pub openai_compatible_model: String,
     pub doubao_endpoint: String,
     pub doubao_resource_id: String,
+    /// Manually selected input device name (matches `cpal` device.name()). Empty
+    /// string = automatic (P0.7 picks a reliable mic). Not `Option` so the patch
+    /// can express "clear back to auto" via an empty string.
+    pub input_device: String,
 }
 
 impl Default for Settings {
@@ -77,6 +82,7 @@ impl Default for Settings {
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
             doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
+            input_device: String::new(),
         }
     }
 }
@@ -93,6 +99,7 @@ pub struct SettingsPatch {
     pub openai_compatible_model: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
+    pub input_device: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -204,6 +211,7 @@ pub fn load_settings(app: &AppHandle) -> Settings {
             crate::asr::doubao::config::DEFAULT_ENDPOINT,
         ),
         doubao_resource_id: read_doubao_resource_id(app),
+        input_device: read_string_setting(app, KEY_INPUT_DEVICE, ""),
     }
 }
 
@@ -375,6 +383,12 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.doubao_resource_id),
+        // Empty is meaningful here (= automatic), so unlike the others we keep an
+        // empty patch value instead of filtering it back to the current value.
+        input_device: patch
+            .input_device
+            .map(|value| value.trim().to_string())
+            .unwrap_or(current.input_device),
     };
 
     validate_settings(&next)?;
@@ -453,6 +467,7 @@ fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError>
     );
     store.set(KEY_DOUBAO_ENDPOINT, settings.doubao_endpoint);
     store.set(KEY_DOUBAO_RESOURCE_ID, settings.doubao_resource_id);
+    store.set(KEY_INPUT_DEVICE, settings.input_device);
     if let Some(model_path) = settings.whisper_cpp_model_path {
         store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
     } else {
@@ -462,6 +477,41 @@ fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError>
         .save()
         .map_err(|err| AppError::Internal(format!("save store: {err}")))?;
 
+    Ok(())
+}
+
+/// Enumerate input devices for the Settings device picker. A cheap CoreAudio/cpal
+/// query (not the hot path), so it stays a plain sync command like the provider
+/// lists. Returns names that `input_device` / device resolution match on.
+#[tauri::command]
+pub fn list_microphones() -> Vec<crate::managers::audio::MicrophoneInfo> {
+    crate::managers::audio::list_input_devices()
+}
+
+/// Name of the device the automatic path would open (P0.7's override or the
+/// system default), so the picker's "自动" row can show what it resolves to.
+#[tauri::command]
+pub fn auto_input_device(app: AppHandle) -> Option<String> {
+    let platform = app.state::<Arc<dyn Platform>>();
+    let preferred = platform.preferred_input_device_name();
+    crate::managers::audio::auto_input_device_name(preferred)
+}
+
+/// Start the Settings mic-preview monitor on `device` (None / "" = automatic).
+/// Emits `mic-monitor-level` until `stop_mic_monitor`, so the picker can show the
+/// chosen mic is actually picking up sound. Called when the device section mounts
+/// and on every selection change.
+#[tauri::command]
+pub fn start_mic_monitor(app: AppHandle, device: Option<String>) -> Result<(), AppError> {
+    let audio = app.state::<Arc<crate::managers::audio::AudioManager>>();
+    audio.start_monitor(app.clone(), device)
+}
+
+/// Stop the Settings mic-preview monitor (section unmounted / dialog closed).
+#[tauri::command]
+pub fn stop_mic_monitor(app: AppHandle) -> Result<(), AppError> {
+    let audio = app.state::<Arc<crate::managers::audio::AudioManager>>();
+    audio.stop_monitor();
     Ok(())
 }
 

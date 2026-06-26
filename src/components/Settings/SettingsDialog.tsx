@@ -25,7 +25,10 @@ const SECTIONS: SectionDef[] = [
     id: "general",
     icon: "sliders",
     label: "通用",
-    render: ({ settings, update }) => (settings ? <GeneralSection settings={settings} update={update} /> : null),
+    render: ({ settings, update, microphones, autoDevice }) =>
+      settings ? (
+        <GeneralSection settings={settings} update={update} microphones={microphones} autoDevice={autoDevice} />
+      ) : null,
   },
   { id: "about", icon: "book", label: "关于", render: (data) => <AboutSection data={data} /> },
 ];

@@ -4,11 +4,12 @@
 
 import { useState } from "react";
 
-import type { Hotkey, Settings } from "../../types/settings";
+import type { AudioDevice, Hotkey, Settings } from "../../types/settings";
 import { Badge, DevicePicker, Select, Switch } from "../ui";
 import { SettingSection, SettingRow } from "./SettingSection";
 import { HotkeyRecorder } from "./HotkeyRecorder";
 import { PermissionRow } from "./PermissionRow";
+import { useMicMonitor } from "../../hooks/useMicMonitor";
 
 // mock: a Switch holding its own demo state, for unbacked rows.
 function MockSwitch({ defaultOn }: { defaultOn?: boolean }) {
@@ -19,9 +20,23 @@ function MockSwitch({ defaultOn }: { defaultOn?: boolean }) {
 type GeneralSectionProps = {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
+  microphones: AudioDevice[];
+  autoDevice: string | null;
 };
 
-export function GeneralSection({ settings, update }: GeneralSectionProps) {
+export function GeneralSection({ settings, update, microphones, autoDevice }: GeneralSectionProps) {
+  // Live preview of the selected mic — lets the user confirm it's picking up
+  // sound (a silent meter on e.g. AirPods A2DP flags a dead mic before they rely
+  // on it). Runs while this tab is open; recording stops it server-side.
+  const micLevel = useMicMonitor(settings.input_device, true);
+
+  // The "自动" row already names the device it resolves to, so hide that same mic
+  // from the explicit list to avoid listing it twice — unless it happens to be
+  // the current explicit pick (keep it so the selection stays visible).
+  const explicitDevices = microphones.filter(
+    (d) => d.id !== autoDevice || d.id === settings.input_device,
+  );
+
   return (
     <>
       <SettingSection icon="command" title="快捷键">
@@ -49,14 +64,13 @@ export function GeneralSection({ settings, update }: GeneralSectionProps) {
       </SettingSection>
 
       <SettingSection icon="mic" title="设备" cardStyle={{ overflow: "visible" }}>
-        {/* mock: device enumeration isn't implemented (P3) */}
         <div className="p-3.5">
           <DevicePicker
-            autoLabel="自动检测的麦克风（推荐）"
-            devices={[
-              { id: "b", label: "内置麦克风" },
-              { id: "u", label: "USB 音频设备" },
-            ]}
+            autoLabel={autoDevice ? `自动检测 · ${autoDevice}` : "自动检测的麦克风（推荐）"}
+            devices={explicitDevices}
+            value={settings.input_device || "auto"}
+            onChange={(id) => update({ input_device: id === "auto" ? "" : id })}
+            level={micLevel}
           />
         </div>
       </SettingSection>

@@ -32,6 +32,11 @@ export type AudioLevel = z.infer<typeof AudioLevelSchema>;
 
 export const EVENT_AUDIO_LEVEL = "audio-level";
 
+// `mic-monitor-level`: AudioManager's Settings mic-preview level. Same {level}
+// shape as `audio-level` (reuse AudioLevelSchema), but a separate event so the
+// preview meter never drives the overlay waveform.
+export const EVENT_MIC_MONITOR_LEVEL = "mic-monitor-level";
+
 // `error`: emitted on any pipeline failure. Mirrors src-tauri ErrorPayload /
 // AppError categories (PROJECT_SPEC.md §3.6 / §3.7).
 export const ErrorCodeSchema = z.enum([

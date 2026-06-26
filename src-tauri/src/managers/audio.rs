@@ -29,6 +29,9 @@ use crate::error::{AppError, AppResult};
 use crate::platform::Platform;
 
 const AUDIO_LEVEL_EVENT: &str = "audio-level";
+// Settings mic-preview level. A separate event from `audio-level` so the preview
+// meter and the overlay waveform never cross-drive each other.
+const MIC_MONITOR_LEVEL_EVENT: &str = "mic-monitor-level";
 const EMIT_INTERVAL_MS: u64 = 33;
 const SHUTDOWN_POLL_MS: u64 = 10;
 
@@ -101,14 +104,25 @@ struct CaptureSession {
     meta: AudioMeta,
 }
 
+/// A level-only capture for the Settings mic preview. Like `CaptureSession` but
+/// with no sample buffer — it exists purely to emit `mic-monitor-level` so the
+/// user can confirm the picked mic is actually hearing them.
+struct MonitorSession {
+    shutdown: Arc<AtomicBool>,
+    capture_thread: Option<JoinHandle<()>>,
+    emit_thread: Option<JoinHandle<()>>,
+}
+
 pub struct AudioManager {
     session: Mutex<Option<CaptureSession>>,
+    monitor: Mutex<Option<MonitorSession>>,
 }
 
 impl AudioManager {
     pub fn new() -> Self {
         Self {
             session: Mutex::new(None),
+            monitor: Mutex::new(None),
         }
     }
 
@@ -146,12 +160,20 @@ impl AudioManager {
         let accum = Arc::new(Mutex::new(LevelAccum::default()));
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
 
-        // Ask the platform layer whether to override cpal's `default_input_device`.
-        // macOS: if the system default is Bluetooth, this returns the name of a
-        // wired alternative so we sidestep the AirPods A2DP/HFP gotcha.
-        let preferred_name = app
-            .try_state::<Arc<dyn Platform>>()
-            .and_then(|p| p.inner().preferred_input_device_name());
+        // Device resolution: an explicit pick in Settings (`input_device`, empty =
+        // automatic) wins; otherwise fall back to the platform's P0.7 auto-pick
+        // (returns a wired alternative when the system default is Bluetooth, to
+        // sidestep the AirPods A2DP/HFP gotcha). `explicit` rides along so an
+        // explicit pick that's gone errors instead of silently using the default.
+        let selected = crate::commands::load_settings(&app).input_device;
+        let (preferred_name, explicit) = if selected.trim().is_empty() {
+            let auto = app
+                .try_state::<Arc<dyn Platform>>()
+                .and_then(|p| p.inner().preferred_input_device_name());
+            (auto, false)
+        } else {
+            (Some(selected), true)
+        };
 
         // Spawn the capture thread and wait for stream setup to either succeed
         // (reporting the stream's format) or fail. cpal's `Stream` is `!Send`,
@@ -168,7 +190,11 @@ impl AudioManager {
                     accum_cap,
                     buffer_cap,
                     chunk_tx,
-                    preferred_name,
+                    CapturePlan {
+                        preferred_name,
+                        explicit,
+                        level_only: false,
+                    },
                     ready_tx,
                 );
             })
@@ -194,7 +220,7 @@ impl AudioManager {
         let emit_thread = match thread::Builder::new()
             .name("audie-audio-emit".into())
             .spawn(move || {
-                run_emit_thread(app_emit, accum_emit, shutdown_emit);
+                run_emit_thread(app_emit, accum_emit, shutdown_emit, AUDIO_LEVEL_EVENT);
             }) {
             Ok(t) => t,
             Err(e) => {
@@ -256,6 +282,111 @@ impl AudioManager {
             channels: session.meta.channels,
         })
     }
+
+    /// Open `device` (or P0.7's auto-pick when `None`/empty) level-only and emit
+    /// `mic-monitor-level` so the Settings picker shows the mic is live. No sample
+    /// buffer — purely a preview meter. Restarts cleanly if already running (the
+    /// picker re-calls this when the selection changes). An explicit pick that
+    /// can't open errors instead of falling back, so the meter just stays flat.
+    pub fn start_monitor(&self, app: AppHandle, device: Option<String>) -> AppResult<()> {
+        self.stop_monitor();
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let accum = Arc::new(Mutex::new(LevelAccum::default()));
+        // `level_only` keeps this empty; it exists only to satisfy the shared
+        // capture-thread signature.
+        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+
+        let (preferred_name, explicit) = match device {
+            Some(name) if !name.trim().is_empty() => (Some(name), true),
+            _ => {
+                let auto = app
+                    .try_state::<Arc<dyn Platform>>()
+                    .and_then(|p| p.inner().preferred_input_device_name());
+                (auto, false)
+            }
+        };
+
+        let (ready_tx, ready_rx) = mpsc::channel::<AppResult<AudioMeta>>();
+        let shutdown_cap = shutdown.clone();
+        let accum_cap = accum.clone();
+        let capture_thread = thread::Builder::new()
+            .name("audie-monitor-capture".into())
+            .spawn(move || {
+                run_capture_thread(
+                    shutdown_cap,
+                    accum_cap,
+                    buffer,
+                    None,
+                    CapturePlan {
+                        preferred_name,
+                        explicit,
+                        level_only: true,
+                    },
+                    ready_tx,
+                );
+            })
+            .map_err(|e| AppError::Device(format!("spawn monitor capture thread: {e}")))?;
+
+        match ready_rx.recv() {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => {
+                let _ = capture_thread.join();
+                return Err(err);
+            }
+            Err(_) => {
+                let _ = capture_thread.join();
+                return Err(AppError::Internal(
+                    "monitor capture thread exited before reporting readiness".into(),
+                ));
+            }
+        }
+
+        let shutdown_emit = shutdown.clone();
+        let accum_emit = accum.clone();
+        let app_emit = app.clone();
+        let emit_thread = match thread::Builder::new()
+            .name("audie-monitor-emit".into())
+            .spawn(move || {
+                run_emit_thread(app_emit, accum_emit, shutdown_emit, MIC_MONITOR_LEVEL_EVENT);
+            }) {
+            Ok(t) => t,
+            Err(e) => {
+                shutdown.store(true, Ordering::Relaxed);
+                let _ = capture_thread.join();
+                return Err(AppError::Internal(format!(
+                    "spawn monitor emit thread: {e}"
+                )));
+            }
+        };
+
+        *self.monitor.lock() = Some(MonitorSession {
+            shutdown,
+            capture_thread: Some(capture_thread),
+            emit_thread: Some(emit_thread),
+        });
+        Ok(())
+    }
+
+    /// Stop the preview monitor if running (Settings closed / device changed /
+    /// recording starting). No-op when idle.
+    pub fn stop_monitor(&self) {
+        let mut session = match self.monitor.lock().take() {
+            Some(s) => s,
+            None => return,
+        };
+        session.shutdown.store(true, Ordering::Relaxed);
+        if let Some(t) = session.capture_thread.take() {
+            if let Err(e) = t.join() {
+                log::warn!("monitor capture thread panicked: {e:?}");
+            }
+        }
+        if let Some(t) = session.emit_thread.take() {
+            if let Err(e) = t.join() {
+                log::warn!("monitor emit thread panicked: {e:?}");
+            }
+        }
+    }
 }
 
 impl Default for AudioManager {
@@ -264,22 +395,42 @@ impl Default for AudioManager {
     }
 }
 
+/// How a capture thread opens and consumes the input device for one session.
+struct CapturePlan {
+    /// Explicit device name to use, or `None` to fall back to the host default.
+    preferred_name: Option<String>,
+    /// The name came from an explicit user pick, so a miss is a Device error
+    /// rather than a silent fall back to the default.
+    explicit: bool,
+    /// Track levels only, don't retain samples (the Settings mic preview).
+    level_only: bool,
+}
+
 fn run_capture_thread(
     shutdown: Arc<AtomicBool>,
     accum: Arc<Mutex<LevelAccum>>,
     buffer: Arc<Mutex<Vec<f32>>>,
     chunk_tx: Option<mpsc::Sender<AppResult<AudioChunk>>>,
-    preferred_name: Option<String>,
+    plan: CapturePlan,
     ready_tx: mpsc::Sender<AppResult<AudioMeta>>,
 ) {
     let host = cpal::default_host();
-    let device = match resolve_input_device(&host, preferred_name.as_deref()) {
+    let device = match resolve_input_device(&host, plan.preferred_name.as_deref(), plan.explicit) {
         Some(d) => d,
         None => {
-            let _ = ready_tx.send(Err(AppError::Device("no default input device".into())));
+            // An explicit user pick that can't be resolved gets a specific message
+            // (SPEC §3.7 Device); the automatic path keeps the generic one.
+            let msg = match (&plan.preferred_name, plan.explicit) {
+                (Some(name), true) => {
+                    format!("所选麦克风「{name}」不可用，请到设置重新选择")
+                }
+                _ => "no default input device".into(),
+            };
+            let _ = ready_tx.send(Err(AppError::Device(msg)));
             return;
         }
     };
+    let level_only = plan.level_only;
 
     let supported = match device.default_input_config() {
         Ok(c) => c,
@@ -314,7 +465,7 @@ fn run_capture_thread(
             let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
             device.build_input_stream(
                 &config,
-                move |data: &[f32], _| process_f32(&a, &b, s.as_deref(), data),
+                move |data: &[f32], _| process_f32(&a, &b, s.as_deref(), data, level_only),
                 err_fn,
                 None,
             )
@@ -323,7 +474,7 @@ fn run_capture_thread(
             let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
             device.build_input_stream(
                 &config,
-                move |data: &[i16], _| process_i16(&a, &b, s.as_deref(), data),
+                move |data: &[i16], _| process_i16(&a, &b, s.as_deref(), data, level_only),
                 err_fn,
                 None,
             )
@@ -332,7 +483,7 @@ fn run_capture_thread(
             let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
             device.build_input_stream(
                 &config,
-                move |data: &[u16], _| process_u16(&a, &b, s.as_deref(), data),
+                move |data: &[u16], _| process_u16(&a, &b, s.as_deref(), data, level_only),
                 err_fn,
                 None,
             )
@@ -372,7 +523,12 @@ fn run_capture_thread(
     }
 }
 
-fn run_emit_thread(app: AppHandle, accum: Arc<Mutex<LevelAccum>>, shutdown: Arc<AtomicBool>) {
+fn run_emit_thread(
+    app: AppHandle,
+    accum: Arc<Mutex<LevelAccum>>,
+    shutdown: Arc<AtomicBool>,
+    event: &'static str,
+) {
     while !shutdown.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(EMIT_INTERVAL_MS));
         let level = {
@@ -381,12 +537,12 @@ fn run_emit_thread(app: AppHandle, accum: Arc<Mutex<LevelAccum>>, shutdown: Arc<
             g.peak = 0.0;
             l
         };
-        if let Err(e) = app.emit(AUDIO_LEVEL_EVENT, AudioLevelPayload { level }) {
-            log::warn!("emit audio-level failed: {e}");
+        if let Err(e) = app.emit(event, AudioLevelPayload { level }) {
+            log::warn!("emit {event} failed: {e}");
         }
     }
     // Flush a final zero so the UI bars drop instead of freezing on last peak.
-    let _ = app.emit(AUDIO_LEVEL_EVENT, AudioLevelPayload { level: 0.0 });
+    let _ = app.emit(event, AudioLevelPayload { level: 0.0 });
 }
 
 // Each `process_*` does one locked pass: track the peak for the waveform and
@@ -397,17 +553,28 @@ fn process_f32(
     buffer: &Mutex<Vec<f32>>,
     sink: Option<&ChunkSink>,
     data: &[f32],
+    level_only: bool,
 ) {
     let mut peak = 0.0f32;
     {
-        let mut buf = buffer.lock();
-        buf.reserve(data.len());
+        // `level_only` (Settings mic preview) tracks the peak only — no buffer
+        // lock, no sample retention — so a long preview can't grow memory.
+        let mut buf = if level_only {
+            None
+        } else {
+            Some(buffer.lock())
+        };
+        if let Some(buf) = buf.as_mut() {
+            buf.reserve(data.len());
+        }
         for &s in data {
             let a = s.abs();
             if a > peak {
                 peak = a;
             }
-            buf.push(s);
+            if let Some(buf) = buf.as_mut() {
+                buf.push(s);
+            }
         }
     }
     merge_peak(accum, peak);
@@ -421,20 +588,29 @@ fn process_i16(
     buffer: &Mutex<Vec<f32>>,
     sink: Option<&ChunkSink>,
     data: &[i16],
+    level_only: bool,
 ) {
     let scale = i16::MAX as f32;
     let mut peak = 0.0f32;
     let mut chunk = sink.map(|_| Vec::with_capacity(data.len()));
     {
-        let mut buf = buffer.lock();
-        buf.reserve(data.len());
+        let mut buf = if level_only {
+            None
+        } else {
+            Some(buffer.lock())
+        };
+        if let Some(buf) = buf.as_mut() {
+            buf.reserve(data.len());
+        }
         for &s in data {
             let v = s as f32 / scale;
             let a = v.abs();
             if a > peak {
                 peak = a;
             }
-            buf.push(v);
+            if let Some(buf) = buf.as_mut() {
+                buf.push(v);
+            }
             if let Some(chunk) = chunk.as_mut() {
                 chunk.push(v);
             }
@@ -451,12 +627,19 @@ fn process_u16(
     buffer: &Mutex<Vec<f32>>,
     sink: Option<&ChunkSink>,
     data: &[u16],
+    level_only: bool,
 ) {
     let mut peak = 0.0f32;
     let mut chunk = sink.map(|_| Vec::with_capacity(data.len()));
     {
-        let mut buf = buffer.lock();
-        buf.reserve(data.len());
+        let mut buf = if level_only {
+            None
+        } else {
+            Some(buffer.lock())
+        };
+        if let Some(buf) = buf.as_mut() {
+            buf.reserve(data.len());
+        }
         for &s in data {
             // u16 silence is centered at 32768.
             let v = (s as f32 - 32768.0) / 32768.0;
@@ -464,7 +647,9 @@ fn process_u16(
             if a > peak {
                 peak = a;
             }
-            buf.push(v);
+            if let Some(buf) = buf.as_mut() {
+                buf.push(v);
+            }
             if let Some(chunk) = chunk.as_mut() {
                 chunk.push(v);
             }
@@ -476,11 +661,16 @@ fn process_u16(
     }
 }
 
-/// Look up `preferred_name` in the host's input device list and return it; fall
-/// back to the host default if the name doesn't resolve (device may have been
-/// unplugged between platform-layer query and capture). cpal's `name()` is
+/// Look up `preferred_name` in the host's input device list. With
+/// `require_exact = false` (the P0.7 auto path) a miss falls back to the host
+/// default; with `require_exact = true` (an explicit Settings pick) a miss
+/// returns `None` so the caller can raise a Device error. cpal's `name()` is
 /// fallible per device — skip the ones that error.
-fn resolve_input_device(host: &cpal::Host, preferred_name: Option<&str>) -> Option<cpal::Device> {
+fn resolve_input_device(
+    host: &cpal::Host,
+    preferred_name: Option<&str>,
+    require_exact: bool,
+) -> Option<cpal::Device> {
     if let Some(name) = preferred_name {
         if let Ok(devices) = host.input_devices() {
             for d in devices {
@@ -489,7 +679,13 @@ fn resolve_input_device(host: &cpal::Host, preferred_name: Option<&str>) -> Opti
                     return Some(d);
                 }
             }
-            log::warn!("preferred input device {name:?} not found via cpal; using default");
+            log::warn!("preferred input device {name:?} not found via cpal");
+        }
+        // An explicit pick (Settings) that doesn't resolve must error rather than
+        // silently fall back to the default. The P0.7 auto path passes
+        // `require_exact = false` and keeps falling back.
+        if require_exact {
+            return None;
         }
     }
     host.default_input_device()
@@ -503,6 +699,43 @@ fn merge_peak(accum: &Mutex<LevelAccum>, local: f32) {
     if local > g.peak {
         g.peak = local;
     }
+}
+
+/// One enumerable input device for the Settings picker. `id` doubles as the
+/// match key — it's the cpal `device.name()` that `resolve_input_device` looks
+/// up later, so the picked value round-trips back to the same device.
+#[derive(Serialize, Clone)]
+pub struct MicrophoneInfo {
+    pub id: String,
+    pub label: String,
+}
+
+/// Enumerate input devices for the Settings picker. Names come from the same
+/// cpal host `resolve_input_device` uses, so a picked name resolves back. Run
+/// off the event loop by the caller (cpal enumeration can block).
+pub fn list_input_devices() -> Vec<MicrophoneInfo> {
+    let host = cpal::default_host();
+    let Ok(devices) = host.input_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|d| d.name().ok())
+        .map(|name| MicrophoneInfo {
+            id: name.clone(),
+            label: name,
+        })
+        .collect()
+}
+
+/// Name of the device the automatic path would open right now: P0.7's override
+/// when present (`preferred`), else cpal's default input device. Lets the picker
+/// name the "自动" row instead of leaving it opaque.
+pub fn auto_input_device_name(preferred: Option<String>) -> Option<String> {
+    preferred.or_else(|| {
+        cpal::default_host()
+            .default_input_device()
+            .and_then(|d| d.name().ok())
+    })
 }
 
 #[cfg(test)]
@@ -521,7 +754,7 @@ mod tests {
             channels: 1,
         };
 
-        process_f32(&accum, &buffer, Some(&sink), &[0.5, -0.25]);
+        process_f32(&accum, &buffer, Some(&sink), &[0.5, -0.25], false);
 
         // Batch buffer still gets the samples …
         assert_eq!(*buffer.lock(), vec![0.5, -0.25]);
@@ -537,7 +770,7 @@ mod tests {
         let accum = Mutex::new(LevelAccum::default());
         let buffer = Mutex::new(Vec::new());
 
-        process_f32(&accum, &buffer, None, &[0.1, 0.2]);
+        process_f32(&accum, &buffer, None, &[0.1, 0.2], false);
 
         assert_eq!(*buffer.lock(), vec![0.1, 0.2]);
     }
@@ -554,10 +787,23 @@ mod tests {
             channels: 1,
         };
 
-        process_i16(&accum, &buffer, Some(&sink), &[i16::MAX, 0]);
+        process_i16(&accum, &buffer, Some(&sink), &[i16::MAX, 0], false);
 
         let chunk = rx.recv().unwrap().unwrap();
         assert_eq!(chunk.samples, vec![1.0, 0.0]);
         assert_eq!(*buffer.lock(), vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn process_f32_level_only_tracks_peak_without_buffering() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(Vec::new());
+
+        // The Settings mic preview can run for minutes, so it must not retain
+        // samples — but it must still update the peak that drives the meter.
+        process_f32(&accum, &buffer, None, &[0.5, -0.25], true);
+
+        assert!(buffer.lock().is_empty());
+        assert_eq!(accum.lock().peak, 0.5);
     }
 }
