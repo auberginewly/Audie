@@ -38,7 +38,7 @@ const SECRET_KEY_IDS: &[&str] = &[
     crate::asr::doubao::config::SECRET_API_KEY_OR_ACCESS_TOKEN,
 ];
 
-pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
+pub const DEFAULT_HOTKEY: &str = "Fn";
 pub const DEFAULT_ASR_PROVIDER: &str = "groq";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
@@ -46,10 +46,10 @@ pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_ENHANCE_PROMPT: &str =
     "去掉口水话，修正明显口误，补充标点和换行；不要改原意，不要添加信息，不要翻译。";
 
-/// The only hotkeys the UI lets you pick in P0.5. A free-form key recorder is
-/// P3 Settings-page work; presets keep this slice small and parseable by
-/// `tauri-plugin-global-shortcut`.
-pub const HOTKEY_PRESETS: &[&str] = &["Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"];
+/// Accepted trigger keys (M1 transitional). `Fn` is the default and drives a
+/// CGEventTap trigger; the combos still go through global-shortcut until M2
+/// unifies them. M3 replaces this whitelist with a real parse (SPEC §5.8 P3.9).
+pub const HOTKEY_PRESETS: &[&str] = &["Fn", "Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Settings {

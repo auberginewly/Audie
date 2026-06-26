@@ -9,7 +9,7 @@
 
 use std::ffi::c_void;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
@@ -37,7 +37,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_macos_permissions::{check_microphone_permission, request_microphone_permission};
 
-use super::{HotkeyCallback, HotkeyRegistry, Platform};
+use super::{HotkeyCallback, HotkeyEvent, HotkeyRegistry, Platform};
 use crate::error::{AppError, AppResult};
 
 pub struct MacosPlatform {
@@ -48,7 +48,10 @@ pub struct MacosPlatform {
     focus_target_pid: Mutex<Option<i32>>,
     // P3.8 dev-only trigger-key probe: holds the run loop (to stop it cross-thread)
     // and the thread the CGEventTap runs on. None when not probing.
-    probe: Mutex<Option<TriggerProbe>>,
+    probe: Mutex<Option<EventTapHandle>>,
+    // P3.9 production trigger (M1: fn). Same tap+runloop machinery as the probe,
+    // but it drives the real toggle callback instead of emitting raw events.
+    trigger: Mutex<Option<EventTapHandle>>,
 }
 
 impl MacosPlatform {
@@ -57,6 +60,7 @@ impl MacosPlatform {
             registry,
             focus_target_pid: Mutex::new(None),
             probe: Mutex::new(None),
+            trigger: Mutex::new(None),
         }
     }
 }
@@ -68,6 +72,13 @@ impl Platform for MacosPlatform {
         combo: &str,
         callback: HotkeyCallback,
     ) -> AppResult<()> {
+        // P3.9 (M1): fn drives a CGEventTap trigger — global-shortcut can't register
+        // a bare modifier. Classic combos still take the global-shortcut path until
+        // M2 unifies everything onto the tap. Both end up calling the same callback.
+        if combo.eq_ignore_ascii_case("fn") {
+            return self.start_fn_trigger(callback);
+        }
+
         let shortcut: Shortcut = combo
             .parse()
             .map_err(|err| AppError::Internal(format!("invalid hotkey combo {combo:?}: {err}")))?;
@@ -82,6 +93,7 @@ impl Platform for MacosPlatform {
     }
 
     fn unregister_all_hotkeys(&self, app: &AppHandle) -> AppResult<()> {
+        self.stop_fn_trigger();
         if let Err(err) = app.global_shortcut().unregister_all() {
             log::warn!("failed to unregister all shortcuts: {err}");
         }
@@ -242,7 +254,7 @@ impl Platform for MacosPlatform {
 
         match rx.recv() {
             Ok(Some(runloop)) => {
-                *self.probe.lock() = Some(TriggerProbe {
+                *self.probe.lock() = Some(EventTapHandle {
                     runloop,
                     thread: Some(thread),
                 });
@@ -270,6 +282,176 @@ impl Platform for MacosPlatform {
     }
 }
 
+// ---- P3.9 production trigger (M1: fn) ---------------------------------------
+//
+// Upgrades the dev probe into the real trigger: a listen-only CGEventTap watches
+// the fn modifier and fires the existing toggle callback on a clean tap. fn has
+// no app-visible effect once the user disables "按🌐键用来" (onboarding, P3.12),
+// so listen-only is enough — no event to swallow. Combos join this tap in M2.
+// Needs Input Monitoring; a missing grant returns Permission, never panics.
+
+/// Max fn hold that still counts as a "tap": longer presses (resting on fn) and
+/// fn+key combos don't toggle. SPEC §5.8 P3.9.
+const FN_TAP_MAX: Duration = Duration::from_millis(400);
+
+#[derive(Default)]
+struct FnTapState {
+    fn_down_at: Option<Instant>,
+    other_pressed: bool,
+}
+
+impl MacosPlatform {
+    fn start_fn_trigger(&self, callback: HotkeyCallback) -> AppResult<()> {
+        // Idempotent: re-registering the live trigger is a no-op.
+        if self.trigger.lock().is_some() {
+            return Ok(());
+        }
+
+        // Actively prompt for Input Monitoring, then re-check. A fresh grant only
+        // applies after relaunch, so a denial returns Permission (§3.7); startup
+        // logs and continues so the app still launches (lib.rs).
+        if !input_monitoring_granted() {
+            unsafe {
+                IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+            }
+            if !input_monitoring_granted() {
+                return Err(AppError::Permission(
+                    "输入监控权限未授予；请到 系统设置 → 隐私与安全性 → 输入监控 启用 Audie，然后重启 App".into(),
+                ));
+            }
+        }
+
+        // Same tap-on-a-runloop-thread pattern as the dev probe; hand the run loop
+        // back so stop_fn_trigger can stop it cross-thread.
+        let (tx, rx) = std::sync::mpsc::channel::<Option<CFRunLoop>>();
+        let thread = std::thread::Builder::new()
+            .name("fn-trigger".into())
+            .spawn(move || {
+                let state = Mutex::new(FnTapState::default());
+                let tap = CGEventTap::new(
+                    CGEventTapLocation::HID,
+                    CGEventTapPlacement::HeadInsertEventTap,
+                    CGEventTapOptions::ListenOnly,
+                    vec![
+                        CGEventType::KeyDown,
+                        CGEventType::KeyUp,
+                        CGEventType::FlagsChanged,
+                    ],
+                    move |_proxy, event_type, event| {
+                        if detect_fn_tap(&state, event_type, event) {
+                            callback(HotkeyEvent::Pressed);
+                        }
+                        None
+                    },
+                );
+                let tap = match tap {
+                    Ok(tap) => tap,
+                    Err(()) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let source = match tap.mach_port.create_runloop_source(0) {
+                    Ok(source) => source,
+                    Err(()) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let runloop = CFRunLoop::get_current();
+                unsafe {
+                    runloop.add_source(&source, kCFRunLoopCommonModes);
+                }
+                tap.enable();
+                let _ = tx.send(Some(runloop));
+                CFRunLoop::run_current(); // blocks until stop_fn_trigger
+            })
+            .map_err(|err| AppError::Internal(format!("spawn fn-trigger thread: {err}")))?;
+
+        match rx.recv() {
+            Ok(Some(runloop)) => {
+                *self.trigger.lock() = Some(EventTapHandle {
+                    runloop,
+                    thread: Some(thread),
+                });
+                log::info!("fn trigger started");
+                Ok(())
+            }
+            _ => {
+                let _ = thread.join();
+                Err(AppError::Internal(
+                    "failed to create CGEventTap for fn trigger".into(),
+                ))
+            }
+        }
+    }
+
+    fn stop_fn_trigger(&self) {
+        if let Some(mut handle) = self.trigger.lock().take() {
+            handle.runloop.stop();
+            if let Some(thread) = handle.thread.take() {
+                let _ = thread.join();
+            }
+            log::info!("fn trigger stopped");
+        }
+    }
+}
+
+/// One trigger-relevant signal distilled from a CGEvent, so the tap state machine
+/// (`fn_tap_transition`) stays pure and unit-testable without fabricating events.
+enum FnSignal {
+    FnDown,
+    FnUp,
+    /// Any non-fn key/modifier going down — disqualifies an in-flight tap (fn+X).
+    OtherKey,
+}
+
+/// Pure fn tap state machine. A clean tap = fn down, no other key in between, fn
+/// up within FN_TAP_MAX. Returns true only on the fn-up that completes a tap.
+/// `at` is the event time, injected so tests don't depend on wall-clock.
+fn fn_tap_transition(state: &mut FnTapState, signal: FnSignal, at: Instant) -> bool {
+    match signal {
+        FnSignal::FnDown => {
+            state.fn_down_at = Some(at);
+            state.other_pressed = false;
+            false
+        }
+        FnSignal::OtherKey => {
+            if state.fn_down_at.is_some() {
+                state.other_pressed = true;
+            }
+            false
+        }
+        FnSignal::FnUp => match state.fn_down_at.take() {
+            Some(down_at) => {
+                !state.other_pressed && at.saturating_duration_since(down_at) <= FN_TAP_MAX
+            }
+            None => false,
+        },
+    }
+}
+
+/// Thin CGEvent boundary: classify the event, then run the pure state machine.
+/// fn arrives as a flagsChanged on KVK_FUNCTION (not a keyDown).
+fn detect_fn_tap(state: &Mutex<FnTapState>, event_type: CGEventType, event: &CGEvent) -> bool {
+    let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+    let signal = match event_type {
+        CGEventType::FlagsChanged if keycode == KVK_FUNCTION => {
+            if event
+                .get_flags()
+                .contains(CGEventFlags::CGEventFlagSecondaryFn)
+            {
+                FnSignal::FnDown
+            } else {
+                FnSignal::FnUp
+            }
+        }
+        CGEventType::KeyDown | CGEventType::FlagsChanged => FnSignal::OtherKey,
+        _ => return false,
+    };
+    fn_tap_transition(&mut state.lock(), signal, Instant::now())
+}
+
 // ---- P3.8 trigger-key probe (dev-only) --------------------------------------
 //
 // A listen-only CGEventTap that reports every key/flags event so we can verify
@@ -281,7 +463,9 @@ impl Platform for MacosPlatform {
 /// (`kVK_Function`), not a keyDown — the easy thing to miss.
 const KVK_FUNCTION: u16 = 63;
 
-struct TriggerProbe {
+/// A live CGEventTap: the run loop it spins on (stoppable cross-thread) plus the
+/// thread handle. Shared by the dev probe (P3.8) and the production trigger (P3.9).
+struct EventTapHandle {
     runloop: CFRunLoop,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -910,6 +1094,70 @@ fn restore_focus_if_stolen(target_pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- P3.9 fn tap-toggle detection (pure state machine) ------------------
+
+    #[test]
+    fn fn_plain_tap_toggles() {
+        let mut s = FnTapState::default();
+        let down = Instant::now();
+        assert!(!fn_tap_transition(&mut s, FnSignal::FnDown, down));
+        assert!(fn_tap_transition(
+            &mut s,
+            FnSignal::FnUp,
+            down + Duration::from_millis(120)
+        ));
+    }
+
+    #[test]
+    fn fn_plus_key_does_not_toggle() {
+        // fn+arrow (Home/End/PageUp) must never fire the trigger.
+        let mut s = FnTapState::default();
+        let t = Instant::now();
+        fn_tap_transition(&mut s, FnSignal::FnDown, t);
+        fn_tap_transition(&mut s, FnSignal::OtherKey, t);
+        assert!(!fn_tap_transition(
+            &mut s,
+            FnSignal::FnUp,
+            t + Duration::from_millis(80)
+        ));
+    }
+
+    #[test]
+    fn fn_held_past_window_does_not_toggle() {
+        let mut s = FnTapState::default();
+        let down = Instant::now();
+        fn_tap_transition(&mut s, FnSignal::FnDown, down);
+        assert!(!fn_tap_transition(
+            &mut s,
+            FnSignal::FnUp,
+            down + FN_TAP_MAX + Duration::from_millis(50)
+        ));
+    }
+
+    #[test]
+    fn fn_up_without_down_is_ignored() {
+        let mut s = FnTapState::default();
+        assert!(!fn_tap_transition(&mut s, FnSignal::FnUp, Instant::now()));
+    }
+
+    #[test]
+    fn fn_tap_after_combo_still_toggles() {
+        // other_pressed must reset on the next FnDown, or one fn+key combo would
+        // poison every later tap.
+        let mut s = FnTapState::default();
+        let t = Instant::now();
+        fn_tap_transition(&mut s, FnSignal::FnDown, t);
+        fn_tap_transition(&mut s, FnSignal::OtherKey, t);
+        fn_tap_transition(&mut s, FnSignal::FnUp, t + Duration::from_millis(50));
+        let t2 = t + Duration::from_millis(1000);
+        fn_tap_transition(&mut s, FnSignal::FnDown, t2);
+        assert!(fn_tap_transition(
+            &mut s,
+            FnSignal::FnUp,
+            t2 + Duration::from_millis(80)
+        ));
+    }
 
     #[test]
     #[ignore = "touches the user's macOS Keychain; run manually for P1.2 smoke verification"]

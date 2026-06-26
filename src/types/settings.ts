@@ -5,7 +5,7 @@
 import { z } from "zod";
 
 export const SettingsSchema = z.object({
-  hotkey: z.enum(["Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"]),
+  hotkey: z.enum(["Fn", "Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"]),
   asr_provider: z.enum(["groq", "openai", "whisper_cpp", "doubao_stream"]),
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),

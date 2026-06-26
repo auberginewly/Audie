@@ -251,11 +251,15 @@ pub fn run() {
             if let Err(err) =
                 platform.register_hotkey(&app_handle, &hotkey, build_hotkey_callback(&app_handle))
             {
-                log::error!("register hotkey {hotkey}: {err:?}");
-                return Err(Box::new(std::io::Error::other(format!("{err:?}"))));
+                // Don't abort startup: the default trigger is fn, which needs Input
+                // Monitoring. A missing grant must still let the app launch so the
+                // user can grant it in Settings and relaunch (P3.9 known caveat).
+                log::warn!(
+                    "register trigger {hotkey} failed (grant Input Monitoring then relaunch): {err:?}"
+                );
+            } else {
+                log::info!("registered trigger {hotkey}");
             }
-
-            log::info!("registered global hotkey {hotkey}");
 
             Ok(())
         })
