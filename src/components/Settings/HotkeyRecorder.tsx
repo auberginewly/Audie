@@ -63,15 +63,24 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const active = useRef(false); // guards against a double stop (key capture + blur)
 
-  // End capture (restore the real trigger) and optionally apply the new key.
+  // End a capture. A new key goes through `onChange` → update_settings, which
+  // unregisters the capture trigger and registers the new one; cancel / same key
+  // just restores the real trigger. Doing exactly ONE of these avoids a race where
+  // end_trigger_capture's restore clobbers the freshly-picked trigger.
   const stop = useCallback(
     (next?: string) => {
-      void invoke("end_trigger_capture").catch((err) => console.error("end capture failed:", err));
+      if (!active.current) return;
+      active.current = false;
       setRecording(false);
-      if (next) onChange(next as Hotkey);
+      if (next && next !== value) {
+        onChange(next as Hotkey);
+      } else {
+        void invoke("end_trigger_capture").catch((err) => console.error("end capture failed:", err));
+      }
     },
-    [onChange],
+    [onChange, value],
   );
 
   useEffect(() => {
@@ -125,6 +134,7 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
     setHint(null);
     try {
       await invoke("begin_trigger_capture");
+      active.current = true;
       setRecording(true);
     } catch {
       setHint("需要输入监控权限才能录制");
