@@ -47,6 +47,11 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             按一下开始录音，再按一下结束。默认 fn（需输入监控权限）。
           </div>
           <HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />
+          {settings.hotkey === "Fn" ? (
+            <div className="mt-2.5 text-xs text-warning-text">
+              提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
+            </div>
+          ) : null}
         </div>
       </SettingSection>
 
