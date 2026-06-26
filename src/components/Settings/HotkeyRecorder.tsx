@@ -64,6 +64,7 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
   const active = useRef(false); // guards against a double stop (key capture + blur)
+  const pendingMod = useRef<string | null>(null); // a lone modifier held, awaiting a clean keyup
 
   // End a capture. A new key goes through `onChange` → update_settings, which
   // unregisters the capture trigger and registers the new one; cancel / same key
@@ -83,37 +84,45 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
     [onChange, value],
   );
 
+  // Keep the keydown/keyup effect OFF `stop` (which changes every render — onChange
+  // isn't memoized and the mic-level monitor re-renders this tree ~30×/s). Reading the
+  // latest `stop` via a ref lets the effect depend only on `recording`, so it isn't
+  // torn down + rebuilt mid-tap — which used to reset the in-flight modifier tap and
+  // is why single Shift / Cmd / Option / Control never registered.
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+
   useEffect(() => {
     if (!recording) return;
     ref.current?.focus();
-    let pendingMod: string | null = null; // a modifier held alone, awaiting a clean keyup
+    pendingMod.current = null;
 
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-        stop(); // cancel
+        stopRef.current(); // cancel
         return;
       }
       if (e.key in MOD_NAMES) {
         const held = [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey].filter(Boolean).length;
-        pendingMod = held === 1 ? e.key : null; // only a lone modifier can be a tap
+        pendingMod.current = held === 1 ? e.key : null; // only a lone modifier can be a tap
         return;
       }
-      pendingMod = null; // a real key joined → not a bare-modifier tap
+      pendingMod.current = null; // a real key joined → not a bare-modifier tap
       const res = eventToTrigger(e);
       if ("error" in res) {
         if (res.error) setHint(res.error);
         return;
       }
       setHint(null);
-      stop(res.trigger);
+      stopRef.current(res.trigger);
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key in MOD_NAMES && pendingMod === e.key) {
-        pendingMod = null;
+      if (e.key in MOD_NAMES && pendingMod.current === e.key) {
+        pendingMod.current = null;
         setHint(null);
-        stop(MOD_NAMES[e.key]); // bare modifier tap, e.g. "Shift"
+        stopRef.current(MOD_NAMES[e.key]); // bare modifier tap, e.g. "Shift"
       }
     };
 
@@ -121,14 +130,14 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
     window.addEventListener("keyup", onKeyUp, true);
     const unlisten = listen("trigger-record-fn", () => {
       setHint(null);
-      stop("Fn");
+      stopRef.current("Fn");
     });
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp, true);
       void unlisten.then((f) => f());
     };
-  }, [recording, stop]);
+  }, [recording]);
 
   const start = async () => {
     setHint(null);
