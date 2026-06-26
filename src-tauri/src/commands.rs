@@ -697,6 +697,21 @@ pub async fn test_doubao_streaming(app: AppHandle, wav_path: String) -> Result<S
     Ok(text)
 }
 
+/// Dev-only trigger-key probe (P3.8). Starts a listen-only CGEventTap so we can
+/// verify fn + custom single/combo keys reach us before P3.9 swaps the real
+/// trigger; key events surface as the `trigger-probe-key` event. SPEC §5.8.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn start_trigger_probe(app: AppHandle) -> Result<(), AppError> {
+    app.state::<Arc<dyn Platform>>().start_trigger_probe(&app)
+}
+
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn stop_trigger_probe(app: AppHandle) -> Result<(), AppError> {
+    app.state::<Arc<dyn Platform>>().stop_trigger_probe()
+}
+
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
 #[cfg(debug_assertions)]
 fn read_wav_pcm16(path: &str) -> Result<Vec<u8>, AppError> {

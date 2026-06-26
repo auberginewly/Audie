@@ -181,6 +181,10 @@ pub fn run() {
             commands::delete_secret,
             #[cfg(debug_assertions)]
             commands::test_doubao_streaming,
+            #[cfg(debug_assertions)]
+            commands::start_trigger_probe,
+            #[cfg(debug_assertions)]
+            commands::stop_trigger_probe,
             provider_test::test_provider,
             // Overlay capsule controls (fe.8b / fe.8c).
             confirm_recording,

@@ -91,6 +91,18 @@ pub trait Platform: Send + Sync {
     /// default no-op keeps their impl unchanged (fe.8c).
     fn capture_focus_target(&self) {}
 
+    /// P3.8 dev-only trigger-key probe: start a listen-only `CGEventTap` and emit
+    /// `trigger-probe-key` for every key/flags event, so we can verify fn + custom
+    /// single/combo keys reach us before P3.9 swaps the real trigger. Default no-op
+    /// keeps non-macOS impls unchanged (it's a macOS-only dev probe). SPEC §5.8.
+    fn start_trigger_probe(&self, _app: &AppHandle) -> AppResult<()> {
+        Ok(())
+    }
+
+    fn stop_trigger_probe(&self) -> AppResult<()> {
+        Ok(())
+    }
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;

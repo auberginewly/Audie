@@ -15,8 +15,12 @@ use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
+use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_foundation::string::{CFString, CFStringRef};
-use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
+use core_graphics::event::{
+    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, CGKeyCode, EventField,
+};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use parking_lot::Mutex;
 use security_framework_sys::access_control::kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
@@ -28,7 +32,7 @@ use security_framework_sys::item::{
 use security_framework_sys::keychain_item::{
     SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use tauri_plugin_macos_permissions::{check_microphone_permission, request_microphone_permission};
@@ -42,6 +46,9 @@ pub struct MacosPlatform {
     // button makes Audie frontmost (stealing key focus), so inject restores this
     // app first or the synthesized Cmd+V would paste into nothing. Voxt's pattern.
     focus_target_pid: Mutex<Option<i32>>,
+    // P3.8 dev-only trigger-key probe: holds the run loop (to stop it cross-thread)
+    // and the thread the CGEventTap runs on. None when not probing.
+    probe: Mutex<Option<TriggerProbe>>,
 }
 
 impl MacosPlatform {
@@ -49,6 +56,7 @@ impl MacosPlatform {
         Self {
             registry,
             focus_target_pid: Mutex::new(None),
+            probe: Mutex::new(None),
         }
     }
 }
@@ -165,6 +173,224 @@ impl Platform for MacosPlatform {
     fn delete_secret(&self, key: &str) -> AppResult<()> {
         keychain_delete_secret(key)
     }
+
+    fn start_trigger_probe(&self, app: &AppHandle) -> AppResult<()> {
+        // Idempotent: a second start while one is live is a no-op.
+        if self.probe.lock().is_some() {
+            return Ok(());
+        }
+
+        // Option B: actively prompt for Input Monitoring, then re-check. A fresh
+        // grant only takes effect for an already-running process after relaunch,
+        // so a denial here returns Permission with that hint (§3.7) — no panic.
+        if !input_monitoring_granted() {
+            unsafe {
+                IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+            }
+            if !input_monitoring_granted() {
+                return Err(AppError::Permission(
+                    "输入监控权限未授予；请到 系统设置 → 隐私与安全性 → 输入监控 启用 Audie，然后重启 App".into(),
+                ));
+            }
+        }
+
+        // The CGEventTap must live on a thread running a CFRunLoop. We hand the run
+        // loop back through a channel so stop_trigger_probe can stop it cross-thread
+        // (CFRunLoop is Send and CFRunLoopStop is documented thread-safe).
+        let app = app.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<Option<CFRunLoop>>();
+        let thread = std::thread::Builder::new()
+            .name("trigger-probe".into())
+            .spawn(move || {
+                let tap = CGEventTap::new(
+                    CGEventTapLocation::HID,
+                    CGEventTapPlacement::HeadInsertEventTap,
+                    CGEventTapOptions::ListenOnly,
+                    vec![
+                        CGEventType::KeyDown,
+                        CGEventType::KeyUp,
+                        CGEventType::FlagsChanged,
+                    ],
+                    move |_proxy, event_type, event| {
+                        emit_probe_key(&app, event_type, event);
+                        None
+                    },
+                );
+                let tap = match tap {
+                    Ok(tap) => tap,
+                    Err(()) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let source = match tap.mach_port.create_runloop_source(0) {
+                    Ok(source) => source,
+                    Err(()) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let runloop = CFRunLoop::get_current();
+                unsafe {
+                    runloop.add_source(&source, kCFRunLoopCommonModes);
+                }
+                tap.enable();
+                let _ = tx.send(Some(runloop));
+                CFRunLoop::run_current(); // blocks until stop_trigger_probe
+            })
+            .map_err(|err| AppError::Internal(format!("spawn trigger-probe thread: {err}")))?;
+
+        match rx.recv() {
+            Ok(Some(runloop)) => {
+                *self.probe.lock() = Some(TriggerProbe {
+                    runloop,
+                    thread: Some(thread),
+                });
+                log::info!("trigger probe started");
+                Ok(())
+            }
+            _ => {
+                let _ = thread.join();
+                Err(AppError::Internal(
+                    "failed to create CGEventTap for trigger probe".into(),
+                ))
+            }
+        }
+    }
+
+    fn stop_trigger_probe(&self) -> AppResult<()> {
+        if let Some(mut probe) = self.probe.lock().take() {
+            probe.runloop.stop();
+            if let Some(thread) = probe.thread.take() {
+                let _ = thread.join();
+            }
+            log::info!("trigger probe stopped");
+        }
+        Ok(())
+    }
+}
+
+// ---- P3.8 trigger-key probe (dev-only) --------------------------------------
+//
+// A listen-only CGEventTap that reports every key/flags event so we can verify
+// fn + custom single/combo keys reach us before P3.9 swaps the real trigger.
+// IOKit drives Input Monitoring; CGEventTap captures. Both stay behind Platform
+// per §6.3. SPEC §5.8.
+
+/// fn key on macOS arrives as a `flagsChanged` event with this virtual keycode
+/// (`kVK_Function`), not a keyDown — the easy thing to miss.
+const KVK_FUNCTION: u16 = 63;
+
+struct TriggerProbe {
+    runloop: CFRunLoop,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct TriggerProbeKey {
+    key_label: String,
+    keycode: u16,
+    modifiers: Vec<String>,
+    phase: &'static str,
+    is_fn: bool,
+}
+
+fn emit_probe_key(app: &AppHandle, event_type: CGEventType, event: &CGEvent) {
+    let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+    let flags = event.get_flags();
+    let is_fn = matches!(event_type, CGEventType::FlagsChanged) && keycode == KVK_FUNCTION;
+
+    // flagsChanged has no intrinsic down/up — derive it from whether the key's own
+    // modifier bit is still set after the change.
+    let phase = match event_type {
+        CGEventType::KeyDown => "down",
+        CGEventType::KeyUp => "up",
+        _ => match modifier_flag_for_keycode(keycode) {
+            Some(flag) if flags.contains(flag) => "down",
+            _ => "up",
+        },
+    };
+
+    let modifiers = collect_modifiers(flags);
+    let key_label = if is_fn {
+        "fn".to_string()
+    } else {
+        match modifier_flag_for_keycode(keycode) {
+            Some(_) => modifiers
+                .last()
+                .cloned()
+                .unwrap_or_else(|| format!("key#{keycode}")),
+            None => format!("key#{keycode}"),
+        }
+    };
+
+    log::info!(
+        "trigger-probe-key: label={key_label} keycode={keycode} mods={modifiers:?} phase={phase} is_fn={is_fn}"
+    );
+    if let Err(err) = app.emit(
+        "trigger-probe-key",
+        TriggerProbeKey {
+            key_label,
+            keycode,
+            modifiers,
+            phase,
+            is_fn,
+        },
+    ) {
+        log::warn!("emit trigger-probe-key failed: {err}");
+    }
+}
+
+fn collect_modifiers(flags: CGEventFlags) -> Vec<String> {
+    let mut out = Vec::new();
+    if flags.contains(CGEventFlags::CGEventFlagControl) {
+        out.push("ctrl".into());
+    }
+    if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+        out.push("alt".into());
+    }
+    if flags.contains(CGEventFlags::CGEventFlagShift) {
+        out.push("shift".into());
+    }
+    if flags.contains(CGEventFlags::CGEventFlagCommand) {
+        out.push("cmd".into());
+    }
+    if flags.contains(CGEventFlags::CGEventFlagSecondaryFn) {
+        out.push("fn".into());
+    }
+    out
+}
+
+/// Map a modifier key's virtual keycode to the flag it toggles, so a flagsChanged
+/// event can be classified as press vs release. Non-modifier keys return None.
+fn modifier_flag_for_keycode(keycode: u16) -> Option<CGEventFlags> {
+    match keycode {
+        KVK_FUNCTION => Some(CGEventFlags::CGEventFlagSecondaryFn),
+        56 | 60 => Some(CGEventFlags::CGEventFlagShift), // L/R shift
+        59 | 62 => Some(CGEventFlags::CGEventFlagControl), // L/R control
+        58 | 61 => Some(CGEventFlags::CGEventFlagAlternate), // L/R option
+        54 | 55 => Some(CGEventFlags::CGEventFlagCommand), // L/R command
+        57 => Some(CGEventFlags::CGEventFlagAlphaShift), // caps lock
+        _ => None,
+    }
+}
+
+// IOKit HID access for Input Monitoring (§5.8 option B: actively prompt). IOKit
+// is not linked by core-graphics/security-framework, so this block carries its
+// own framework link — same pattern as the CGEvent externs below.
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    fn IOHIDCheckAccess(request: u32) -> u32;
+    fn IOHIDRequestAccess(request: u32) -> bool;
+}
+
+// <IOKit/hid/IOHIDLib.h>: kIOHIDRequestTypeListenEvent = 1; kIOHIDAccessTypeGranted = 0.
+const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+
+fn input_monitoring_granted() -> bool {
+    // SAFETY: C call from IOKit with a constant request type, returns an enum int.
+    unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) == K_IOHID_ACCESS_TYPE_GRANTED }
 }
 
 // ---- macOS Keychain Services (P1.2) -----------------------------------------
