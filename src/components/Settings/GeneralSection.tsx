@@ -10,6 +10,7 @@ import { SettingSection, SettingRow } from "./SettingSection";
 import { HotkeyRecorder } from "./HotkeyRecorder";
 import { PermissionRow } from "./PermissionRow";
 import { useMicMonitor } from "../../hooks/useMicMonitor";
+import { useInputMonitoring } from "../../hooks/useInputMonitoring";
 
 // mock: a Switch holding its own demo state, for unbacked rows.
 function MockSwitch({ defaultOn }: { defaultOn?: boolean }) {
@@ -29,6 +30,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
   // sound (a silent meter on e.g. AirPods A2DP flags a dead mic before they rely
   // on it). Runs while this tab is open; recording stops it server-side.
   const micLevel = useMicMonitor(settings.input_device, true);
+  const inputMonitoring = useInputMonitoring();
 
   // The "自动" row already names the device it resolves to, so hide that same mic
   // from the explicit list to avoid listing it twice — unless it happens to be
@@ -39,12 +41,13 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
 
   return (
     <>
-      <SettingSection icon="command" title="快捷键">
-        <SettingRow
-          label="快捷键"
-          divider={false}
-          control={<HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />}
-        />
+      <SettingSection icon="command" title="触发键">
+        <div className="px-3.5 py-3">
+          <div className="mb-2 text-xs text-text-tertiary">
+            按一下开始录音，再按一下结束。默认 fn（需输入监控权限）。
+          </div>
+          <HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />
+        </div>
       </SettingSection>
 
       <SettingSection icon="globe" title="语言" cardStyle={{ overflow: "visible" }}>
@@ -90,9 +93,17 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
       </SettingSection>
 
       <SettingSection icon="shield" title="权限">
-        {/* mock: real TCC status check is P3 */}
+        {/* mic / accessibility status still mock; input monitoring is real (P3.9) */}
         <PermissionRow icon="mic" name="麦克风" status="granted" divider={false} />
         <PermissionRow icon="command" name="辅助功能" status="granted" />
+        <PermissionRow
+          icon="monitor"
+          name="输入监控"
+          description="触发键（默认 fn）需要；授权后需重启 Audie 生效"
+          status={inputMonitoring.granted ? "granted" : "pending"}
+          onGrant={inputMonitoring.request}
+          grantLabel="授权"
+        />
       </SettingSection>
 
       <SettingSection icon="copy" title="输入">

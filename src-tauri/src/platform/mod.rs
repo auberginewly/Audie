@@ -69,6 +69,14 @@ pub trait Platform: Send + Sync {
         Ok(())
     }
 
+    /// P3.9 — Input Monitoring (macOS): the default trigger (fn) and the CGEventTap
+    /// need it. Default impls treat it as granted/no-op for platforms without the
+    /// concept, so non-macOS never gates on it.
+    fn input_monitoring_status(&self) -> bool {
+        true
+    }
+    fn request_input_monitoring(&self) {}
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;

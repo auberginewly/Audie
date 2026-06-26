@@ -161,6 +161,18 @@ impl Platform for MacosPlatform {
         keychain_delete_secret(key)
     }
 
+    fn input_monitoring_status(&self) -> bool {
+        input_monitoring_granted()
+    }
+
+    fn request_input_monitoring(&self) {
+        // Shows the system prompt when undecided; no-op once decided. The grant
+        // only applies after relaunch, so callers re-read status + tell the user.
+        unsafe {
+            IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+        }
+    }
+
     fn start_trigger_probe(&self, app: &AppHandle) -> AppResult<()> {
         // Idempotent: a second start while one is live is a no-op.
         if self.probe.lock().is_some() {

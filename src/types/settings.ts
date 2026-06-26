@@ -5,7 +5,9 @@
 import { z } from "zod";
 
 export const SettingsSchema = z.object({
-  hotkey: z.enum(["Fn", "Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"]),
+  // Trigger key: "Fn", a function key ("F13"), or a combo ("Ctrl+Shift+Space").
+  // Backend parse_trigger is the real gate (SPEC §5.8 P3.9), so keep it permissive.
+  hotkey: z.string().min(1),
   asr_provider: z.enum(["groq", "openai", "whisper_cpp", "doubao_stream"]),
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),
@@ -108,6 +110,3 @@ export const ImportConfigResultSchema = z.object({
 });
 
 export type ImportConfigResult = z.infer<typeof ImportConfigResultSchema>;
-
-// Single source for the dropdown — derived from the schema so they can't drift.
-export const HOTKEY_PRESETS = SettingsSchema.shape.hotkey.options;

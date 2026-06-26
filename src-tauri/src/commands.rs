@@ -46,11 +46,6 @@ pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_ENHANCE_PROMPT: &str =
     "去掉口水话，修正明显口误，补充标点和换行；不要改原意，不要添加信息，不要翻译。";
 
-/// Accepted trigger keys (M1 transitional). `Fn` is the default and drives a
-/// CGEventTap trigger; the combos still go through global-shortcut until M2
-/// unifies them. M3 replaces this whitelist with a real parse (SPEC §5.8 P3.9).
-pub const HOTKEY_PRESETS: &[&str] = &["Fn", "Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"];
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub hotkey: String,
@@ -143,7 +138,7 @@ pub fn load_hotkey(app: &AppHandle) -> String {
         .and_then(|value| value.as_str().map(str::to_string));
 
     match stored {
-        Some(hotkey) if HOTKEY_PRESETS.contains(&hotkey.as_str()) => hotkey,
+        Some(hotkey) if !hotkey.trim().is_empty() => hotkey,
         _ => DEFAULT_HOTKEY.to_string(),
     }
 }
@@ -396,11 +391,11 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
 }
 
 fn validate_settings(settings: &Settings) -> Result<(), AppError> {
-    if !HOTKEY_PRESETS.contains(&settings.hotkey.as_str()) {
-        return Err(AppError::Internal(format!(
-            "unsupported hotkey: {}",
-            settings.hotkey
-        )));
+    // The trigger string's real gate is parse_trigger at register time (platform
+    // layer); here we only reject an empty value, so the recorder can pick fn /
+    // function keys / combos freely (SPEC §5.8 P3.9).
+    if settings.hotkey.trim().is_empty() {
+        return Err(AppError::Internal("trigger key must not be empty".into()));
     }
     // `doubao_stream` is a real, selectable ASR choice (the model picker writes it)
     // but it's streaming-only, not a batch provider, so it stays out of
@@ -710,6 +705,22 @@ pub fn start_trigger_probe(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub fn stop_trigger_probe(app: AppHandle) -> Result<(), AppError> {
     app.state::<Arc<dyn Platform>>().stop_trigger_probe()
+}
+
+/// P3.9 — Input Monitoring permission (macOS). The default trigger (fn) needs it.
+/// `get` reads status without prompting; `request` shows the system prompt then
+/// returns the (possibly still-false) status — a fresh grant only applies after
+/// relaunch (SPEC §5.8 P3.9).
+#[tauri::command]
+pub fn get_input_monitoring_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().input_monitoring_status()
+}
+
+#[tauri::command]
+pub fn request_input_monitoring_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_input_monitoring();
+    platform.input_monitoring_status()
 }
 
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).

@@ -169,6 +169,8 @@ pub fn run() {
             commands::start_trigger_probe,
             #[cfg(debug_assertions)]
             commands::stop_trigger_probe,
+            commands::get_input_monitoring_status,
+            commands::request_input_monitoring_permission,
             provider_test::test_provider,
             // Overlay capsule controls (fe.8b / fe.8c).
             confirm_recording,
