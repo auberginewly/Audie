@@ -178,6 +178,7 @@ pub fn run() {
             begin_trigger_capture,
             end_trigger_capture,
             provider_test::test_provider,
+            commands::test_doubao_connection,
             // Overlay capsule controls (fe.8b / fe.8c).
             confirm_recording,
             cancel_recording,
