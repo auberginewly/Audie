@@ -12,7 +12,10 @@ export const SettingsSchema = z.object({
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
-  whisper_cpp_model_path: z.string().nullable(),
+  // nullish (not just nullable): the backend omits this key entirely when None
+  // (serde skip_serializing_if, required because TOML has no null), so get_settings
+  // may send it absent — a required nullable field would fail and blank all settings.
+  whisper_cpp_model_path: z.string().nullish(),
   openai_compatible_base_url: z.string().min(1),
   openai_compatible_model: z.string().min(1),
   doubao_endpoint: z.string().min(1),

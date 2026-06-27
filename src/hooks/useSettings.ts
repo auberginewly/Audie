@@ -51,6 +51,7 @@ export function useSettings(): UseSettings {
         const mics = MicrophoneListSchema.safeParse(rawMics);
         const auto = AutoDeviceSchema.safeParse(rawAuto);
         if (parsed.success) setSettings(parsed.data);
+        else console.error("settings parse failed (load):", parsed.error);
         if (asr.success) setAsrProviders(asr.data);
         if (llm.success) setLlmProviders(llm.data);
         if (mics.success) setMicrophones(mics.data);
@@ -64,6 +65,7 @@ export function useSettings(): UseSettings {
       const raw = await invoke("update_settings", { patch });
       const parsed = SettingsSchema.safeParse(raw);
       if (parsed.success) setSettings(parsed.data);
+      else console.error("settings parse failed (update):", parsed.error);
     } catch (err) {
       console.error("update settings failed:", err);
     }
