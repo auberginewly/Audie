@@ -77,7 +77,12 @@ export function ModelSection({ data }: { data: UseSettings }) {
       // is selected AND a token exists, otherwise it surfaces a Provider error.
       if (provider) update({ asr_provider: provider });
     } else {
-      update(llmPickPatch(m.id, settings?.openai_compatible_base_url ?? ""));
+      update(
+        llmPickPatch(m.id, {
+          baseUrl: settings?.openai_compatible_base_url ?? "",
+          model: settings?.openai_compatible_model ?? "",
+        }),
+      );
     }
   };
 

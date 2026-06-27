@@ -347,7 +347,12 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   };
   const pickLlm = (m: ModelMeta) => {
     setPickedLlm(m.id);
-    data.update(llmPickPatch(m.id, data.settings?.openai_compatible_base_url ?? ""));
+    data.update(
+      llmPickPatch(m.id, {
+        baseUrl: data.settings?.openai_compatible_base_url ?? "",
+        model: data.settings?.openai_compatible_model ?? "",
+      }),
+    );
   };
 
   const asrModels = MODELS.filter((m) => m.type === "asr");

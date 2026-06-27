@@ -74,13 +74,21 @@ export function llmPresetForModelId(id: string): { baseUrl: string; model: strin
   return { baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" }; // deepseek default
 }
 
-// Settings patch for picking an LLM card: switch to openai_compatible and apply the
-// provider preset — but keep an existing same-provider config (don't clobber a
-// custom endpoint/model when re-picking the provider already in use).
-export function llmPickPatch(id: string, currentBaseUrl: string): Partial<Settings> {
+// Settings patch for picking an LLM card. Switches to openai_compatible and seeds
+// the provider preset (endpoint + model) ONLY when the slot is still an untouched
+// preset default (or empty) — so picking works on a fresh setup, but once you've
+// customized the endpoint/model, toggling cards never silently overwrites it. To
+// switch away from a customized slot, edit it in the config dialog.
+export function llmPickPatch(
+  id: string,
+  current: { baseUrl: string; model: string },
+): Partial<Settings> {
   const patch: Partial<Settings> = { llm_provider: "openai_compatible" };
-  const domain = id === "openai" ? "openai.com" : "deepseek";
-  if (currentBaseUrl.includes(domain)) return patch;
+  const presets = [llmPresetForModelId("openai"), llmPresetForModelId("deepseek")];
+  const untouched =
+    current.baseUrl.trim() === "" ||
+    presets.some((p) => p.baseUrl === current.baseUrl && p.model === current.model);
+  if (!untouched) return patch;
   const preset = llmPresetForModelId(id);
   return { ...patch, openai_compatible_base_url: preset.baseUrl, openai_compatible_model: preset.model };
 }
