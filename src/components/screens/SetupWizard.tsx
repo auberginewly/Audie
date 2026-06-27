@@ -17,7 +17,8 @@ import {
 import type { UseSettings } from "../../hooks/useSettings";
 import { usePermissions, type PermissionState } from "../../hooks/usePermissions";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
-import { Badge, Button, Icon, IconButton, type IconName } from "../ui";
+import { Badge, Button, Icon, IconButton, InlineNotice, type IconName } from "../ui";
+import { openExternal } from "../../lib/open";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
 import { MODELS, asrProviderForModelId, type ModelMeta } from "../Settings/models";
@@ -263,9 +264,23 @@ function TestStep({ onPass }: { onPass: () => void }) {
         ) : phase === "success" ? (
           <span className="text-success-text">已插入 ✓ 看到框里出现文字就成了。</span>
         ) : err ? (
-          <span className="text-warning-text">{err.message}（修好后再按一次 fn 重试）</span>
+          <span className="text-warning-text">
+            {err.message}
+            {err.code === "permission" ? (
+              <button
+                className="ml-1 underline"
+                onClick={() => openExternal("x-apple.systempreferences:com.apple.preference.security")}
+              >
+                打开系统设置
+              </button>
+            ) : (
+              "（修好后再按一次 fn 重试）"
+            )}
+          </span>
         ) : (
-          <span className="text-text-tertiary">没反应？确认上一步「输入监控」已授权并重启过 Audie。</span>
+          <span className="text-text-tertiary">
+            没反应？确认「输入监控」已授权、🌐 键已设为「无操作」，并重启过 Audie。
+          </span>
         )}
       </div>
     </>
@@ -359,6 +374,28 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
             state={perms.inputMonitoring}
           />
         </div>
+        {/* Default trigger is fn/🌐, which macOS consumes (emoji picker / input
+            switch) unless the user reassigns the Globe key. Only nudge when the
+            trigger is still the fn default. */}
+        {data.settings?.hotkey === "Fn" ? (
+          <div className="mt-3">
+            <InlineNotice
+              tone="warning"
+              title="让 fn 键专门触发 Audie"
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => openExternal("x-apple.systempreferences:com.apple.preference.keyboard")}
+                >
+                  键盘设置
+                </Button>
+              }
+            >
+              默认按 🌐(fn) 会弹表情或切换输入法。到「系统设置 → 键盘 → 按下 🌐 键用来」选「无操作」，fn 才能专门触发 Audie。
+            </InlineNotice>
+          </div>
+        ) : null}
       </>
     );
   } else if (id === "hotkey") {
