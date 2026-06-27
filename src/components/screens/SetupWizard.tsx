@@ -17,6 +17,7 @@ import {
 import type { UseSettings } from "../../hooks/useSettings";
 import { usePermissions, type PermissionState } from "../../hooks/usePermissions";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
+import { useRecordingStore } from "../../store/recording";
 import { Badge, Button, Icon, IconButton, InlineNotice, type IconName } from "../ui";
 import { openExternal } from "../../lib/open";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
@@ -194,7 +195,7 @@ type TestPhase = "idle" | "recording" | "processing" | "success";
 // judged from the Rust state-change/error events — NOT the textarea contents — so
 // it stays reliable regardless of where injection focus lands. Reuses the real
 // hotkey path; no new backend command.
-function TestStep({ onPass }: { onPass: () => void }) {
+function TestStep() {
   const [phase, setPhase] = useState<TestPhase>("idle");
   const [err, setErr] = useState<AppErrorEvent | null>(null);
 
@@ -216,7 +217,6 @@ function TestStep({ onPass }: { onPass: () => void }) {
           break;
         case "SUCCESS":
           setPhase("success");
-          onPass();
           break;
         case "ERROR":
           setPhase("idle"); // the message arrives via the `error` event below
@@ -241,7 +241,7 @@ function TestStep({ onPass }: { onPass: () => void }) {
       cancelled = true;
       unsubs.forEach((fn) => fn());
     };
-  }, [onPass]);
+  }, []);
 
   return (
     <>
@@ -301,13 +301,12 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   const [pickedAsr, setPickedAsr] = useState<string | null>(null);
   const [pickedLlm, setPickedLlm] = useState<string | null>(null);
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
-  const [testPassed, setTestPassed] = useState(false);
+  // 试一下 completion is persistent (a dictation has succeeded) via the recording
+  // store, so the checkmark survives reopening the wizard.
+  const everSucceeded = useRecordingStore((s) => s.everSucceeded);
 
   useEffect(() => {
-    if (open) {
-      setStep(0);
-      setTestPassed(false);
-    }
+    if (open) setStep(0);
   }, [open, welcome]);
   if (!open) return null;
 
@@ -330,7 +329,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
     hotkey: !!data.settings?.hotkey,
     asr: asrDone,
     llm: !!pickedLlm,
-    test: testPassed,
+    test: everSucceeded,
   };
   const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选", test: "可选" };
 
@@ -446,7 +445,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
       </>
     );
   } else {
-    body = <TestStep onPass={() => setTestPassed(true)} />;
+    body = <TestStep />;
   }
 
   return (

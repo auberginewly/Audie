@@ -5,6 +5,7 @@ import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useSettings } from "./hooks/useSettings";
 import { usePermissions } from "./hooks/usePermissions";
 import { useConfiguredModels } from "./hooks/useConfiguredModels";
+import { useRecordingStore } from "./store/recording";
 import { modelIdForAsrProvider } from "./components/Settings/models";
 import type { Settings } from "./types/settings";
 import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState } from "./components/shell";
@@ -27,12 +28,12 @@ const AVAILABLE_VERSION = "0.5.0";
 
 // Sidebar dock card nudging first-run setup — real progress + CTA into the wizard.
 // Rendered only while onboarding is incomplete, so the permission/secret polls run
-// only then (completed users pay nothing). x/n counts the wizard's per-step
-// checkmarks (one unit per step, not per permission): 权限 / 快捷键 / 听写 / 润色.
-// The transient "试一下" verification isn't persisted, so it isn't counted.
+// only then (completed users pay nothing). x/n mirrors the wizard's per-step
+// checkmarks (one unit per step): 权限 / 快捷键 / 听写 / 润色 / 试一下.
 function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; onContinue: () => void }) {
   const perms = usePermissions();
   const { configured } = useConfiguredModels();
+  const everSucceeded = useRecordingStore((s) => s.everSucceeded);
   const steps = [
     perms.microphone.granted === true &&
       perms.accessibility.granted === true &&
@@ -40,6 +41,7 @@ function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; o
     !!settings?.hotkey,
     !!settings && configured(modelIdForAsrProvider(settings.asr_provider)),
     configured("deepseek"), // 润色: the openai_compatible LLM slot's key
+    everSucceeded, // 试一下: a dictation has succeeded this session
   ];
   const total = steps.length;
   const done = steps.filter(Boolean).length;
