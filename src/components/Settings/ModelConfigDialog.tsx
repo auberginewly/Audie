@@ -110,6 +110,7 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
 
   const runTest = async () => {
     setStatus({ tone: "pending", message: "测试中…" });
+    const startedAt = performance.now();
     try {
       let raw: unknown;
       if (model.id === "doubao") {
@@ -135,8 +136,10 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
           },
         });
       }
+      const ms = Math.round(performance.now() - startedAt);
       const parsed = ProviderTestResultSchema.safeParse(raw);
-      setStatus({ tone: "success", message: parsed.success ? parsed.data.message : "连接测试通过" });
+      const base = parsed.success ? parsed.data.message : "连接测试通过";
+      setStatus({ tone: "success", message: `${base} · ${ms}ms` });
     } catch (err) {
       setStatus({ tone: "danger", message: errorMessage(err) });
     }
