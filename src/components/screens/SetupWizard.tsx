@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Hotkey } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
 import { usePermissions, type PermissionState } from "../../hooks/usePermissions";
+import { useConfiguredModels } from "../../hooks/useConfiguredModels";
 import { Badge, Button, Icon, IconButton, type IconName } from "../ui";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
@@ -129,11 +130,13 @@ function PermItem({
 
 function WizModelRow({
   m,
+  configured,
   inUse,
   onPick,
   onConfigure,
 }: {
   m: ModelMeta;
+  configured: boolean;
   inUse: boolean;
   onPick: () => void;
   onConfigure: () => void;
@@ -146,7 +149,7 @@ function WizModelRow({
           <Badge tone="neutral">{m.source === "local" ? "本地" : "云端"}</Badge>
           {inUse ? (
             <Badge tone="accent">使用中</Badge>
-          ) : m.status === "configured" ? (
+          ) : configured ? (
             <Badge tone="success">已配置</Badge>
           ) : (
             <Badge tone="neutral">未配置</Badge>
@@ -154,7 +157,7 @@ function WizModelRow({
         </div>
         <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{m.model}</div>
       </div>
-      {!inUse && m.status === "configured" ? (
+      {!inUse && configured ? (
         <Button size="sm" variant="secondary" onClick={onPick}>
           选用
         </Button>
@@ -186,6 +189,7 @@ type SetupWizardProps = {
 export function SetupWizard({ open, onClose, onComplete, data, welcome = true }: SetupWizardProps) {
   const [step, setStep] = useState(0);
   const perms = usePermissions();
+  const configuredModels = useConfiguredModels();
   const [pickedAsr, setPickedAsr] = useState<string | null>(null);
   const [pickedLlm, setPickedLlm] = useState<string | null>(null);
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
@@ -204,7 +208,9 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
     perms.microphone.granted === true &&
     perms.accessibility.granted === true &&
     perms.inputMonitoring.granted === true;
-  const asrDone = !!pickedAsr;
+  // ASR step needs a picked model whose key is actually configured (real
+  // has_secret), so onboarding can't "complete" with an unusable transcriber.
+  const asrDone = !!pickedAsr && configuredModels.configured(pickedAsr);
   const doneMap: Record<string, boolean> = { permissions: permDone, hotkey: false, asr: asrDone, llm: !!pickedLlm };
   const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选" };
 
@@ -278,10 +284,12 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         <StepHeader title="选择听写模型" desc="Audie 用这个模型把你的语音转写成文字。至少选用一个才能继续。" tag="必选" />
         <div className="flex flex-col gap-2">
           {asrModels.map((m) => (
-            <WizModelRow key={m.id} m={m} inUse={pickedAsr === m.id} onPick={() => pickAsr(m)} onConfigure={() => setConfigModel(m)} />
+            <WizModelRow key={m.id} m={m} configured={configuredModels.configured(m.id)} inUse={pickedAsr === m.id} onPick={() => pickAsr(m)} onConfigure={() => setConfigModel(m)} />
           ))}
         </div>
-        {!asrDone ? <div className="mt-3 text-xs text-text-tertiary">选用一个听写模型后继续。</div> : null}
+        {!asrDone ? (
+          <div className="mt-3 text-xs text-text-tertiary">选用一个已配置的听写模型后继续；未配置的先点「配置」填入 API key。</div>
+        ) : null}
       </>
     );
   } else {
@@ -290,7 +298,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         <StepHeader title="选择润色模型" desc="插入前先整理转写文本 —— 去口水话、修口误、补标点。不配置则直接插入原文。" tag="可选" />
         <div className="flex flex-col gap-2">
           {llmModels.map((m) => (
-            <WizModelRow key={m.id} m={m} inUse={pickedLlm === m.id} onPick={() => pickLlm(m)} onConfigure={() => setConfigModel(m)} />
+            <WizModelRow key={m.id} m={m} configured={configuredModels.configured(m.id)} inUse={pickedLlm === m.id} onPick={() => pickLlm(m)} onConfigure={() => setConfigModel(m)} />
           ))}
         </div>
       </>
@@ -356,7 +364,14 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
           </div>
         </div>
 
-        <ModelConfigDialog model={configModel} data={data} onClose={() => setConfigModel(null)} />
+        <ModelConfigDialog
+          model={configModel}
+          data={data}
+          onClose={() => {
+            setConfigModel(null);
+            configuredModels.refresh(); // a just-saved key should flip the badge
+          }}
+        />
       </div>
     </div>
   );

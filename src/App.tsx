@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useSettings } from "./hooks/useSettings";
 import { usePermissions } from "./hooks/usePermissions";
+import { useConfiguredModels } from "./hooks/useConfiguredModels";
+import { MODELS } from "./components/Settings/models";
 import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState } from "./components/shell";
 import { Button, Dialog } from "./components/ui";
 import { HomeScreen } from "./components/screens/HomeScreen";
@@ -22,15 +24,19 @@ const UPDATE_LABELS: UpdateLabels = {
 // design's "available" state so the titlebar pill matches the mockup.
 const AVAILABLE_VERSION = "0.5.0";
 
-// Sidebar dock card nudging first-run setup — real permission progress + CTA into
-// the wizard. Rendered only while onboarding is incomplete, so usePermissions polls
-// only then (completed users pay nothing). commit 3 will fold ASR-key status in.
+// Sidebar dock card nudging first-run setup — real progress + CTA into the wizard.
+// Rendered only while onboarding is incomplete, so the permission/secret polls run
+// only then (completed users pay nothing). 4 items: 3 permissions + at least one
+// ASR transcriber with its key configured.
 function SetupGuideCard({ onContinue }: { onContinue: () => void }) {
   const perms = usePermissions();
-  const total = 3;
-  const done = [perms.microphone, perms.accessibility, perms.inputMonitoring].filter(
+  const { configured } = useConfiguredModels();
+  const permsGranted = [perms.microphone, perms.accessibility, perms.inputMonitoring].filter(
     (p) => p.granted === true,
   ).length;
+  const asrReady = MODELS.some((m) => m.type === "asr" && configured(m.id)) ? 1 : 0;
+  const total = 4;
+  const done = permsGranted + asrReady;
   return (
     <div className="rounded-md bg-gray-100 p-3">
       <div className="mb-2 flex items-center justify-between">
