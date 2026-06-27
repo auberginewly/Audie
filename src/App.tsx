@@ -5,7 +5,8 @@ import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useSettings } from "./hooks/useSettings";
 import { usePermissions } from "./hooks/usePermissions";
 import { useConfiguredModels } from "./hooks/useConfiguredModels";
-import { MODELS } from "./components/Settings/models";
+import { modelIdForAsrProvider } from "./components/Settings/models";
+import type { Settings } from "./types/settings";
 import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState } from "./components/shell";
 import { Button, Dialog } from "./components/ui";
 import { HomeScreen } from "./components/screens/HomeScreen";
@@ -26,17 +27,22 @@ const AVAILABLE_VERSION = "0.5.0";
 
 // Sidebar dock card nudging first-run setup — real progress + CTA into the wizard.
 // Rendered only while onboarding is incomplete, so the permission/secret polls run
-// only then (completed users pay nothing). 4 items: 3 permissions + at least one
-// ASR transcriber with its key configured.
-function SetupGuideCard({ onContinue }: { onContinue: () => void }) {
+// only then (completed users pay nothing). x/n counts the wizard's per-step
+// checkmarks (one unit per step, not per permission): 权限 / 快捷键 / 听写 / 润色.
+// The transient "试一下" verification isn't persisted, so it isn't counted.
+function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; onContinue: () => void }) {
   const perms = usePermissions();
   const { configured } = useConfiguredModels();
-  const permsGranted = [perms.microphone, perms.accessibility, perms.inputMonitoring].filter(
-    (p) => p.granted === true,
-  ).length;
-  const asrReady = MODELS.some((m) => m.type === "asr" && configured(m.id)) ? 1 : 0;
-  const total = 4;
-  const done = permsGranted + asrReady;
+  const steps = [
+    perms.microphone.granted === true &&
+      perms.accessibility.granted === true &&
+      perms.inputMonitoring.granted === true,
+    !!settings?.hotkey,
+    !!settings && configured(modelIdForAsrProvider(settings.asr_provider)),
+    configured("deepseek"), // 润色: the openai_compatible LLM slot's key
+  ];
+  const total = steps.length;
+  const done = steps.filter(Boolean).length;
   return (
     <div className="rounded-md bg-gray-100 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -144,7 +150,7 @@ function App() {
             onSettings={() => setSettingsOpen(true)}
             aboveDock={
               onboardingCompleted === false ? (
-                <SetupGuideCard onContinue={() => setSetupOpen(true)} />
+                <SetupGuideCard settings={data.settings} onContinue={() => setSetupOpen(true)} />
               ) : undefined
             }
           />
