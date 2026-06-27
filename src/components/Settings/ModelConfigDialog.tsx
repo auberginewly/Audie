@@ -175,7 +175,11 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
               测试
             </Button>
           ) : null}
-          {status ? <StatusMessage tone={status.tone}>{status.message}</StatusMessage> : null}
+          {status ? (
+            <StatusMessage tone={status.tone} icon={null}>
+              {status.message}
+            </StatusMessage>
+          ) : null}
           <div className="flex-1" />
           <Button variant="ghost" onClick={onClose}>
             取消
