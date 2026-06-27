@@ -24,7 +24,6 @@ import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
 import { MODELS, asrProviderForModelId, type ModelMeta } from "../Settings/models";
 
 type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm" | "test";
-type StepState = "current" | "done" | "upcoming";
 
 const NUMBERED: StepId[] = ["permissions", "hotkey", "asr", "llm", "test"];
 const STEP_LABEL: Record<StepId, string> = {
@@ -40,17 +39,17 @@ function StepItem({
   index,
   label,
   sub,
-  state,
+  current,
+  done,
   onClick,
 }: {
   index: number;
   label: string;
   sub: string;
-  state: StepState;
+  current: boolean;
+  done: boolean;
   onClick: () => void;
 }) {
-  const current = state === "current";
-  const done = state === "done";
   return (
     <button
       onClick={onClick}
@@ -324,7 +323,15 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   // ASR step needs a picked model whose key is actually configured (real
   // has_secret), so onboarding can't "complete" with an unusable transcriber.
   const asrDone = !!pickedAsr && configuredModels.configured(pickedAsr);
-  const doneMap: Record<string, boolean> = { permissions: permDone, hotkey: false, asr: asrDone, llm: !!pickedLlm, test: testPassed };
+  // A step is "done" when its own requirement is actually met (not merely passed),
+  // so the sidebar checks each step the moment it's complete — current step included.
+  const doneMap: Record<string, boolean> = {
+    permissions: permDone,
+    hotkey: !!data.settings?.hotkey,
+    asr: asrDone,
+    llm: !!pickedLlm,
+    test: testPassed,
+  };
   const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选", test: "可选" };
 
   const isLast = id === "test";
@@ -464,11 +471,17 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
               <div className="mt-[3px] text-xs text-text-tertiary">几步即可开始听写。</div>
             </div>
             <div className="flex flex-col gap-0.5">
-              {NUMBERED.map((sid, i) => {
-                const curNum = NUMBERED.indexOf(id);
-                const state: StepState = sid === id ? "current" : doneMap[sid] || (curNum > -1 && i < curNum) ? "done" : "upcoming";
-                return <StepItem key={sid} index={i} label={STEP_LABEL[sid]} sub={subMap[sid]} state={state} onClick={() => setStep(ids.indexOf(sid))} />;
-              })}
+              {NUMBERED.map((sid, i) => (
+                <StepItem
+                  key={sid}
+                  index={i}
+                  label={STEP_LABEL[sid]}
+                  sub={subMap[sid]}
+                  current={sid === id}
+                  done={doneMap[sid] === true}
+                  onClick={() => setStep(ids.indexOf(sid))}
+                />
+              ))}
             </div>
           </nav>
 
