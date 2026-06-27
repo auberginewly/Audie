@@ -58,6 +58,10 @@ futures-util = { version = "0.3", default-features = false, features = [
 # WAV decoding for the dev-only doubao connectivity command (P2.5). Mature crate;
 # avoids hand-rolling a WAV parser.
 hound = "3"
+# Dictation history (Home/History screens) persists to a SQLite file. `bundled`
+# compiles the SQLite C lib in — consistent with our rustls choice of not relying
+# on a system library. Fresh schema, so no migration crate is needed.
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 # macOS-only: CGEvent to simulate the Cmd+V paste keystroke (clipboard inject).
 [target.'cfg(target_os = "macos")'.dependencies]

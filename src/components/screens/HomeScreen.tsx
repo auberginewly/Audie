@@ -1,8 +1,13 @@
 // Home — the landing, mirroring the design's Typeless-style rhythm: slogan +
-// fn hint over a "this week" stat grid. The four stats are mock — the backend
-// tracks none yet (see plan). State lives in the capsule overlay, not here.
+// fn hint over a usage stat grid. Stats are real (rolling 7-day, from the
+// HistoryManager); state lives in the capsule overlay, not here.
 
 import { Icon, Keycap, type IconName } from "../ui";
+import { useUsageStats } from "../../hooks/useUsageStats";
+
+// Typing-speed baseline for the "time saved" card (字/分). A fixed assumption,
+// Typeless-style — there's no per-user measurement.
+const TYPING_WPM = 40;
 
 function StatCard({ icon, value, unit, label }: { icon: IconName; value: string; unit: string; label: string }) {
   return (
@@ -21,15 +26,26 @@ function StatCard({ icon, value, unit, label }: { icon: IconName; value: string;
   );
 }
 
-// mock: backend tracks no usage stats yet.
-const STATS: { icon: IconName; value: string; unit: string; label: string }[] = [
-  { icon: "clock", value: "19", unit: "分钟", label: "口述时间" },
-  { icon: "mic", value: "1.9K", unit: "字", label: "口述字数" },
-  { icon: "zap", value: "53", unit: "分钟", label: "节省时间" },
-  { icon: "audio-lines", value: "150", unit: "字/分", label: "平均口述速度" },
-];
+// "1900" → "1.9K"; smaller counts stay literal.
+function formatCount(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+}
 
 export function HomeScreen() {
+  const stats = useUsageStats();
+  const words = stats?.total_words ?? 0;
+  const durationMin = (stats?.total_duration_ms ?? 0) / 60000;
+  const spokenMin = Math.round(durationMin);
+  const savedMin = Math.max(0, Math.round(words / TYPING_WPM - durationMin));
+  const wpm = durationMin > 0 ? Math.round(words / durationMin) : 0;
+
+  const cards: { icon: IconName; value: string; unit: string; label: string }[] = [
+    { icon: "clock", value: String(spokenMin), unit: "分钟", label: "口述时间" },
+    { icon: "mic", value: formatCount(words), unit: "字", label: "口述字数" },
+    { icon: "zap", value: String(savedMin), unit: "分钟", label: "节省时间" },
+    { icon: "audio-lines", value: String(wpm), unit: "字/分", label: "平均口述速度" },
+  ];
+
   return (
     <div data-tauri-drag-region className="px-7 pt-6">
       <div className="mb-6 pl-1">
@@ -43,9 +59,9 @@ export function HomeScreen() {
         </div>
       </div>
 
-      <div className="mb-3 pl-1 font-mono text-xs uppercase tracking-[0.04em] text-text-tertiary">本周</div>
+      <div className="mb-3 pl-1 font-mono text-xs uppercase tracking-[0.04em] text-text-tertiary">近 7 天</div>
       <div className="grid grid-cols-4 gap-3">
-        {STATS.map((s) => (
+        {cards.map((s) => (
           <StatCard key={s.label} icon={s.icon} value={s.value} unit={s.unit} label={s.label} />
         ))}
       </div>

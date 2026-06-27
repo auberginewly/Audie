@@ -25,6 +25,9 @@ export const SettingsSchema = z.object({
   // User's main language; the backend prepends it as a line to the enhance prompt.
   // "" = follow system locale (resolved backend-side).
   primary_language: z.string(),
+  // How long dictation history is kept (History screen). Backend normalize clamps
+  // anything unknown to "forever", so the enum is safe.
+  history_retention: z.enum(["never", "day", "week", "month", "forever"]),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

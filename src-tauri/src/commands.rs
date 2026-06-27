@@ -33,6 +33,8 @@ pub const DEFAULT_ASR_PROVIDER: &str = "groq";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
+pub const DEFAULT_HISTORY_RETENTION: &str = "forever";
+const HISTORY_RETENTION_IDS: &[&str] = &["never", "day", "week", "month", "forever"];
 // The factory-default enhance prompt is data, not source: it lives in
 // prompts/enhance_default.md and is pulled into Settings::default() via include_str!
 // (no prompt string in .rs). Edit that file to change the default; the user owns the
@@ -64,6 +66,10 @@ pub struct Settings {
     /// send time. Empty string = follow the system locale (like `input_device`'s
     /// empty = automatic). Resolved at enhance time (lib.rs).
     pub primary_language: String,
+    /// How long dictation history is kept on disk (History screen). One of
+    /// `never | day | week | month | forever`; `never` skips recording entirely,
+    /// the rest prune older rows. `normalize_settings` clamps anything else.
+    pub history_retention: String,
 }
 
 impl Default for Settings {
@@ -84,6 +90,7 @@ impl Default for Settings {
             input_device: String::new(),
             onboarding_completed: false,
             primary_language: String::new(),
+            history_retention: DEFAULT_HISTORY_RETENTION.to_string(),
         }
     }
 }
@@ -103,6 +110,7 @@ pub struct SettingsPatch {
     pub input_device: Option<String>,
     pub onboarding_completed: Option<bool>,
     pub primary_language: Option<String>,
+    pub history_retention: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -235,6 +243,10 @@ fn normalize_settings(mut settings: Settings) -> Settings {
         .whisper_cpp_model_path
         .map(|path| path.trim().to_string())
         .filter(|path| !path.is_empty());
+
+    if !HISTORY_RETENTION_IDS.contains(&settings.history_retention.as_str()) {
+        settings.history_retention = DEFAULT_HISTORY_RETENTION.to_string();
+    }
 
     settings
 }
@@ -405,6 +417,13 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
         // Empty is meaningful (= follow system locale), so like input_device we keep
         // an empty patch value rather than filtering it back to current.
         primary_language: patch.primary_language.unwrap_or(current.primary_language),
+        // Retention is an enum-ish id (never/day/week/month/forever) — a blank patch
+        // keeps current; normalize_settings clamps anything unknown.
+        history_retention: patch
+            .history_retention
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.history_retention),
     };
 
     validate_settings(&next)?;
@@ -502,6 +521,36 @@ pub fn stop_mic_monitor(app: AppHandle) -> Result<(), AppError> {
     let audio = app.state::<Arc<crate::managers::audio::AudioManager>>();
     audio.stop_monitor();
     Ok(())
+}
+
+/// Dictation history for the History screen (newest first, capped). Reads straight
+/// from the HistoryManager's SQLite store (§6.1).
+#[tauri::command]
+pub fn list_history(
+    app: AppHandle,
+) -> Result<Vec<crate::managers::history::HistoryEntry>, AppError> {
+    app.state::<Arc<crate::managers::history::HistoryManager>>()
+        .list()
+}
+
+#[tauri::command]
+pub fn delete_history_entry(app: AppHandle, id: i64) -> Result<(), AppError> {
+    let history = app.state::<Arc<crate::managers::history::HistoryManager>>();
+    history.delete_entry(&app, id)
+}
+
+#[tauri::command]
+pub fn clear_history(app: AppHandle) -> Result<(), AppError> {
+    let history = app.state::<Arc<crate::managers::history::HistoryManager>>();
+    history.clear(&app)
+}
+
+/// Rolling 7-day usage totals for the Home dashboard (§5.4 / release-v1 #6). The
+/// frontend derives the four cards (time / words / time-saved / speed) from these.
+#[tauri::command]
+pub fn get_usage_stats(app: AppHandle) -> Result<crate::managers::history::UsageStats, AppError> {
+    app.state::<Arc<crate::managers::history::HistoryManager>>()
+        .weekly_stats()
 }
 
 #[tauri::command]
@@ -807,6 +856,7 @@ mod tests {
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
+        assert_eq!(settings.history_retention, DEFAULT_HISTORY_RETENTION);
         assert!(!settings.enhance_prompt.trim().is_empty());
         assert_eq!(settings.whisper_cpp_model_path, None);
         assert_eq!(
@@ -893,6 +943,12 @@ mod tests {
             ..Settings::default()
         });
         assert_eq!(kept.asr_provider, "doubao_stream");
+
+        let retention = normalize_settings(Settings {
+            history_retention: "bogus".into(),
+            ..Settings::default()
+        });
+        assert_eq!(retention.history_retention, DEFAULT_HISTORY_RETENTION);
 
         let fixed = normalize_settings(Settings {
             openai_compatible_base_url: "  ".into(),

@@ -158,7 +158,7 @@ function App() {
           />
         }
       >
-        {nav === "home" ? <HomeScreen /> : <HistoryScreen />}
+        {nav === "home" ? <HomeScreen /> : <HistoryScreen data={data} />}
       </AppShell>
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} onRerunSetup={rerunSetup} />

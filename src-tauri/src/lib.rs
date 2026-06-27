@@ -28,6 +28,7 @@ use crate::asr::{AudioData, TranscriptStream};
 use crate::error::{AppError, AppResult};
 use crate::managers::audio::AudioManager;
 use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
+use crate::managers::history::HistoryManager;
 use crate::managers::inject::InjectManager;
 use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
 use crate::platform::{current_platform, HotkeyCallback, Platform};
@@ -156,6 +157,10 @@ pub fn run() {
             commands::list_llm_providers,
             commands::list_microphones,
             commands::auto_input_device,
+            commands::list_history,
+            commands::delete_history_entry,
+            commands::clear_history,
+            commands::get_usage_stats,
             commands::start_mic_monitor,
             commands::stop_mic_monitor,
             commands::set_secret,
@@ -185,6 +190,7 @@ pub fn run() {
             retry_last,
             insert_raw_last,
             open_main_window,
+            reenhance_history_entry,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -215,6 +221,7 @@ pub fn run() {
             let audio = Arc::new(AudioManager::new());
             let transcription = Arc::new(TranscriptionManager::new());
             let enhance = Arc::new(EnhanceManager::new());
+            let history = Arc::new(HistoryManager::new(&app_handle));
             let platform: Arc<dyn Platform> = Arc::from(current_platform());
             let inject = Arc::new(InjectManager::new(platform.clone()));
 
@@ -229,6 +236,7 @@ pub fn run() {
             app.manage(audio);
             app.manage(transcription);
             app.manage(enhance);
+            app.manage(history);
             app.manage(inject);
             app.manage(platform.clone());
             app.manage(Arc::new(parking_lot::Mutex::new(None::<TranscriptStream>)));
@@ -472,6 +480,7 @@ fn cancel_recording(app: AppHandle) {
                 .state
                 .transition(ctx.app, AppState::Cancel, Some("overlay-cancel"))
             {
+                record_cancelled_transcript(ctx.app, ctx.last_take);
                 spawn_settle_after(ctx.app.clone(), ctx.state.clone(), TERMINAL_HOLD_MS);
             }
         }
@@ -483,6 +492,7 @@ fn cancel_recording(app: AppHandle) {
                 .state
                 .transition(ctx.app, AppState::Cancel, Some("overlay-cancel-processing"))
             {
+                record_cancelled_transcript(ctx.app, ctx.last_take);
                 spawn_settle_after(ctx.app.clone(), ctx.state.clone(), TERMINAL_HOLD_MS);
             }
         }
@@ -544,8 +554,8 @@ fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
                     duration_ms: take.duration_ms,
                 },
             );
-            let (to_inject, polish_unavailable) = if raw_only {
-                (text.clone(), false)
+            let (to_inject, outcome) = if raw_only {
+                (text.clone(), EnhanceOutcome::Disabled)
             } else {
                 maybe_enhance_text(&app, &enhance, &text)
             };
@@ -554,8 +564,10 @@ fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
                 enter_error(app, state, err);
                 return;
             }
+            let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| to_inject.clone());
+            record_history(&app, "success", &text, enhanced, take.duration_ms);
             state.transition(&app, AppState::Success, Some("resumed"));
-            let hold = if polish_unavailable {
+            let hold = if matches!(outcome, EnhanceOutcome::Failed) {
                 TERMINAL_HOLD_MS
             } else {
                 SUCCESS_HOLD_MS
@@ -596,6 +608,24 @@ fn open_main_window(app: AppHandle) {
     let _ = app.emit("open-settings", ());
 }
 
+/// History 重试 — re-run the current LLM on a stored entry's transcript and save the
+/// enhanced version. No audio needed (re-enhance, not re-transcribe). Errors surface
+/// to the caller so the History screen can toast them; the success path emits
+/// `history-updated` so the list re-fetches and shows the new 润色 box.
+#[tauri::command]
+fn reenhance_history_entry(app: AppHandle, id: i64) -> AppResult<()> {
+    let history = app.state::<Arc<HistoryManager>>();
+    let raw = history
+        .raw_text_of(id)?
+        .ok_or_else(|| AppError::Internal("history entry not found".into()))?;
+    if raw.trim().is_empty() {
+        return Err(AppError::Internal("无可润色的原文".into()));
+    }
+    let enhance = app.state::<Arc<EnhanceManager>>();
+    let enhanced = enhance.enhance(&raw, &reenhance_config(&app))?;
+    history.set_enhanced(&app, id, &enhanced)
+}
+
 /// Run the (blocking) transcription off the hotkey thread, then drive the
 /// P1 pipeline tail: ASR → `final-transcript` event → optional LLM enhance →
 /// inject at the caret → Success → Idle. Any failure is mapped to `error` and
@@ -626,19 +656,13 @@ fn spawn_transcription(
         });
 
         // AirPods on A2DP (no HFP switch yet) and a few other broken-mic states
-        // produce a buffer of literal zeros. Sending that to Whisper costs an API
-        // call and gets back "Thank you." hallucinations. Detect digital silence
-        // here and short-circuit to a friendly Device error. Threshold is "any
-        // sample exceeds 1e-4" — real mic noise floor sits well above that, so a
-        // healthy 200ms recording always passes.
+        // produce a buffer of literal zeros — nothing recognizable. Detect digital
+        // silence here (avoids an API call that returns "Thank you." hallucinations)
+        // and treat it as "no content recognized". Threshold is "any sample exceeds
+        // 1e-4" — real mic noise floor sits well above that, so a healthy 200ms
+        // recording always passes.
         if duration_ms >= 200 && is_digital_silence(&audio) {
-            enter_error(
-                app,
-                state,
-                AppError::Device(
-                    "麦克风没声音，请检查蓝牙耳机是否切到通话模式，或换默认输入设备".into(),
-                ),
-            );
+            enter_no_content(app, state, duration_ms);
             return;
         }
 
@@ -650,6 +674,12 @@ fn spawn_transcription(
                 return;
             }
         };
+
+        // ASR ran but found no speech — record a "没有识别到内容" entry, don't inject.
+        if text.trim().is_empty() {
+            enter_no_content(app, state, duration_ms);
+            return;
+        }
 
         // Fill the transcript in so 插入原文 / 重试 (after an inject failure) and
         // 撤销操作 (after a mid-Processing cancel) resume without re-transcribing.
@@ -728,32 +758,90 @@ fn finish_pipeline_tail(
         },
     );
 
-    let (text_to_inject, enhance_failed) = maybe_enhance_text(app, enhance, text);
+    let (text_to_inject, outcome) = maybe_enhance_text(app, enhance, text);
 
     // P0.4: inject at the caret. On failure the text is still on the
     // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
     inject.inject(app, &text_to_inject)?;
-    Ok(enhance_failed)
+
+    // Record the dictation (Home/History): raw transcript always, enhanced kept
+    // whenever polishing actually ran (so both versions show). A history failure
+    // must not break injection.
+    let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| text_to_inject.clone());
+    record_history(app, "success", text, enhanced, duration_ms);
+    Ok(matches!(outcome, EnhanceOutcome::Failed))
 }
 
-/// Returns the text to inject and whether enhance failed (raw fallback).
-fn maybe_enhance_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> (String, bool) {
+/// Persist one dictation outcome to the History store. Best-effort: a DB error only
+/// logs, never propagates — history is peripheral to the inject hot path.
+fn record_history(
+    app: &AppHandle,
+    kind: &str,
+    raw_text: &str,
+    enhanced_text: Option<String>,
+    duration_ms: u64,
+) {
+    let history = app.state::<Arc<HistoryManager>>();
+    if let Err(err) = history.record(app, kind, raw_text, enhanced_text, duration_ms as i64) {
+        log::warn!("record history ({kind}): {err:?}");
+    }
+}
+
+/// On cancel, preserve the transcript if one already exists (a mid-Processing cancel
+/// where ASR returned, or streaming had a final) as a normal history entry — the user
+/// keeps the text even though it wasn't injected. A cancel with no transcript (the
+/// usual mid-recording ✕) records nothing. Best-effort; no change to the cancel path.
+fn record_cancelled_transcript(app: &AppHandle, last_take: &LastTakeSlot) {
+    let take = match last_take.lock().as_ref() {
+        Some(take) => match &take.transcript {
+            Some(text) if !text.trim().is_empty() => (text.clone(), take.duration_ms),
+            _ => return,
+        },
+        None => return,
+    };
+    record_history(app, "success", &take.0, None, take.1);
+}
+
+/// "No content recognized" outcome: record a `kind=empty` history entry and surface
+/// it on the overlay. Reuses the ERROR toast (which renders as a neutral card with no
+/// action buttons for this category — not the scary red device-error treatment), so
+/// the user gets immediate feedback plus a history row.
+fn enter_no_content(app: AppHandle, state: Arc<StateMachine>, duration_ms: u64) {
+    record_history(&app, "empty", "", None, duration_ms);
+    enter_error(app, state, AppError::Device("没有识别到内容".into()));
+}
+
+/// What happened to the transcript on the enhance step — distinguishes "polishing
+/// was off" from "polished" (both inject the text, but only the latter has an
+/// enhanced version worth storing) from "polish failed → raw fallback".
+enum EnhanceOutcome {
+    Disabled,
+    Enhanced,
+    Failed,
+}
+
+/// Returns the text to inject and the enhance outcome.
+fn maybe_enhance_text(
+    app: &AppHandle,
+    enhance: &EnhanceManager,
+    text: &str,
+) -> (String, EnhanceOutcome) {
     let config = enhance_config(app);
     if !config.enhance_enabled {
-        return (text.to_string(), false);
+        return (text.to_string(), EnhanceOutcome::Disabled);
     }
 
     emit_enhance_progress(app, "started", "润色中…");
     match enhance.enhance(text, &config) {
         Ok(enhanced) => {
             emit_enhance_progress(app, "completed", "润色完成");
-            (enhanced, false)
+            (enhanced, EnhanceOutcome::Enhanced)
         }
         Err(err) => {
             log::warn!("enhance failed, injecting original transcript: {err:?}");
             let fallback = fallback_after_enhance_failure(text, &err);
             emit_enhance_progress(app, "failed", &fallback.message);
-            (fallback.text_to_inject, true)
+            (fallback.text_to_inject, EnhanceOutcome::Failed)
         }
     }
 }
@@ -867,26 +955,47 @@ fn doubao_streaming_config_from_settings(
     })
 }
 
-fn enhance_config(app: &AppHandle) -> EnhanceConfig {
-    let settings = commands::load_settings(app);
-    let platform = app.state::<Arc<dyn Platform>>();
-
-    // Prepend the main language as one line so the LLM knows it, without exposing a
-    // {{placeholder}} in the editable prompt. The dropdown wins; empty = follow the
-    // system locale; 中文 as a last resort.
+/// Prepend the main language as one line so the LLM knows it, without exposing a
+/// {{placeholder}} in the editable prompt. The dropdown wins; empty = follow the
+/// system locale; 中文 as a last resort.
+fn enhance_prompt_with_language(app: &AppHandle, settings: &commands::Settings) -> String {
     let language = if settings.primary_language.trim().is_empty() {
-        platform
+        app.state::<Arc<dyn Platform>>()
             .inner()
             .system_language()
             .unwrap_or_else(|| "中文".to_string())
     } else {
         settings.primary_language.clone()
     };
-    let enhance_prompt = format!("用户主要语言：{language}\n\n{}", settings.enhance_prompt);
+    format!("用户主要语言：{language}\n\n{}", settings.enhance_prompt)
+}
+
+fn enhance_config(app: &AppHandle) -> EnhanceConfig {
+    let settings = commands::load_settings(app);
+    let enhance_prompt = enhance_prompt_with_language(app, &settings);
+    let platform = app.state::<Arc<dyn Platform>>();
 
     enhance_config_from_settings(
         settings.llm_provider,
         settings.enhance_enabled,
+        enhance_prompt,
+        settings.openai_compatible_base_url,
+        settings.openai_compatible_model,
+        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
+    )
+}
+
+/// Enhance config for the History 重试 — same prompt/provider, but the LLM key is
+/// read regardless of the auto-enhance toggle (the user explicitly asked to polish
+/// this entry). `enhance_enabled` is forced true so the key is fetched.
+fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
+    let settings = commands::load_settings(app);
+    let enhance_prompt = enhance_prompt_with_language(app, &settings);
+    let platform = app.state::<Arc<dyn Platform>>();
+
+    enhance_config_from_settings(
+        settings.llm_provider,
+        true,
         enhance_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
