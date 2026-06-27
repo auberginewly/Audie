@@ -4,8 +4,16 @@
 // are mock (real TCC flow is P3). Picked state is local to the wizard demo.
 
 import { useEffect, useState, type ReactNode } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { Hotkey } from "../../types/settings";
+import {
+  EVENT_STATE_CHANGE,
+  EVENT_ERROR,
+  StateChangeSchema,
+  AppErrorSchema,
+  type AppErrorEvent,
+} from "../../types/events";
 import type { UseSettings } from "../../hooks/useSettings";
 import { usePermissions, type PermissionState } from "../../hooks/usePermissions";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
@@ -14,16 +22,17 @@ import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
 import { MODELS, asrProviderForModelId, type ModelMeta } from "../Settings/models";
 
-type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm";
+type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm" | "test";
 type StepState = "current" | "done" | "upcoming";
 
-const NUMBERED: StepId[] = ["permissions", "hotkey", "asr", "llm"];
+const NUMBERED: StepId[] = ["permissions", "hotkey", "asr", "llm", "test"];
 const STEP_LABEL: Record<StepId, string> = {
   welcome: "欢迎",
   permissions: "权限",
   hotkey: "快捷键",
   asr: "听写模型",
   llm: "润色模型",
+  test: "试一下",
 };
 
 function StepItem({
@@ -178,6 +187,91 @@ function WelPoint({ title, desc }: { title: string; desc: string }) {
   );
 }
 
+type TestPhase = "idle" | "recording" | "processing" | "success";
+
+// "Try it" step: the user focuses the textarea, presses the real trigger (fn) and
+// speaks; the dictation pipeline injects into the focused box. Success/failure is
+// judged from the Rust state-change/error events — NOT the textarea contents — so
+// it stays reliable regardless of where injection focus lands. Reuses the real
+// hotkey path; no new backend command.
+function TestStep({ onPass }: { onPass: () => void }) {
+  const [phase, setPhase] = useState<TestPhase>("idle");
+  const [err, setErr] = useState<AppErrorEvent | null>(null);
+
+  useEffect(() => {
+    const unsubs: UnlistenFn[] = [];
+    let cancelled = false;
+    const track = (fn: UnlistenFn) => (cancelled ? fn() : unsubs.push(fn));
+
+    listen(EVENT_STATE_CHANGE, (e) => {
+      const parsed = StateChangeSchema.safeParse(e.payload);
+      if (!parsed.success) return;
+      switch (parsed.data.to) {
+        case "RECORDING":
+          setErr(null);
+          setPhase("recording");
+          break;
+        case "PROCESSING":
+          setPhase("processing");
+          break;
+        case "SUCCESS":
+          setPhase("success");
+          onPass();
+          break;
+        case "ERROR":
+          setPhase("idle"); // the message arrives via the `error` event below
+          break;
+        // IDLE (incl. the ~150ms post-SUCCESS settle) leaves "success" shown.
+      }
+    })
+      .then(track)
+      .catch((e2) => console.error("test state-change subscribe failed:", e2));
+
+    listen(EVENT_ERROR, (e) => {
+      const parsed = AppErrorSchema.safeParse(e.payload);
+      if (parsed.success) {
+        setErr(parsed.data);
+        setPhase("idle");
+      }
+    })
+      .then(track)
+      .catch((e2) => console.error("test error subscribe failed:", e2));
+
+    return () => {
+      cancelled = true;
+      unsubs.forEach((fn) => fn());
+    };
+  }, [onPass]);
+
+  return (
+    <>
+      <StepHeader
+        title="试一下"
+        desc="把光标点进下面的输入框，按一下触发键（默认 fn）说句话，松手后文字会插入进去。"
+        tag="可选"
+      />
+      <textarea
+        rows={3}
+        placeholder="光标点这里，然后按 fn 说话…"
+        className="w-full resize-none rounded-md bg-surface-card px-3.5 py-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:ring-1 focus:ring-accent-fill"
+      />
+      <div className="mt-3 text-xs">
+        {phase === "recording" ? (
+          <span className="text-accent-text">录音中…</span>
+        ) : phase === "processing" ? (
+          <span className="text-text-secondary">处理中…</span>
+        ) : phase === "success" ? (
+          <span className="text-success-text">已插入 ✓ 看到框里出现文字就成了。</span>
+        ) : err ? (
+          <span className="text-warning-text">{err.message}（修好后再按一次 fn 重试）</span>
+        ) : (
+          <span className="text-text-tertiary">没反应？确认上一步「输入监控」已授权并重启过 Audie。</span>
+        )}
+      </div>
+    </>
+  );
+}
+
 type SetupWizardProps = {
   open: boolean;
   onClose: () => void;
@@ -193,9 +287,13 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   const [pickedAsr, setPickedAsr] = useState<string | null>(null);
   const [pickedLlm, setPickedLlm] = useState<string | null>(null);
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
+  const [testPassed, setTestPassed] = useState(false);
 
   useEffect(() => {
-    if (open) setStep(0);
+    if (open) {
+      setStep(0);
+      setTestPassed(false);
+    }
   }, [open, welcome]);
   if (!open) return null;
 
@@ -211,10 +309,10 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   // ASR step needs a picked model whose key is actually configured (real
   // has_secret), so onboarding can't "complete" with an unusable transcriber.
   const asrDone = !!pickedAsr && configuredModels.configured(pickedAsr);
-  const doneMap: Record<string, boolean> = { permissions: permDone, hotkey: false, asr: asrDone, llm: !!pickedLlm };
-  const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选" };
+  const doneMap: Record<string, boolean> = { permissions: permDone, hotkey: false, asr: asrDone, llm: !!pickedLlm, test: testPassed };
+  const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选", test: "可选" };
 
-  const isLast = id === "llm";
+  const isLast = id === "test";
   const blockNext = id === "asr" && !asrDone;
   const next = () => {
     if (!blockNext) setStep(Math.min(last, cur + 1));
@@ -292,7 +390,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         ) : null}
       </>
     );
-  } else {
+  } else if (id === "llm") {
     body = (
       <>
         <StepHeader title="选择润色模型" desc="插入前先整理转写文本 —— 去口水话、修口误、补标点。不配置则直接插入原文。" tag="可选" />
@@ -303,6 +401,8 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         </div>
       </>
     );
+  } else {
+    body = <TestStep onPass={() => setTestPassed(true)} />;
   }
 
   return (
@@ -346,11 +446,6 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
                 </Button>
               ) : null}
               <div className="flex-1" />
-              {id === "llm" ? (
-                <Button variant="ghost" onClick={onClose}>
-                  跳过此步
-                </Button>
-              ) : null}
               {isLast ? (
                 <Button variant="accent" onClick={onComplete ?? onClose}>
                   开始使用 Audie
