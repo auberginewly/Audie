@@ -723,6 +723,35 @@ pub fn request_input_monitoring_permission(app: AppHandle) -> bool {
     platform.input_monitoring_status()
 }
 
+/// P3.12 — Microphone permission (macOS TCC). `get` reads status without prompting
+/// (the onboarding wizard polls it on focus); `request` shows the system prompt then
+/// returns the (possibly still-false) status.
+#[tauri::command]
+pub fn get_microphone_permission_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().microphone_status()
+}
+
+#[tauri::command]
+pub fn request_microphone_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_microphone();
+    platform.microphone_status()
+}
+
+/// P3.12 — Accessibility permission (macOS, post-event access). Injection's synthetic
+/// Cmd+V needs it. `get` preflights without prompting; `request` shows the prompt.
+#[tauri::command]
+pub fn get_accessibility_permission_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().accessibility_status()
+}
+
+#[tauri::command]
+pub fn request_accessibility_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_accessibility();
+    platform.accessibility_status()
+}
+
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
 #[cfg(debug_assertions)]
 fn read_wav_pcm16(path: &str) -> Result<Vec<u8>, AppError> {

@@ -176,6 +176,32 @@ impl Platform for MacosPlatform {
         }
     }
 
+    fn microphone_status(&self) -> bool {
+        // Presence check only — no prompt (onboarding reads this repeatedly). Unlike
+        // `ensure_microphone_permission`, this never calls `request`.
+        tauri::async_runtime::block_on(check_microphone_permission())
+    }
+
+    fn request_microphone(&self) {
+        // Shows the prompt only when undecided; no-op once decided. Status is read
+        // back separately via `microphone_status`.
+        if let Err(err) = tauri::async_runtime::block_on(request_microphone_permission()) {
+            log::warn!("request microphone permission: {err}");
+        }
+    }
+
+    fn accessibility_status(&self) -> bool {
+        preflight_post_event_access()
+    }
+
+    fn request_accessibility(&self) {
+        // Asks macOS to add Audie to the Accessibility list so the user can flip the
+        // switch; the grant applies once they do (status re-read separately).
+        unsafe {
+            let _ = CGRequestPostEventAccess();
+        }
+    }
+
     /// P3.10 — start a listen-only capture tap for the Settings recorder. Feeds the
     /// pure `capture_step` machine, which emits `trigger-captured` (the key the user
     /// formed) or `trigger-capture-rejected`. Needs Input Monitoring (same as the

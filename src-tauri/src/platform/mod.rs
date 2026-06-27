@@ -77,6 +77,22 @@ pub trait Platform: Send + Sync {
     }
     fn request_input_monitoring(&self) {}
 
+    /// P3.12 — Microphone (macOS TCC). `status` reads without prompting (onboarding
+    /// polls it); `request` shows the system prompt. Default granted/no-op so
+    /// non-macOS never gates here.
+    fn microphone_status(&self) -> bool {
+        true
+    }
+    fn request_microphone(&self) {}
+
+    /// P3.12 — Accessibility / post-event access (macOS). Injection's synthetic Cmd+V
+    /// needs it. `status` preflights without prompting; `request` shows the prompt.
+    /// Default granted/no-op for non-macOS.
+    fn accessibility_status(&self) -> bool {
+        true
+    }
+    fn request_accessibility(&self) {}
+
     /// P3.10 — start/stop a listen-only capture tap for the Settings recorder. macOS
     /// emits `trigger-captured` / `trigger-capture-rejected`; default no-op elsewhere.
     fn start_trigger_capture(&self, _app: &AppHandle) -> AppResult<()> {

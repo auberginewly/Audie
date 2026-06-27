@@ -7,6 +7,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import type { Hotkey } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
+import { usePermissions, type PermissionState } from "../../hooks/usePermissions";
 import { Badge, Button, Icon, IconButton, type IconName } from "../ui";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
@@ -88,15 +89,16 @@ function PermItem({
   icon,
   name,
   desc,
-  granted,
-  onGrant,
+  hint,
+  state,
 }: {
   icon: IconName;
   name: string;
   desc: string;
-  granted: boolean;
-  onGrant: () => void;
+  hint?: string;
+  state: PermissionState;
 }) {
+  const granted = state.granted === true;
   return (
     <div className="flex items-center gap-3 rounded-md bg-surface-card p-3.5">
       <span className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-sm bg-gray-200 text-text-secondary">
@@ -105,13 +107,21 @@ function PermItem({
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-text-primary">{name}</div>
         <div className="mt-0.5 text-xs text-text-tertiary">{desc}</div>
+        {/* macOS won't re-prompt after a denial; Input Monitoring also only
+            reflects a fresh grant after relaunch (P3.9). */}
+        {!granted && hint ? <div className="mt-1 text-xs text-warning-text">{hint}</div> : null}
       </div>
       {granted ? (
         <Badge tone="success">已授权</Badge>
       ) : (
-        <Button size="sm" variant="secondary" onClick={onGrant}>
-          授权
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={state.request}>
+            授权
+          </Button>
+          <Button size="sm" variant="ghost" onClick={state.openSettings}>
+            打开系统设置
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -175,7 +185,7 @@ type SetupWizardProps = {
 
 export function SetupWizard({ open, onClose, onComplete, data, welcome = true }: SetupWizardProps) {
   const [step, setStep] = useState(0);
-  const [granted, setGranted] = useState({ mic: false, acc: false });
+  const perms = usePermissions();
   const [pickedAsr, setPickedAsr] = useState<string | null>(null);
   const [pickedLlm, setPickedLlm] = useState<string | null>(null);
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
@@ -190,7 +200,10 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   const cur = Math.min(step, last);
   const id = ids[cur];
 
-  const permDone = granted.mic && granted.acc;
+  const permDone =
+    perms.microphone.granted === true &&
+    perms.accessibility.granted === true &&
+    perms.inputMonitoring.granted === true;
   const asrDone = !!pickedAsr;
   const doneMap: Record<string, boolean> = { permissions: permDone, hotkey: false, asr: asrDone, llm: !!pickedLlm };
   const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选" };
@@ -230,10 +243,17 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   } else if (id === "permissions") {
     body = (
       <>
-        <StepHeader title="授予权限" desc="Audie 需要这些权限来录制你的语音，并将文字粘贴到你正在使用的应用。" tag="必选" />
+        <StepHeader title="授予权限" desc="Audie 需要这些权限来录制语音、把文字粘贴到当前应用，并监听触发键。若某项被拒，可在这里再次申请或直接打开系统设置。" tag="必选" />
         <div className="flex flex-col gap-2">
-          <PermItem icon="mic" name="麦克风" desc="录制时采集你的语音。" granted={granted.mic} onGrant={() => setGranted((g) => ({ ...g, mic: true }))} />
-          <PermItem icon="command" name="辅助功能" desc="将转写文字粘贴到当前应用。" granted={granted.acc} onGrant={() => setGranted((g) => ({ ...g, acc: true }))} />
+          <PermItem icon="mic" name="麦克风" desc="录制时采集你的语音。" state={perms.microphone} />
+          <PermItem icon="command" name="辅助功能" desc="将转写文字粘贴到当前应用。" state={perms.accessibility} />
+          <PermItem
+            icon="key"
+            name="输入监控"
+            desc="监听触发键（默认 fn）以开始/结束录音。"
+            hint="授权后需重启 Audie 才能生效。"
+            state={perms.inputMonitoring}
+          />
         </div>
       </>
     );
