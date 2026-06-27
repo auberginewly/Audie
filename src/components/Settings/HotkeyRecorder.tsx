@@ -1,12 +1,8 @@
-// Trigger-key recorder (P3.9). One box showing the current trigger (default fn).
-// Click it → "按下快捷键…" → press any key to set it. Anything goes (no forced
-// modifier): a bare modifier tap (fn / shift / ctrl / alt / cmd), a single key
-// (F13, a letter…), or a combo (⌃⌥⇧⌘ + key). fn — which the webview can't see as a
-// key event — is captured natively: begin_trigger_capture swaps the live trigger
-// for a capture trigger that emits `trigger-record-fn` on an fn tap. Other modifiers
-// are caught here via their keyup (a clean tap with no other key in between). The
-// stored value IS the backend trigger string (parse_trigger is the gate). A bare
-// typing key (letter/space) will also type into apps when pressed — the user's call.
+// Trigger-key recorder (P3.10). One box showing the current trigger (default fn).
+// Click it → "按下快捷键…" → press any key/combo to set it. Capture is fully native:
+// begin_trigger_capture runs a listen-only CGEventTap (the webview can't see fn), and
+// Rust emits `trigger-captured` (the key the user formed) or `trigger-capture-rejected`
+// (Caps Lock / system combos like Cmd+Q). The webview no longer reads KeyboardEvent.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,42 +10,6 @@ import { listen } from "@tauri-apps/api/event";
 
 import type { Hotkey } from "../../types/settings";
 import { KeyCombo } from "../ui";
-
-const FUNCTION_KEY = /^F([1-9]|1[0-9]|20)$/;
-
-// Browser modifier key → backend modifier name. A clean tap of one of these (down →
-// up with nothing in between) is a bare-modifier trigger.
-const MOD_NAMES: Record<string, string> = {
-  Control: "Ctrl",
-  Alt: "Alt",
-  Shift: "Shift",
-  Meta: "Cmd",
-};
-
-// Map a browser key to the backend's key name (keycode_for in macos.rs), or null
-// when it isn't a key a trigger can use.
-function mainKeyName(e: KeyboardEvent): string | null {
-  const k = e.key;
-  if (k === " ") return "Space";
-  if (["Enter", "Tab", "Escape"].includes(k)) return k;
-  if (k.startsWith("Arrow")) return k.slice(5); // ArrowLeft -> Left
-  if (FUNCTION_KEY.test(k)) return k;
-  if (/^[a-zA-Z]$/.test(k)) return k.toUpperCase();
-  if (/^[0-9]$/.test(k)) return k;
-  return null;
-}
-
-// Build a backend trigger string from a non-modifier keydown (combo or bare key).
-function eventToTrigger(e: KeyboardEvent): { trigger: string } | { error: string } {
-  const mods: string[] = [];
-  if (e.ctrlKey) mods.push("Ctrl");
-  if (e.altKey) mods.push("Alt");
-  if (e.shiftKey) mods.push("Shift");
-  if (e.metaKey) mods.push("Cmd");
-  const main = mainKeyName(e);
-  if (!main) return { error: "不支持这个键，换一个" };
-  return { trigger: [...mods, main].join("+") };
-}
 
 const BOX =
   "inline-flex min-h-8 min-w-[92px] items-center justify-center rounded-sm border px-2.5 py-1 cursor-pointer transition-colors duration-150 ease-[var(--ease-out)]";
@@ -63,13 +23,11 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
-  const active = useRef(false); // guards against a double stop (key capture + blur)
-  const pendingMod = useRef<string | null>(null); // a lone modifier held, awaiting a clean keyup
+  const active = useRef(false); // guards against a double stop (capture + blur)
 
   // End a capture. A new key goes through `onChange` → update_settings, which
-  // unregisters the capture trigger and registers the new one; cancel / same key
-  // just restores the real trigger. Doing exactly ONE of these avoids a race where
-  // end_trigger_capture's restore clobbers the freshly-picked trigger.
+  // unregisters the capture tap and registers the new trigger; cancel / same key
+  // just restores the real trigger. Doing exactly ONE avoids a restore-vs-set race.
   const stop = useCallback(
     (next?: string) => {
       if (!active.current) return;
@@ -83,59 +41,24 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
     },
     [onChange, value],
   );
-
-  // Keep the keydown/keyup effect OFF `stop` (which changes every render — onChange
-  // isn't memoized and the mic-level monitor re-renders this tree ~30×/s). Reading the
-  // latest `stop` via a ref lets the effect depend only on `recording`, so it isn't
-  // torn down + rebuilt mid-tap — which used to reset the in-flight modifier tap and
-  // is why single Shift / Cmd / Option / Control never registered.
+  // Keep the listeners off `stop` (which changes every render) so the effect only
+  // (re)subscribes on record start/stop, not on every parent re-render.
   const stopRef = useRef(stop);
   stopRef.current = stop;
 
   useEffect(() => {
     if (!recording) return;
-    ref.current?.focus();
-    pendingMod.current = null;
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      e.preventDefault();
-      if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-        stopRef.current(); // cancel
-        return;
-      }
-      if (e.key in MOD_NAMES) {
-        const held = [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey].filter(Boolean).length;
-        pendingMod.current = held === 1 ? e.key : null; // only a lone modifier can be a tap
-        return;
-      }
-      pendingMod.current = null; // a real key joined → not a bare-modifier tap
-      const res = eventToTrigger(e);
-      if ("error" in res) {
-        if (res.error) setHint(res.error);
-        return;
-      }
+    ref.current?.focus(); // so clicking away (blur) cancels
+    const captured = listen<string>("trigger-captured", (e) => {
       setHint(null);
-      stopRef.current(res.trigger);
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key in MOD_NAMES && pendingMod.current === e.key) {
-        pendingMod.current = null;
-        setHint(null);
-        stopRef.current(MOD_NAMES[e.key]); // bare modifier tap, e.g. "Shift"
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
-    const unlisten = listen("trigger-record-fn", () => {
-      setHint(null);
-      stopRef.current("Fn");
+      stopRef.current(e.payload);
+    });
+    const rejected = listen<string>("trigger-capture-rejected", (e) => {
+      setHint(e.payload); // keep recording — user tries another key
     });
     return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
-      void unlisten.then((f) => f());
+      void captured.then((f) => f());
+      void rejected.then((f) => f());
     };
   }, [recording]);
 
@@ -158,7 +81,8 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
         ref={ref}
         type="button"
         onClick={() => {
-          if (!recording) void start();
+          if (recording) stop(); // click again = cancel
+          else void start();
         }}
         onBlur={() => {
           if (recording) stop();

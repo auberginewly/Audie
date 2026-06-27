@@ -51,6 +51,9 @@ pub struct MacosPlatform {
     // P3.9 production trigger: fn / single / combo, all via one CGEventTap that
     // drives the real toggle callback. None when no trigger is registered.
     trigger: Mutex<Option<EventTapHandle>>,
+    // P3.10 recorder: a listen-only capture tap, live only while the Settings
+    // recorder is open. Emits trigger-captured / -rejected. None otherwise.
+    capture: Mutex<Option<EventTapHandle>>,
 }
 
 impl MacosPlatform {
@@ -170,6 +173,106 @@ impl Platform for MacosPlatform {
         // only applies after relaunch, so callers re-read status + tell the user.
         unsafe {
             IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+        }
+    }
+
+    /// P3.10 — start a listen-only capture tap for the Settings recorder. Feeds the
+    /// pure `capture_step` machine, which emits `trigger-captured` (the key the user
+    /// formed) or `trigger-capture-rejected`. Needs Input Monitoring (same as the
+    /// trigger). Idempotent.
+    fn start_trigger_capture(&self, app: &AppHandle) -> AppResult<()> {
+        if self.capture.lock().is_some() {
+            return Ok(());
+        }
+        if !input_monitoring_granted() {
+            unsafe {
+                IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+            }
+            if !input_monitoring_granted() {
+                return Err(AppError::Permission(
+                    "输入监控权限未授予；请到 系统设置 → 隐私与安全性 → 输入监控 启用 Audie，然后重启 App".into(),
+                ));
+            }
+        }
+
+        let app = app.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<Option<CFRunLoop>>();
+        let thread = std::thread::Builder::new()
+            .name("trigger-capture".into())
+            .spawn(move || {
+                let state = Mutex::new(CaptureState::default());
+                let tap = CGEventTap::new(
+                    CGEventTapLocation::HID,
+                    CGEventTapPlacement::HeadInsertEventTap,
+                    CGEventTapOptions::ListenOnly,
+                    vec![
+                        CGEventType::KeyDown,
+                        CGEventType::KeyUp,
+                        CGEventType::FlagsChanged,
+                    ],
+                    move |_proxy, event_type, event| {
+                        let captured = classify_capture_event(event_type, event);
+                        match capture_step(&mut state.lock(), captured, Instant::now()) {
+                            CaptureOutcome::Captured(trigger) => {
+                                let _ = app.emit("trigger-captured", trigger);
+                            }
+                            CaptureOutcome::Rejected(reason) => {
+                                let _ = app.emit("trigger-capture-rejected", reason);
+                            }
+                            CaptureOutcome::None => {}
+                        }
+                        None
+                    },
+                );
+                let tap = match tap {
+                    Ok(tap) => tap,
+                    Err(()) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let source = match tap.mach_port.create_runloop_source(0) {
+                    Ok(source) => source,
+                    Err(()) => {
+                        let _ = tx.send(None);
+                        return;
+                    }
+                };
+                let runloop = CFRunLoop::get_current();
+                unsafe {
+                    runloop.add_source(&source, kCFRunLoopCommonModes);
+                }
+                tap.enable();
+                let _ = tx.send(Some(runloop));
+                CFRunLoop::run_current(); // blocks until stop_trigger_capture
+            })
+            .map_err(|err| AppError::Internal(format!("spawn capture thread: {err}")))?;
+
+        match rx.recv() {
+            Ok(Some(runloop)) => {
+                *self.capture.lock() = Some(EventTapHandle {
+                    runloop,
+                    thread: Some(thread),
+                });
+                log::info!("trigger capture started");
+                Ok(())
+            }
+            _ => {
+                let _ = thread.join();
+                Err(AppError::Internal(
+                    "failed to create CGEventTap for capture".into(),
+                ))
+            }
+        }
+    }
+
+    fn stop_trigger_capture(&self) {
+        if let Some(mut handle) = self.capture.lock().take() {
+            handle.runloop.stop();
+            if let Some(thread) = handle.thread.take() {
+                let _ = thread.join();
+            }
+            log::info!("trigger capture stopped");
         }
     }
 
@@ -332,6 +435,8 @@ fn parse_trigger(combo: &str) -> AppResult<TriggerSpec> {
             "alt" | "opt" | "option" => mods |= CGEventFlags::CGEventFlagAlternate,
             "shift" => mods |= CGEventFlags::CGEventFlagShift,
             "cmd" | "command" | "meta" | "super" => mods |= CGEventFlags::CGEventFlagCommand,
+            // fn as a combo modifier (e.g. "Fn+Space"). Bare "Fn" is caught above.
+            "fn" => mods |= CGEventFlags::CGEventFlagSecondaryFn,
             _ => {
                 let keycode = keycode_for(token)
                     .ok_or_else(|| AppError::Internal(format!("unknown trigger key: {token:?}")))?;
@@ -443,6 +548,206 @@ fn detect_combo(
     }
     let pressed = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as CGKeyCode;
     pressed == keycode && relevant_mods(event.get_flags()) == mods
+}
+
+// ---- P3.10 recorder: native capture state machine ---------------------------
+//
+// During recording, the listen-only capture tap feeds raw events into this PURE
+// machine, which turns them into the trigger string the user is forming (bare
+// modifier / single key / combo / fn+combo) or a rejection — so the webview never
+// reads KeyboardEvent (it can't see fn). The string round-trips through
+// `parse_trigger`.
+
+/// Canonical modifier order + token for building trigger strings.
+const TRIGGER_MODS: [(CGEventFlags, &str); 5] = [
+    (CGEventFlags::CGEventFlagControl, "Ctrl"),
+    (CGEventFlags::CGEventFlagAlternate, "Alt"),
+    (CGEventFlags::CGEventFlagShift, "Shift"),
+    (CGEventFlags::CGEventFlagCommand, "Cmd"),
+    (CGEventFlags::CGEventFlagSecondaryFn, "Fn"),
+];
+
+fn mods_tokens(mods: CGEventFlags) -> Vec<&'static str> {
+    TRIGGER_MODS
+        .iter()
+        .filter(|(flag, _)| mods.contains(*flag))
+        .map(|(_, token)| *token)
+        .collect()
+}
+
+/// System combos that would double-fire (we don't consume) — e.g. Cmd+Q quits the
+/// frontmost app. Rejected in the recorder. best-effort; only the destructive few.
+const SYSTEM_BLOCKLIST: &[&str] = &["Cmd+Q", "Cmd+W", "Cmd+Tab", "Cmd+Space", "Cmd+H", "Cmd+M"];
+
+/// Inverse of `keycode_for`: a captured main key's virtual keycode → token, or None
+/// for keys a trigger can't use (so the recorder ignores them).
+fn name_for_keycode(keycode: CGKeyCode) -> Option<&'static str> {
+    Some(match keycode {
+        49 => "Space",
+        36 => "Return",
+        48 => "Tab",
+        53 => "Escape",
+        123 => "Left",
+        124 => "Right",
+        125 => "Down",
+        126 => "Up",
+        122 => "F1",
+        120 => "F2",
+        99 => "F3",
+        118 => "F4",
+        96 => "F5",
+        97 => "F6",
+        98 => "F7",
+        100 => "F8",
+        101 => "F9",
+        109 => "F10",
+        103 => "F11",
+        111 => "F12",
+        105 => "F13",
+        107 => "F14",
+        113 => "F15",
+        106 => "F16",
+        64 => "F17",
+        79 => "F18",
+        80 => "F19",
+        90 => "F20",
+        0 => "A",
+        11 => "B",
+        8 => "C",
+        2 => "D",
+        14 => "E",
+        3 => "F",
+        5 => "G",
+        4 => "H",
+        34 => "I",
+        38 => "J",
+        40 => "K",
+        37 => "L",
+        46 => "M",
+        45 => "N",
+        31 => "O",
+        35 => "P",
+        12 => "Q",
+        15 => "R",
+        1 => "S",
+        17 => "T",
+        32 => "U",
+        9 => "V",
+        13 => "W",
+        7 => "X",
+        16 => "Y",
+        6 => "Z",
+        29 => "0",
+        18 => "1",
+        19 => "2",
+        20 => "3",
+        21 => "4",
+        23 => "5",
+        22 => "6",
+        26 => "7",
+        28 => "8",
+        25 => "9",
+        _ => return None,
+    })
+}
+
+/// A capture-relevant event, distilled from a CGEvent so `capture_step` is pure and
+/// unit-testable.
+enum CaptureEvent {
+    ModifierDown(CGEventFlags), // a modifier (incl caps lock) went down
+    ModifierUp(CGEventFlags),   // ... went up
+    Key {
+        keycode: CGKeyCode,
+        mods: CGEventFlags, // already masked to trigger-relevant mods (incl fn)
+    },
+    Ignore,
+}
+
+#[derive(Default)]
+struct CaptureState {
+    pending: Option<(CGEventFlags, Instant)>, // the lone modifier held as a tap candidate
+    disqualified: bool,                       // a second modifier / key intervened
+}
+
+enum CaptureOutcome {
+    None,
+    Captured(String),
+    Rejected(&'static str),
+}
+
+/// Feed one event to the capture machine. A non-modifier keyDown is a combo/single
+/// (fires immediately); a lone modifier down→up within FN_TAP_MAX is a bare-modifier
+/// tap. Caps Lock and the system blocklist are rejected.
+fn capture_step(state: &mut CaptureState, event: CaptureEvent, at: Instant) -> CaptureOutcome {
+    match event {
+        CaptureEvent::ModifierDown(flag) => {
+            if state.pending.is_none() {
+                state.pending = Some((flag, at));
+                state.disqualified = false;
+            } else {
+                state.disqualified = true; // a second modifier — not a single tap
+            }
+            CaptureOutcome::None
+        }
+        CaptureEvent::ModifierUp(flag) => match state.pending {
+            Some((pending_flag, since)) if pending_flag == flag => {
+                let clean =
+                    !state.disqualified && at.saturating_duration_since(since) <= FN_TAP_MAX;
+                state.pending = None;
+                state.disqualified = false;
+                if !clean {
+                    CaptureOutcome::None
+                } else if flag == CGEventFlags::CGEventFlagAlphaShift {
+                    CaptureOutcome::Rejected("Caps Lock 不能用作触发键")
+                } else {
+                    match mods_tokens(flag).first() {
+                        Some(token) => CaptureOutcome::Captured((*token).to_string()),
+                        None => CaptureOutcome::None,
+                    }
+                }
+            }
+            _ => CaptureOutcome::None,
+        },
+        CaptureEvent::Key { keycode, mods } => {
+            state.pending = None;
+            state.disqualified = false;
+            let name = match name_for_keycode(keycode) {
+                Some(name) => name,
+                None => return CaptureOutcome::None, // unmappable key — keep waiting
+            };
+            let mut parts = mods_tokens(mods);
+            parts.push(name);
+            let trigger = parts.join("+");
+            if SYSTEM_BLOCKLIST.contains(&trigger.as_str()) {
+                CaptureOutcome::Rejected("该组合被系统占用，换一个")
+            } else {
+                CaptureOutcome::Captured(trigger)
+            }
+        }
+        CaptureEvent::Ignore => CaptureOutcome::None,
+    }
+}
+
+/// CGEvent → CaptureEvent boundary.
+fn classify_capture_event(event_type: CGEventType, event: &CGEvent) -> CaptureEvent {
+    let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as CGKeyCode;
+    match event_type {
+        CGEventType::FlagsChanged => match modifier_flag_for_keycode(keycode) {
+            Some(flag) => {
+                if event.get_flags().contains(flag) {
+                    CaptureEvent::ModifierDown(flag)
+                } else {
+                    CaptureEvent::ModifierUp(flag)
+                }
+            }
+            None => CaptureEvent::Ignore,
+        },
+        CGEventType::KeyDown => CaptureEvent::Key {
+            keycode,
+            mods: relevant_mods(event.get_flags()),
+        },
+        _ => CaptureEvent::Ignore,
+    }
 }
 
 impl MacosPlatform {
@@ -1383,6 +1688,152 @@ mod tests {
             }
             TriggerSpec::ModifierTap { .. } => panic!("expected combo"),
         }
+    }
+
+    #[test]
+    fn parse_fn_combo() {
+        // "Fn+Space" = fn as a combo modifier → Combo{Space, SecondaryFn}.
+        match parse_trigger("Fn+Space").unwrap() {
+            TriggerSpec::Combo { keycode, mods } => {
+                assert_eq!(keycode, 49); // kVK_Space
+                assert_eq!(mods, CGEventFlags::CGEventFlagSecondaryFn);
+            }
+            TriggerSpec::ModifierTap { .. } => panic!("expected combo"),
+        }
+    }
+
+    // ---- P3.10 capture state machine ----------------------------------------
+
+    fn captured(out: CaptureOutcome) -> Option<String> {
+        match out {
+            CaptureOutcome::Captured(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn capture_bare_modifier_tap() {
+        let mut s = CaptureState::default();
+        let t = Instant::now();
+        let down = capture_step(
+            &mut s,
+            CaptureEvent::ModifierDown(CGEventFlags::CGEventFlagShift),
+            t,
+        );
+        assert!(matches!(down, CaptureOutcome::None));
+        let up = capture_step(
+            &mut s,
+            CaptureEvent::ModifierUp(CGEventFlags::CGEventFlagShift),
+            t + Duration::from_millis(80),
+        );
+        assert_eq!(captured(up).as_deref(), Some("Shift"));
+    }
+
+    #[test]
+    fn capture_fn_tap() {
+        let mut s = CaptureState::default();
+        let t = Instant::now();
+        capture_step(
+            &mut s,
+            CaptureEvent::ModifierDown(CGEventFlags::CGEventFlagSecondaryFn),
+            t,
+        );
+        let up = capture_step(
+            &mut s,
+            CaptureEvent::ModifierUp(CGEventFlags::CGEventFlagSecondaryFn),
+            t + Duration::from_millis(80),
+        );
+        assert_eq!(captured(up).as_deref(), Some("Fn"));
+    }
+
+    #[test]
+    fn capture_combo_fn_combo_and_single() {
+        let mut s = CaptureState::default();
+        let combo = capture_step(
+            &mut s,
+            CaptureEvent::Key {
+                keycode: 2,
+                mods: CGEventFlags::CGEventFlagControl | CGEventFlags::CGEventFlagShift,
+            },
+            Instant::now(),
+        );
+        assert_eq!(captured(combo).as_deref(), Some("Ctrl+Shift+D"));
+
+        let fn_combo = capture_step(
+            &mut s,
+            CaptureEvent::Key {
+                keycode: 49,
+                mods: CGEventFlags::CGEventFlagSecondaryFn,
+            },
+            Instant::now(),
+        );
+        assert_eq!(captured(fn_combo).as_deref(), Some("Fn+Space"));
+
+        let single = capture_step(
+            &mut s,
+            CaptureEvent::Key {
+                keycode: 105,
+                mods: CGEventFlags::empty(),
+            },
+            Instant::now(),
+        );
+        assert_eq!(captured(single).as_deref(), Some("F13"));
+    }
+
+    #[test]
+    fn capture_rejects_capslock_and_system_combo() {
+        let mut s = CaptureState::default();
+        let t = Instant::now();
+        capture_step(
+            &mut s,
+            CaptureEvent::ModifierDown(CGEventFlags::CGEventFlagAlphaShift),
+            t,
+        );
+        let caps = capture_step(
+            &mut s,
+            CaptureEvent::ModifierUp(CGEventFlags::CGEventFlagAlphaShift),
+            t + Duration::from_millis(50),
+        );
+        assert!(matches!(caps, CaptureOutcome::Rejected(_)));
+
+        let cmd_q = capture_step(
+            &mut s,
+            CaptureEvent::Key {
+                keycode: 12, // Q
+                mods: CGEventFlags::CGEventFlagCommand,
+            },
+            Instant::now(),
+        );
+        assert!(matches!(cmd_q, CaptureOutcome::Rejected(_)));
+    }
+
+    #[test]
+    fn capture_ignores_multi_modifier_without_key() {
+        // Ctrl down, Shift down, Shift up, Ctrl up — ambiguous, captures nothing.
+        let mut s = CaptureState::default();
+        let t = Instant::now();
+        capture_step(
+            &mut s,
+            CaptureEvent::ModifierDown(CGEventFlags::CGEventFlagControl),
+            t,
+        );
+        capture_step(
+            &mut s,
+            CaptureEvent::ModifierDown(CGEventFlags::CGEventFlagShift),
+            t,
+        );
+        let up_shift = capture_step(
+            &mut s,
+            CaptureEvent::ModifierUp(CGEventFlags::CGEventFlagShift),
+            t,
+        );
+        let up_ctrl = capture_step(
+            &mut s,
+            CaptureEvent::ModifierUp(CGEventFlags::CGEventFlagControl),
+            t,
+        );
+        assert!(captured(up_shift).is_none());
+        assert!(captured(up_ctrl).is_none());
     }
 
     #[test]

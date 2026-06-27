@@ -77,6 +77,13 @@ pub trait Platform: Send + Sync {
     }
     fn request_input_monitoring(&self) {}
 
+    /// P3.10 — start/stop a listen-only capture tap for the Settings recorder. macOS
+    /// emits `trigger-captured` / `trigger-capture-rejected`; default no-op elsewhere.
+    fn start_trigger_capture(&self, _app: &AppHandle) -> AppResult<()> {
+        Ok(())
+    }
+    fn stop_trigger_capture(&self) {}
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;

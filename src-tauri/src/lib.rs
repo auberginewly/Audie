@@ -282,26 +282,22 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
     })
 }
 
-/// P3.9 trigger recorder: while the Settings recorder is open, swap the live
-/// trigger for a capture trigger that *emits* `trigger-record-fn` on an fn tap
-/// instead of dictating — so pressing fn there sets the trigger to fn (the webview
-/// can't see fn as a key event). Combos are captured in the webview; only fn needs
-/// this native path. `end_trigger_capture` restores the real trigger.
+/// P3.10 trigger recorder: while the Settings recorder is open, stop the live
+/// trigger and run a listen-only capture tap (macOS) that emits `trigger-captured`
+/// / `trigger-capture-rejected` for whatever key / combo the user presses — the
+/// webview can't see fn, so all capture is native. `end_trigger_capture` stops the
+/// capture tap and restores the real trigger.
 #[tauri::command]
 fn begin_trigger_capture(app: AppHandle) -> AppResult<()> {
     let platform = app.state::<Arc<dyn Platform>>();
     platform.unregister_all_hotkeys(&app)?;
-    let emit_app = app.clone();
-    let capture: HotkeyCallback = Box::new(move || {
-        let _ = emit_app.emit("trigger-record-fn", ());
-    });
-    platform.register_hotkey(&app, "Fn", capture)
+    platform.start_trigger_capture(&app)
 }
 
 #[tauri::command]
 fn end_trigger_capture(app: AppHandle) -> AppResult<()> {
     let platform = app.state::<Arc<dyn Platform>>();
-    platform.unregister_all_hotkeys(&app)?;
+    platform.stop_trigger_capture();
     let hotkey = commands::load_hotkey(&app);
     platform.register_hotkey(&app, &hotkey, build_hotkey_callback(&app))
 }
