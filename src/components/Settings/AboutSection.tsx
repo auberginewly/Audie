@@ -31,7 +31,7 @@ function ExtLink({ href, children, mono }: { href: string; children: string; mon
   );
 }
 
-export function AboutSection({ data }: { data: UseSettings }) {
+export function AboutSection({ data, onRerunSetup }: { data: UseSettings; onRerunSetup: () => void }) {
   const [beta, setBeta] = useState(false);
   return (
     <>
@@ -57,6 +57,19 @@ export function AboutSection({ data }: { data: UseSettings }) {
         <SettingRow label="源代码" divider={false} control={<ExtLink mono href={REPO_URL}>auberginewly/Audie</ExtLink>} />
         <SettingRow label="问题反馈" control={<ExtLink href={`${REPO_URL}/issues`}>GitHub Issues</ExtLink>} />
         <SettingRow label="作者" control={<ExtLink href="https://github.com/auberginewly">auberginewly</ExtLink>} />
+      </SettingSection>
+
+      <SettingSection icon="flag" title="配置向导">
+        <SettingRow
+          label="重新运行配置向导"
+          description="重新过一遍权限、模型与测试录音。"
+          divider={false}
+          control={
+            <Button size="sm" variant="secondary" onClick={onRerunSetup}>
+              运行
+            </Button>
+          }
+        />
       </SettingSection>
 
       <ConfigSection onImported={data.applyImported} />

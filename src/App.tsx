@@ -76,6 +76,14 @@ function App() {
     }
   }, [onboardingCompleted]);
 
+  // "重新运行配置向导" (About page): mark onboarding incomplete and reopen the
+  // wizard, closing Settings so it's visible — saves the user editing the store.
+  const rerunSetup = () => {
+    void data.update({ onboarding_completed: false });
+    setSettingsOpen(false);
+    setSetupOpen(true);
+  };
+
   // The overlay's 去设置 (polish-unavailable toast) shows + focuses this window
   // via the backend, then fires `open-settings` so we surface the Settings dialog.
   useEffect(() => {
@@ -145,7 +153,7 @@ function App() {
         {nav === "home" ? <HomeScreen /> : <HistoryScreen />}
       </AppShell>
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} />
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} onRerunSetup={rerunSetup} />
 
       <SetupWizard
         open={setupOpen}

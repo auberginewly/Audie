@@ -11,7 +11,8 @@ import { TextSection } from "./TextSection";
 import { GeneralSection } from "./GeneralSection";
 import { AboutSection } from "./AboutSection";
 
-type SectionDef = { id: string; icon: IconName; label: string; render: (s: UseSettings) => ReactNode };
+type SectionCtx = { onRerunSetup: () => void };
+type SectionDef = { id: string; icon: IconName; label: string; render: (s: UseSettings, ctx: SectionCtx) => ReactNode };
 
 const SECTIONS: SectionDef[] = [
   { id: "model", icon: "cpu", label: "模型", render: (data) => <ModelSection data={data} /> },
@@ -30,16 +31,22 @@ const SECTIONS: SectionDef[] = [
         <GeneralSection settings={settings} update={update} microphones={microphones} autoDevice={autoDevice} />
       ) : null,
   },
-  { id: "about", icon: "book", label: "关于", render: (data) => <AboutSection data={data} /> },
+  {
+    id: "about",
+    icon: "book",
+    label: "关于",
+    render: (data, { onRerunSetup }) => <AboutSection data={data} onRerunSetup={onRerunSetup} />,
+  },
 ];
 
 type SettingsDialogProps = {
   open: boolean;
   onClose: () => void;
   data: UseSettings;
+  onRerunSetup: () => void;
 };
 
-export function SettingsDialog({ open, onClose, data }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDialogProps) {
   const [activeId, setActiveId] = useState(SECTIONS[0].id);
 
   useEffect(() => {
@@ -90,7 +97,7 @@ export function SettingsDialog({ open, onClose, data }: SettingsDialogProps) {
             key={active.id}
             className="min-w-0 flex-1 overflow-y-auto [overscroll-behavior:contain] bg-surface-app px-5 py-5"
           >
-            {active.render(data)}
+            {active.render(data, { onRerunSetup })}
           </div>
         </div>
       </div>
