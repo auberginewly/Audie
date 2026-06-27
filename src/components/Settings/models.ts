@@ -36,7 +36,10 @@ export function requiredSecretsForModel(id: string): SecretKeyId[] {
     case "groq":
       return ["groq_api_key"];
     case "doubao":
-      return ["doubao_app_id", "doubao_access_token"];
+      // app_id is optional (old-console only); the new console uses just the
+      // access token / API key, so the token alone means configured (backend
+      // treats a blank app_id as new-console mode — client.rs from_settings).
+      return ["doubao_access_token"];
     case "deepseek":
     case "openai":
       return ["openai_compatible_api_key"];
