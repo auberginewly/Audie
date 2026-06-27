@@ -21,7 +21,7 @@ import { Badge, Button, Icon, IconButton, InlineNotice, type IconName } from "..
 import { openExternal } from "../../lib/open";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
-import { MODELS, asrProviderForModelId, type ModelMeta } from "../Settings/models";
+import { MODELS, asrProviderForModelId, llmPickPatch, type ModelMeta } from "../Settings/models";
 
 type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm" | "test";
 
@@ -348,7 +348,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   };
   const pickLlm = (m: ModelMeta) => {
     setPickedLlm(m.id);
-    data.update({ llm_provider: "openai_compatible" });
+    data.update(llmPickPatch(m.id, data.settings?.openai_compatible_base_url ?? ""));
   };
 
   const asrModels = MODELS.filter((m) => m.type === "asr");

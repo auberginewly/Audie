@@ -8,7 +8,7 @@ import { useState } from "react";
 import type { UseSettings } from "../../hooks/useSettings";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
 import { Badge, Button, Icon, Segmented } from "../ui";
-import { MODELS, asrProviderForModelId, modelIdForAsrProvider, type ModelMeta, type ModelType } from "./models";
+import { MODELS, asrProviderForModelId, llmPickPatch, modelIdForAsrProvider, type ModelMeta, type ModelType } from "./models";
 import { ModelConfigDialog } from "./ModelConfigDialog";
 
 type Source = "all" | "cloud" | "local";
@@ -77,7 +77,7 @@ export function ModelSection({ data }: { data: UseSettings }) {
       if (provider) update({ asr_provider: provider });
     } else {
       setPickedLlm(m.id);
-      update({ llm_provider: "openai_compatible" });
+      update(llmPickPatch(m.id, settings?.openai_compatible_base_url ?? ""));
     }
   };
 

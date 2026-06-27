@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ProviderTestResultSchema, type SecretKeyId, type Settings } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
 import { Button, IconButton, Input, Select, StatusMessage, type StatusTone } from "../ui";
-import type { ModelMeta } from "./models";
+import { llmPresetForModelId, type ModelMeta } from "./models";
 
 // Tauri serializes AppError as { code, message } (error.rs serde tag/content), so
 // a rejected command surfaces its user-facing message here.
@@ -281,7 +281,9 @@ function ModelBody({
     );
   }
 
-  // deepseek / openai — both drive the single openai_compatible LLM slot.
+  // deepseek / openai — both drive the single openai_compatible LLM slot; the card
+  // id only flavors the placeholders (picking a card writes that provider's preset).
+  const preset = llmPresetForModelId(model.id);
   return (
     <>
       <Field label="端点">
@@ -289,7 +291,7 @@ function ModelBody({
           mono
           defaultValue={settings.openai_compatible_base_url}
           onChange={(e) => setField({ openai_compatible_base_url: e.target.value })}
-          placeholder="https://api.deepseek.com/v1"
+          placeholder={preset.baseUrl}
         />
       </Field>
       <Field label="API Key">
@@ -300,7 +302,7 @@ function ModelBody({
           mono
           defaultValue={settings.openai_compatible_model}
           onChange={(e) => setField({ openai_compatible_model: e.target.value })}
-          placeholder="deepseek-chat"
+          placeholder={preset.model}
         />
       </Field>
     </>

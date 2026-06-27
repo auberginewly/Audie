@@ -3,7 +3,7 @@
 // real provider enum where one exists (see helpers below + plan mapping table).
 
 import type { IconName } from "../ui";
-import type { AsrProviderId, SecretKeyId } from "../../types/settings";
+import type { AsrProviderId, SecretKeyId, Settings } from "../../types/settings";
 
 export type ModelType = "asr" | "llm";
 export type ModelSource = "cloud" | "local";
@@ -64,4 +64,23 @@ export function modelIdForAsrProvider(provider: AsrProviderId): string {
   if (provider === "whisper_cpp") return "whisper-local";
   if (provider === "doubao_stream") return "doubao";
   return "doubao"; // openai ASR has no card — fall back to the streaming default
+}
+
+// LLM cards all drive the single openai_compatible slot; the card id picks a preset
+// (endpoint + model) so 选用 OpenAI configures OpenAI and 选用 DeepSeek configures
+// DeepSeek, instead of both showing whatever the one slot currently holds.
+export function llmPresetForModelId(id: string): { baseUrl: string; model: string } {
+  if (id === "openai") return { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" };
+  return { baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" }; // deepseek default
+}
+
+// Settings patch for picking an LLM card: switch to openai_compatible and apply the
+// provider preset — but keep an existing same-provider config (don't clobber a
+// custom endpoint/model when re-picking the provider already in use).
+export function llmPickPatch(id: string, currentBaseUrl: string): Partial<Settings> {
+  const patch: Partial<Settings> = { llm_provider: "openai_compatible" };
+  const domain = id === "openai" ? "openai.com" : "deepseek";
+  if (currentBaseUrl.includes(domain)) return patch;
+  const preset = llmPresetForModelId(id);
+  return { ...patch, openai_compatible_base_url: preset.baseUrl, openai_compatible_model: preset.model };
 }
