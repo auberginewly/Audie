@@ -26,6 +26,7 @@ const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
 const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
 const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
 const KEY_INPUT_DEVICE: &str = "input_device";
+const KEY_ONBOARDING_COMPLETED: &str = "onboarding_completed";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
 // Doubao credentials live in the keychain, so they're listed here for export
 // placeholders / import refill. `doubao_access_token` stores either new-console
@@ -62,6 +63,12 @@ pub struct Settings {
     /// string = automatic (P0.7 picks a reliable mic). Not `Option` so the patch
     /// can express "clear back to auto" via an empty string.
     pub input_device: String,
+    /// Whether first-run onboarding has been completed (P3.12). Default false so a
+    /// fresh install auto-opens the SetupWizard; set true when the user finishes it.
+    /// `serde(default)` keeps importing pre-P3.12 config JSON (which lacks this key)
+    /// working instead of erroring on the missing field.
+    #[serde(default)]
+    pub onboarding_completed: bool,
 }
 
 impl Default for Settings {
@@ -78,6 +85,7 @@ impl Default for Settings {
             doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
             input_device: String::new(),
+            onboarding_completed: false,
         }
     }
 }
@@ -95,6 +103,7 @@ pub struct SettingsPatch {
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
     pub input_device: Option<String>,
+    pub onboarding_completed: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -207,6 +216,7 @@ pub fn load_settings(app: &AppHandle) -> Settings {
         ),
         doubao_resource_id: read_doubao_resource_id(app),
         input_device: read_string_setting(app, KEY_INPUT_DEVICE, ""),
+        onboarding_completed: read_bool_setting(app, KEY_ONBOARDING_COMPLETED, false),
     }
 }
 
@@ -384,6 +394,9 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .input_device
             .map(|value| value.trim().to_string())
             .unwrap_or(current.input_device),
+        onboarding_completed: patch
+            .onboarding_completed
+            .unwrap_or(current.onboarding_completed),
     };
 
     validate_settings(&next)?;
@@ -463,6 +476,7 @@ fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError>
     store.set(KEY_DOUBAO_ENDPOINT, settings.doubao_endpoint);
     store.set(KEY_DOUBAO_RESOURCE_ID, settings.doubao_resource_id);
     store.set(KEY_INPUT_DEVICE, settings.input_device);
+    store.set(KEY_ONBOARDING_COMPLETED, settings.onboarding_completed);
     if let Some(model_path) = settings.whisper_cpp_model_path {
         store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
     } else {
@@ -790,6 +804,7 @@ mod tests {
         assert_eq!(settings.asr_provider, "groq");
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
+        assert!(!settings.onboarding_completed);
         assert!(!settings.enhance_prompt.trim().is_empty());
         assert_eq!(settings.whisper_cpp_model_path, None);
         assert_eq!(

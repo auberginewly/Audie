@@ -18,6 +18,7 @@ export const SettingsSchema = z.object({
   doubao_endpoint: z.string().min(1),
   doubao_resource_id: z.string().min(1),
   input_device: z.string(),
+  onboarding_completed: z.boolean(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

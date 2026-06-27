@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useSettings } from "./hooks/useSettings";
+import { usePermissions } from "./hooks/usePermissions";
 import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState } from "./components/shell";
 import { Button, Dialog } from "./components/ui";
 import { HomeScreen } from "./components/screens/HomeScreen";
@@ -21,8 +22,15 @@ const UPDATE_LABELS: UpdateLabels = {
 // design's "available" state so the titlebar pill matches the mockup.
 const AVAILABLE_VERSION = "0.5.0";
 
-// Sidebar dock card nudging first-run setup — progress + CTA into the wizard.
-function SetupGuideCard({ done, total, onContinue }: { done: number; total: number; onContinue: () => void }) {
+// Sidebar dock card nudging first-run setup — real permission progress + CTA into
+// the wizard. Rendered only while onboarding is incomplete, so usePermissions polls
+// only then (completed users pay nothing). commit 3 will fold ASR-key status in.
+function SetupGuideCard({ onContinue }: { onContinue: () => void }) {
+  const perms = usePermissions();
+  const total = 3;
+  const done = [perms.microphone, perms.accessibility, perms.inputMonitoring].filter(
+    (p) => p.granted === true,
+  ).length;
   return (
     <div className="rounded-md bg-gray-100 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -47,11 +55,20 @@ function App() {
   const [nav, setNav] = useState("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
-  // mock: no first-run persistence — the guide card shows until the wizard
-  // finishes this session (see plan).
-  const [setupDone, setSetupDone] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>("available");
   const [updateOpen, setUpdateOpen] = useState(false);
+
+  // First-run onboarding is persisted in settings (P3.12). Auto-open the wizard once
+  // when a fresh install reports it incomplete; the ref stops it reopening if the
+  // user closes it without finishing (it auto-opens again next launch, like Voxt).
+  const onboardingCompleted = data.settings?.onboarding_completed;
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (onboardingCompleted === false && !autoOpened.current) {
+      autoOpened.current = true;
+      setSetupOpen(true);
+    }
+  }, [onboardingCompleted]);
 
   // The overlay's 去设置 (polish-unavailable toast) shows + focuses this window
   // via the backend, then fires `open-settings` so we surface the Settings dialog.
@@ -112,7 +129,9 @@ function App() {
             settingsActive={settingsOpen}
             onSettings={() => setSettingsOpen(true)}
             aboveDock={
-              setupDone ? undefined : <SetupGuideCard done={3} total={4} onContinue={() => setSetupOpen(true)} />
+              onboardingCompleted === false ? (
+                <SetupGuideCard onContinue={() => setSetupOpen(true)} />
+              ) : undefined
             }
           />
         }
@@ -126,7 +145,7 @@ function App() {
         open={setupOpen}
         onClose={() => setSetupOpen(false)}
         onComplete={() => {
-          setSetupDone(true);
+          void data.update({ onboarding_completed: true });
           setSetupOpen(false);
         }}
         data={data}
