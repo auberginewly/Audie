@@ -1,33 +1,21 @@
 // Tauri commands for settings persistence (PROJECT_SPEC.md §3.5).
 //
 // Settings live in a human-editable TOML file (`settings.toml` in the app config
-// dir) — NO manager owns them. The legacy tauri-plugin-store JSON is read once to
-// migrate existing installs into TOML. Secrets never go here (those are P1
-// keychain, §6.6).
+// dir) — NO manager owns them. The legacy tauri-plugin-store JSON is read once,
+// directly (no store plugin), to migrate existing installs into TOML. Secrets never
+// go here (those are P1 keychain, §6.6).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_store::StoreExt;
 
 use crate::error::AppError;
 use crate::platform::Platform;
 
-const STORE_FILE: &str = "settings.json";
-const KEY_HOTKEY: &str = "hotkey";
-const KEY_ASR_PROVIDER: &str = "asr_provider";
-const KEY_LLM_PROVIDER: &str = "llm_provider";
-const KEY_ENHANCE_ENABLED: &str = "enhance_enabled";
-const KEY_ENHANCE_PROMPT: &str = "enhance_prompt";
-const KEY_WHISPER_CPP_MODEL_PATH: &str = "whisper_cpp_model_path";
-const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
-const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
-const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
-const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
-const KEY_INPUT_DEVICE: &str = "input_device";
-const KEY_ONBOARDING_COMPLETED: &str = "onboarding_completed";
+/// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
+const LEGACY_SETTINGS_JSON: &str = "settings.json";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
 // Doubao credentials live in the keychain, so they're listed here for export
 // placeholders / import refill. `doubao_access_token` stores either new-console
@@ -186,7 +174,7 @@ pub fn load_settings(app: &AppHandle) -> Settings {
         return normalize_settings(Settings::default());
     }
 
-    let migrated = normalize_settings(settings_from_store(app));
+    let migrated = normalize_settings(migrate_from_legacy_json(app));
     if let Err(err) = write_settings_toml(&path, &migrated) {
         log::error!("write settings.toml during migration: {err}");
     }
@@ -241,32 +229,6 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     settings
 }
 
-fn read_string_setting(app: &AppHandle, key: &str, default: &str) -> String {
-    app.store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(key))
-        .and_then(|value| value.as_str().map(str::to_string))
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| default.to_string())
-}
-
-fn read_bool_setting(app: &AppHandle, key: &str, default: bool) -> bool {
-    app.store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(key))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(default)
-}
-
-fn read_optional_string_setting(app: &AppHandle, key: &str) -> Option<String> {
-    app.store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(key))
-        .and_then(|value| value.as_str().map(str::to_string))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
 fn normalize_doubao_resource_id(stored: String) -> String {
     if stored == crate::asr::doubao::config::LEGACY_RESOURCE_ID {
         crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string()
@@ -275,38 +237,21 @@ fn normalize_doubao_resource_id(stored: String) -> String {
     }
 }
 
-/// Read settings field-by-field from the legacy tauri-plugin-store JSON, only to
-/// migrate existing installs into TOML. Raw reads; `normalize_settings` validates.
-fn settings_from_store(app: &AppHandle) -> Settings {
-    Settings {
-        hotkey: read_string_setting(app, KEY_HOTKEY, DEFAULT_HOTKEY),
-        asr_provider: read_string_setting(app, KEY_ASR_PROVIDER, DEFAULT_ASR_PROVIDER),
-        llm_provider: read_string_setting(app, KEY_LLM_PROVIDER, DEFAULT_LLM_PROVIDER),
-        enhance_enabled: read_bool_setting(app, KEY_ENHANCE_ENABLED, false),
-        enhance_prompt: read_string_setting(app, KEY_ENHANCE_PROMPT, DEFAULT_ENHANCE_PROMPT),
-        whisper_cpp_model_path: read_optional_string_setting(app, KEY_WHISPER_CPP_MODEL_PATH),
-        openai_compatible_base_url: read_string_setting(
-            app,
-            KEY_OPENAI_COMPATIBLE_BASE_URL,
-            DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-        ),
-        openai_compatible_model: read_string_setting(
-            app,
-            KEY_OPENAI_COMPATIBLE_MODEL,
-            DEFAULT_OPENAI_COMPATIBLE_MODEL,
-        ),
-        doubao_endpoint: read_string_setting(
-            app,
-            KEY_DOUBAO_ENDPOINT,
-            crate::asr::doubao::config::DEFAULT_ENDPOINT,
-        ),
-        doubao_resource_id: read_string_setting(
-            app,
-            KEY_DOUBAO_RESOURCE_ID,
-            crate::asr::doubao::config::DEFAULT_RESOURCE_ID,
-        ),
-        input_device: read_string_setting(app, KEY_INPUT_DEVICE, ""),
-        onboarding_completed: read_bool_setting(app, KEY_ONBOARDING_COMPLETED, false),
+/// One-time migration: read the legacy tauri-plugin-store JSON directly with serde
+/// (a flat key→value object whose keys match Settings fields), so we no longer
+/// depend on the store plugin. Unknown legacy keys are ignored and missing fields
+/// use Default (container `serde(default)`); an absent/unreadable/corrupt file
+/// yields Default.
+fn migrate_from_legacy_json(app: &AppHandle) -> Settings {
+    let Ok(dir) = app.path().app_config_dir() else {
+        return Settings::default();
+    };
+    match std::fs::read_to_string(dir.join(LEGACY_SETTINGS_JSON)) {
+        Ok(text) => serde_json::from_str::<Settings>(&text).unwrap_or_else(|err| {
+            log::warn!("parse legacy settings.json, using defaults: {err}");
+            Settings::default()
+        }),
+        Err(_) => Settings::default(),
     }
 }
 
@@ -949,6 +894,19 @@ mod tests {
             fixed.doubao_resource_id,
             crate::asr::doubao::config::DEFAULT_RESOURCE_ID
         );
+    }
+
+    #[test]
+    fn legacy_json_migrates_into_settings() {
+        // The store wrote a flat JSON object: serde maps known keys, ignores unknown
+        // (e.g. the retired doubao_streaming_preview_enabled), defaults the missing.
+        let json = r#"{"hotkey":"F13","asr_provider":"doubao_stream","doubao_streaming_preview_enabled":true,"onboarding_completed":true}"#;
+        let parsed: Settings = serde_json::from_str(json).expect("deserialize legacy json");
+        assert_eq!(parsed.hotkey, "F13");
+        assert_eq!(parsed.asr_provider, "doubao_stream");
+        assert!(parsed.onboarding_completed);
+        assert_eq!(parsed.llm_provider, DEFAULT_LLM_PROVIDER);
+        assert_eq!(parsed.whisper_cpp_model_path, None);
     }
 
     #[test]
