@@ -5,7 +5,7 @@
 import { useState } from "react";
 
 import type { Settings } from "../../types/settings";
-import { Badge, Icon, InlineNotice, Segmented, Switch, Textarea } from "../ui";
+import { Badge, Icon, InlineNotice, Segmented, Select, Switch, Textarea } from "../ui";
 import { SettingRow } from "./SettingSection";
 
 type Mode = "polish" | "rewrite" | "compose";
@@ -13,16 +13,22 @@ type Mode = "polish" | "rewrite" | "compose";
 const REWRITE_EX = ["翻译成英文", "改得更正式", "精简一下", "修一下语法"];
 const COMPOSE_EX = ["写一封请假邮件", "写一条状态同步", "列个周报提纲"];
 
+// "" = follow system locale (backend resolves it). The backend prepends the picked
+// label as a line to the prompt, so these read naturally (e.g. "用户主要语言：中文").
+const LANGUAGES = ["中文", "English"];
+
 type TextSectionProps = {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
+  onJumpToModelLlm: () => void;
 };
 
-export function TextSection({ settings, update }: TextSectionProps) {
+export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionProps) {
   const [mode, setMode] = useState<Mode>("polish");
   const [rewriteOn, setRewriteOn] = useState(false);
   const [composeOn, setComposeOn] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
 
   return (
     <section className="mb-7">
@@ -55,20 +61,65 @@ export function TextSection({ settings, update }: TextSectionProps) {
             divider={false}
             control={<Switch checked={settings.enhance_enabled} onChange={(v) => update({ enhance_enabled: v })} />}
           />
+          <button
+            type="button"
+            onClick={onJumpToModelLlm}
+            className="relative flex w-full cursor-pointer items-center justify-between gap-4 border-0 bg-transparent px-3.5 py-3 text-left transition-colors hover:bg-gray-alpha-100"
+          >
+            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
+            <span className="text-sm text-text-primary">润色模型</span>
+            <span className="flex shrink-0 items-center gap-2">
+              <Icon name="sparkles" size={13} className="text-aubergine-900" />
+              <span className="font-mono text-[13px] text-text-secondary">{settings.openai_compatible_model}</span>
+              <Icon name="chevron-right" size={14} className="text-text-tertiary" />
+            </span>
+          </button>
           <SettingRow
-            label="润色模型"
+            label="主语言"
+            description="润色按此语言整理，并保留口述里的混合语言"
             control={
-              <div className="flex items-center gap-2">
-                <Icon name="sparkles" size={13} className="text-aubergine-900" />
-                <span className="text-[13px] text-text-primary">OpenAI-compatible</span>
-                <span className="font-mono text-[11px] text-text-tertiary">{settings.openai_compatible_model}</span>
+              <div className="w-40">
+                <Select
+                  value={settings.primary_language}
+                  onChange={(e) => update({ primary_language: e.target.value })}
+                >
+                  <option value="">跟随系统</option>
+                  {LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>
+                      {lang}
+                    </option>
+                  ))}
+                </Select>
               </div>
             }
           />
-          <div className="relative px-3.5 pb-3.5 pt-3">
+          <div className="relative">
             <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <div className="mb-1.5 text-[13px] text-text-secondary">润色提示词</div>
-            <Textarea value={settings.enhance_prompt} onChange={(e) => update({ enhance_prompt: e.target.value })} />
+            <button
+              onClick={() => setPromptOpen((o) => !o)}
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
+            >
+              <span className="shrink-0 text-[13px] text-text-secondary">润色提示词</span>
+              {promptOpen ? (
+                <span className="flex-1" />
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">{settings.enhance_prompt}</span>
+              )}
+              <Icon
+                name="chevron-down"
+                size={15}
+                className={["shrink-0 text-text-tertiary transition-transform duration-150", promptOpen ? "rotate-180" : ""].join(" ")}
+              />
+            </button>
+            {promptOpen ? (
+              <div className="px-3.5 pb-3.5">
+                <Textarea
+                  value={settings.enhance_prompt}
+                  onChange={(e) => update({ enhance_prompt: e.target.value })}
+                  className="min-h-[100px]"
+                />
+              </div>
+            ) : null}
           </div>
           <div className="relative">
             <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
@@ -86,7 +137,7 @@ export function TextSection({ settings, update }: TextSectionProps) {
             </button>
             {aboutOpen ? (
               <div className="px-3.5 pb-3.5 text-[13px] leading-[18px] text-text-secondary">
-                转写完成后，你选用的 LLM 会按上面的提示词改写原文 —— 去掉口水话、修正口误、补上标点，再插入到光标处。若润色失败，Audie 会退回插入转写原文并告知你。
+                开启后，Audie 会在插入前用你选的 AI 把口述整理干净 —— 去掉「嗯、那个」这类口水话、修正口误、补好标点和分段，你可以用上面的提示词调教它的风格。这一步是可选的：关掉就原样插入转写文字，更快、也不消耗 LLM 额度；万一润色失败，Audie 也会自动退回插入原文，不会丢内容。
               </div>
             ) : null}
           </div>

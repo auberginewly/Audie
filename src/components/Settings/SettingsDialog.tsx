@@ -7,20 +7,32 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Icon, IconButton, type IconName } from "../ui";
 import type { UseSettings } from "../../hooks/useSettings";
 import { ModelSection } from "./ModelSection";
+import type { ModelType } from "./models";
 import { TextSection } from "./TextSection";
 import { GeneralSection } from "./GeneralSection";
 import { AboutSection } from "./AboutSection";
 
-type SectionCtx = { onRerunSetup: () => void };
+type SectionCtx = {
+  onRerunSetup: () => void;
+  modelType: ModelType;
+  setModelType: (t: ModelType) => void;
+  goToModelLlm: () => void;
+};
 type SectionDef = { id: string; icon: IconName; label: string; render: (s: UseSettings, ctx: SectionCtx) => ReactNode };
 
 const SECTIONS: SectionDef[] = [
-  { id: "model", icon: "cpu", label: "模型", render: (data) => <ModelSection data={data} /> },
+  {
+    id: "model",
+    icon: "cpu",
+    label: "模型",
+    render: (data, { modelType, setModelType }) => <ModelSection data={data} type={modelType} onType={setModelType} />,
+  },
   {
     id: "text",
     icon: "sparkles",
     label: "文本处理",
-    render: ({ settings, update }) => (settings ? <TextSection settings={settings} update={update} /> : null),
+    render: ({ settings, update }, { goToModelLlm }) =>
+      settings ? <TextSection settings={settings} update={update} onJumpToModelLlm={goToModelLlm} /> : null,
   },
   {
     id: "general",
@@ -48,10 +60,20 @@ type SettingsDialogProps = {
 
 export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDialogProps) {
   const [activeId, setActiveId] = useState(SECTIONS[0].id);
+  const [modelType, setModelType] = useState<ModelType>("asr");
 
   useEffect(() => {
-    if (open) setActiveId(SECTIONS[0].id);
+    if (open) {
+      setActiveId(SECTIONS[0].id);
+      setModelType("asr");
+    }
   }, [open]);
+
+  // 文本处理「润色模型」行 → 跳到 模型 tab 的 LLM 子页。
+  const goToModelLlm = () => {
+    setActiveId("model");
+    setModelType("llm");
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -97,7 +119,7 @@ export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDi
             key={active.id}
             className="min-w-0 flex-1 overflow-y-auto [overscroll-behavior:contain] bg-surface-app px-5 py-5"
           >
-            {active.render(data, { onRerunSetup })}
+            {active.render(data, { onRerunSetup, modelType, setModelType, goToModelLlm })}
           </div>
         </div>
       </div>

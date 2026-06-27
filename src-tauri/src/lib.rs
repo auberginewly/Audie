@@ -871,10 +871,23 @@ fn enhance_config(app: &AppHandle) -> EnhanceConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
 
+    // Prepend the main language as one line so the LLM knows it, without exposing a
+    // {{placeholder}} in the editable prompt. The dropdown wins; empty = follow the
+    // system locale; 中文 as a last resort.
+    let language = if settings.primary_language.trim().is_empty() {
+        platform
+            .inner()
+            .system_language()
+            .unwrap_or_else(|| "中文".to_string())
+    } else {
+        settings.primary_language.clone()
+    };
+    let enhance_prompt = format!("用户主要语言：{language}\n\n{}", settings.enhance_prompt);
+
     enhance_config_from_settings(
         settings.llm_provider,
         settings.enhance_enabled,
-        settings.enhance_prompt,
+        enhance_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
         |key_id| read_optional_secret(platform.inner().as_ref(), key_id),

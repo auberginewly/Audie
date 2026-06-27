@@ -54,9 +54,16 @@ function ModelCard({
   );
 }
 
-export function ModelSection({ data }: { data: UseSettings }) {
+export function ModelSection({
+  data,
+  type,
+  onType,
+}: {
+  data: UseSettings;
+  type: ModelType;
+  onType: (t: ModelType) => void;
+}) {
   const { settings, update } = data;
-  const [type, setType] = useState<ModelType>("asr");
   const [source, setSource] = useState<Source>("all");
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
 
@@ -98,7 +105,7 @@ export function ModelSection({ data }: { data: UseSettings }) {
       <div className="mb-3 flex flex-wrap items-center gap-2.5">
         <Segmented
           value={type}
-          onChange={setType}
+          onChange={onType}
           options={[
             { id: "asr", label: "ASR" },
             { id: "llm", label: "LLM" },

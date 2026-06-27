@@ -71,8 +71,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     content: prompt.to_string(),
                 },
                 ChatMessage {
+                    // Just the raw transcript — all polish instructions live in the
+                    // (user-editable) system prompt, which already declares "the user
+                    // message is the raw transcript". No instruction wrapper here, or
+                    // it duplicates the system prompt and fights its anti-injection stance.
                     role: "user",
-                    content: format!("请润色以下语音转写文本，只输出润色后的文本：\n\n{text}"),
+                    content: text.to_string(),
                 },
             ],
         };

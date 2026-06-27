@@ -100,6 +100,14 @@ pub trait Platform: Send + Sync {
     }
     fn stop_trigger_capture(&self) {}
 
+    /// The user's main language as a display label (e.g. "中文" / "English"), read
+    /// from the OS locale. Used as the prepended language line in the enhance prompt
+    /// when the user hasn't picked one explicitly. `None` means "no opinion — caller
+    /// falls back to a default". Default no-op for platforms without locale wiring yet.
+    fn system_language(&self) -> Option<String> {
+        None
+    }
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;

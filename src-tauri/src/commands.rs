@@ -33,8 +33,10 @@ pub const DEFAULT_ASR_PROVIDER: &str = "groq";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
-pub const DEFAULT_ENHANCE_PROMPT: &str =
-    "去掉口水话，修正明显口误，补充标点和换行；不要改原意，不要添加信息，不要翻译。";
+// The factory-default enhance prompt is data, not source: it lives in
+// prompts/enhance_default.md and is pulled into Settings::default() via include_str!
+// (no prompt string in .rs). Edit that file to change the default; the user owns the
+// value after (settings.toml / 润色提示词 box). Sent + main language at enhance time.
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(default)] // missing TOML keys fall back to Default (hand-edited / old files)
@@ -58,6 +60,10 @@ pub struct Settings {
     /// Whether first-run onboarding has been completed (P3.12). Default false so a
     /// fresh install auto-opens the SetupWizard; set true when the user finishes it.
     pub onboarding_completed: bool,
+    /// User's main language; lib.rs prepends it as a line to the enhance prompt at
+    /// send time. Empty string = follow the system locale (like `input_device`'s
+    /// empty = automatic). Resolved at enhance time (lib.rs).
+    pub primary_language: String,
 }
 
 impl Default for Settings {
@@ -67,7 +73,9 @@ impl Default for Settings {
             asr_provider: DEFAULT_ASR_PROVIDER.to_string(),
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
             enhance_enabled: false,
-            enhance_prompt: DEFAULT_ENHANCE_PROMPT.to_string(),
+            enhance_prompt: include_str!("../prompts/enhance_default.md")
+                .trim_end()
+                .to_string(),
             whisper_cpp_model_path: None,
             openai_compatible_base_url: DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string(),
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
@@ -75,6 +83,7 @@ impl Default for Settings {
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
             input_device: String::new(),
             onboarding_completed: false,
+            primary_language: String::new(),
         }
     }
 }
@@ -93,6 +102,7 @@ pub struct SettingsPatch {
     pub doubao_resource_id: Option<String>,
     pub input_device: Option<String>,
     pub onboarding_completed: Option<bool>,
+    pub primary_language: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -206,7 +216,7 @@ fn normalize_settings(mut settings: Settings) -> Settings {
         settings.hotkey = DEFAULT_HOTKEY.to_string();
     }
     if settings.enhance_prompt.trim().is_empty() {
-        settings.enhance_prompt = DEFAULT_ENHANCE_PROMPT.to_string();
+        settings.enhance_prompt = Settings::default().enhance_prompt;
     }
     if settings.openai_compatible_base_url.trim().is_empty() {
         settings.openai_compatible_base_url = DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string();
@@ -392,6 +402,9 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
         onboarding_completed: patch
             .onboarding_completed
             .unwrap_or(current.onboarding_completed),
+        // Empty is meaningful (= follow system locale), so like input_device we keep
+        // an empty patch value rather than filtering it back to current.
+        primary_language: patch.primary_language.unwrap_or(current.primary_language),
     };
 
     validate_settings(&next)?;
