@@ -1,26 +1,18 @@
-// Click-to-record hotkey field (design's HotkeyRecorder). The backend only
-// accepts three preset combos, so a recorded combo is saved only when it maps to
-// one; anything else shows an honest hint and reverts (see plan risk note).
+// Trigger-key recorder (P3.10). One box showing the current trigger (default fn).
+// Click it → "按下快捷键…" → press any key/combo to set it. Capture is fully native:
+// begin_trigger_capture runs a listen-only CGEventTap (the webview can't see fn), and
+// Rust emits `trigger-captured` (the key the user formed) or `trigger-capture-rejected`
+// (Caps Lock / system combos like Cmd+Q). The webview no longer reads KeyboardEvent.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
-import { HOTKEY_PRESETS, type Hotkey } from "../../types/settings";
+import type { Hotkey } from "../../types/settings";
 import { KeyCombo } from "../ui";
 
-const PRESET_SET = new Set<string>(HOTKEY_PRESETS);
-
-// Build the backend hotkey string from a keydown event. Order matches the
-// presets: Ctrl, Alt, Shift, then the main key (only Space is a valid preset key).
-function eventToHotkey(e: KeyboardEvent): string | null {
-  if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return null; // modifier alone
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push("Ctrl");
-  if (e.altKey) parts.push("Alt");
-  if (e.shiftKey) parts.push("Shift");
-  const main = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
-  parts.push(main);
-  return parts.join("+");
-}
+const BOX =
+  "inline-flex min-h-8 min-w-[92px] items-center justify-center rounded-sm border px-2.5 py-1 cursor-pointer transition-colors duration-150 ease-[var(--ease-out)]";
 
 type HotkeyRecorderProps = {
   value: Hotkey;
@@ -31,29 +23,55 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
+  const active = useRef(false); // guards against a double stop (capture + blur)
+
+  // End a capture. A new key goes through `onChange` → update_settings, which
+  // unregisters the capture tap and registers the new trigger; cancel / same key
+  // just restores the real trigger. Doing exactly ONE avoids a restore-vs-set race.
+  const stop = useCallback(
+    (next?: string) => {
+      if (!active.current) return;
+      active.current = false;
+      setRecording(false);
+      if (next && next !== value) {
+        onChange(next as Hotkey);
+      } else {
+        void invoke("end_trigger_capture").catch((err) => console.error("end capture failed:", err));
+      }
+    },
+    [onChange, value],
+  );
+  // Keep the listeners off `stop` (which changes every render) so the effect only
+  // (re)subscribes on record start/stop, not on every parent re-render.
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
 
   useEffect(() => {
     if (!recording) return;
-    ref.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault();
-      if (e.key === "Escape") {
-        setRecording(false);
-        return;
-      }
-      const combo = eventToHotkey(e);
-      if (!combo) return; // still holding modifiers
-      setRecording(false);
-      if (PRESET_SET.has(combo)) {
-        setHint(null);
-        onChange(combo as Hotkey);
-      } else {
-        setHint("暂仅支持 ⌃⇧Space / ⌥Space / ⌃⌥Space");
-      }
+    ref.current?.focus(); // so clicking away (blur) cancels
+    const captured = listen<string>("trigger-captured", (e) => {
+      setHint(null);
+      stopRef.current(e.payload);
+    });
+    const rejected = listen<string>("trigger-capture-rejected", (e) => {
+      setHint(e.payload); // keep recording — user tries another key
+    });
+    return () => {
+      void captured.then((f) => f());
+      void rejected.then((f) => f());
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, onChange]);
+  }, [recording]);
+
+  const start = async () => {
+    setHint(null);
+    try {
+      await invoke("begin_trigger_capture");
+      active.current = true;
+      setRecording(true);
+    } catch {
+      setHint("需要输入监控权限才能录制");
+    }
+  };
 
   const keys = value.split("+").map((k) => k.trim().toLowerCase());
 
@@ -63,13 +81,14 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
         ref={ref}
         type="button"
         onClick={() => {
-          setRecording(true);
-          setHint(null);
+          if (recording) stop(); // click again = cancel
+          else void start();
         }}
-        onBlur={() => setRecording(false)}
+        onBlur={() => {
+          if (recording) stop();
+        }}
         className={[
-          "inline-flex min-h-8 items-center gap-1.5 rounded-sm border px-2.5 py-1 outline-none",
-          "transition-colors duration-150 ease-[var(--ease-out)] cursor-pointer",
+          BOX,
           recording ? "border-accent-fill bg-accent-bg" : "border-transparent bg-gray-200",
         ].join(" ")}
       >

@@ -4,11 +4,13 @@
 
 import { useState } from "react";
 
-import type { Hotkey, Settings } from "../../types/settings";
+import type { AudioDevice, Hotkey, Settings } from "../../types/settings";
 import { Badge, DevicePicker, Select, Switch } from "../ui";
 import { SettingSection, SettingRow } from "./SettingSection";
 import { HotkeyRecorder } from "./HotkeyRecorder";
 import { PermissionRow } from "./PermissionRow";
+import { useMicMonitor } from "../../hooks/useMicMonitor";
+import { useInputMonitoring } from "../../hooks/useInputMonitoring";
 
 // mock: a Switch holding its own demo state, for unbacked rows.
 function MockSwitch({ defaultOn }: { defaultOn?: boolean }) {
@@ -19,17 +21,38 @@ function MockSwitch({ defaultOn }: { defaultOn?: boolean }) {
 type GeneralSectionProps = {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
+  microphones: AudioDevice[];
+  autoDevice: string | null;
 };
 
-export function GeneralSection({ settings, update }: GeneralSectionProps) {
+export function GeneralSection({ settings, update, microphones, autoDevice }: GeneralSectionProps) {
+  // Live preview of the selected mic — lets the user confirm it's picking up
+  // sound (a silent meter on e.g. AirPods A2DP flags a dead mic before they rely
+  // on it). Runs while this tab is open; recording stops it server-side.
+  const micLevel = useMicMonitor(settings.input_device, true);
+  const inputMonitoring = useInputMonitoring();
+
+  // The "自动" row already names the device it resolves to, so hide that same mic
+  // from the explicit list to avoid listing it twice — unless it happens to be
+  // the current explicit pick (keep it so the selection stays visible).
+  const explicitDevices = microphones.filter(
+    (d) => d.id !== autoDevice || d.id === settings.input_device,
+  );
+
   return (
     <>
-      <SettingSection icon="command" title="快捷键">
+      <SettingSection icon="command" title="触发键">
         <SettingRow
-          label="快捷键"
+          label="触发键"
+          description="按一下开始录音，再按一下结束。点右侧框可改键"
           divider={false}
           control={<HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />}
         />
+        {settings.hotkey === "Fn" ? (
+          <div className="px-3.5 pb-3 text-xs text-warning-text">
+            提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
+          </div>
+        ) : null}
       </SettingSection>
 
       <SettingSection icon="globe" title="语言" cardStyle={{ overflow: "visible" }}>
@@ -49,14 +72,13 @@ export function GeneralSection({ settings, update }: GeneralSectionProps) {
       </SettingSection>
 
       <SettingSection icon="mic" title="设备" cardStyle={{ overflow: "visible" }}>
-        {/* mock: device enumeration isn't implemented (P3) */}
         <div className="p-3.5">
           <DevicePicker
-            autoLabel="自动检测的麦克风（推荐）"
-            devices={[
-              { id: "b", label: "内置麦克风" },
-              { id: "u", label: "USB 音频设备" },
-            ]}
+            autoLabel={autoDevice ? `自动检测 · ${autoDevice}` : "自动检测的麦克风（推荐）"}
+            devices={explicitDevices}
+            value={settings.input_device || "auto"}
+            onChange={(id) => update({ input_device: id === "auto" ? "" : id })}
+            level={micLevel}
           />
         </div>
       </SettingSection>
@@ -76,9 +98,17 @@ export function GeneralSection({ settings, update }: GeneralSectionProps) {
       </SettingSection>
 
       <SettingSection icon="shield" title="权限">
-        {/* mock: real TCC status check is P3 */}
+        {/* mic / accessibility status still mock; input monitoring is real (P3.9) */}
         <PermissionRow icon="mic" name="麦克风" status="granted" divider={false} />
         <PermissionRow icon="command" name="辅助功能" status="granted" />
+        <PermissionRow
+          icon="monitor"
+          name="输入监控"
+          description="触发键（默认 fn）需要；授权后需重启 Audie 生效"
+          status={inputMonitoring.granted ? "granted" : "pending"}
+          onGrant={inputMonitoring.request}
+          grantLabel="授权"
+        />
       </SettingSection>
 
       <SettingSection icon="copy" title="输入">

@@ -5,22 +5,40 @@
 import { z } from "zod";
 
 export const SettingsSchema = z.object({
-  hotkey: z.enum(["Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"]),
-  asr_provider: z.enum(["groq", "openai", "whisper_cpp"]),
+  // Trigger key: "Fn", a function key ("F13"), or a combo ("Ctrl+Shift+Space").
+  // Backend parse_trigger is the real gate (SPEC §5.8 P3.9), so keep it permissive.
+  hotkey: z.string().min(1),
+  asr_provider: z.enum(["groq", "openai", "whisper_cpp", "doubao_stream"]),
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
-  whisper_cpp_model_path: z.string().nullable(),
+  // nullish (not just nullable): the backend omits this key entirely when None
+  // (serde skip_serializing_if, required because TOML has no null), so get_settings
+  // may send it absent — a required nullable field would fail and blank all settings.
+  whisper_cpp_model_path: z.string().nullish(),
   openai_compatible_base_url: z.string().min(1),
   openai_compatible_model: z.string().min(1),
   doubao_endpoint: z.string().min(1),
   doubao_resource_id: z.string().min(1),
+  input_device: z.string(),
+  onboarding_completed: z.boolean(),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
 export type Hotkey = Settings["hotkey"];
 export type AsrProviderId = Settings["asr_provider"];
 export type LlmProviderId = Settings["llm_provider"];
+
+// Microphone enumerated by `list_microphones` (Rust). `id` is the cpal device
+// name and the value persisted into `input_device`; "" / "auto" = automatic.
+export const AudioDeviceSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+});
+export type AudioDevice = z.infer<typeof AudioDeviceSchema>;
+
+// auto_input_device (Rust): the device the automatic path resolves to, or null.
+export const AutoDeviceSchema = z.string().nullable();
 
 export const ProviderMetadataSchema = z.object({
   id: z.string(),
@@ -96,6 +114,3 @@ export const ImportConfigResultSchema = z.object({
 });
 
 export type ImportConfigResult = z.infer<typeof ImportConfigResultSchema>;
-
-// Single source for the dropdown — derived from the schema so they can't drift.
-export const HOTKEY_PRESETS = SettingsSchema.shape.hotkey.options;

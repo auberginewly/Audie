@@ -3,7 +3,7 @@
 // real provider enum where one exists (see helpers below + plan mapping table).
 
 import type { IconName } from "../ui";
-import type { AsrProviderId } from "../../types/settings";
+import type { AsrProviderId, SecretKeyId, Settings } from "../../types/settings";
 
 export type ModelType = "asr" | "llm";
 export type ModelSource = "cloud" | "local";
@@ -17,22 +17,44 @@ export type ModelMeta = {
   model: string;
   rating: string; // mock
   tags: string[]; // mock
-  status: "configured" | "unconfigured"; // mock
 };
 
 export const MODELS: ModelMeta[] = [
-  { id: "doubao", name: "豆包", type: "asr", source: "cloud", icon: "audio-lines", model: "Doubao ASR 2.0 (Hourly)", rating: "4.6", tags: ["云端", "均衡", "实时"], status: "configured" },
-  { id: "groq", name: "Groq", type: "asr", source: "cloud", icon: "audio-lines", model: "whisper-large-v3-turbo", rating: "4.7", tags: ["云端", "快速"], status: "configured" },
-  { id: "whisper-local", name: "Whisper", type: "asr", source: "local", icon: "audio-lines", model: "whisper-large-v3", rating: "4.5", tags: ["本地", "离线"], status: "unconfigured" },
-  { id: "deepseek", name: "DeepSeek", type: "llm", source: "cloud", icon: "sparkles", model: "DeepSeek V4 Flash", rating: "4.8", tags: ["云端", "推荐"], status: "configured" },
-  { id: "openai", name: "OpenAI", type: "llm", source: "cloud", icon: "sparkles", model: "gpt-4o-mini", rating: "4.7", tags: ["云端", "兼容"], status: "unconfigured" },
+  { id: "doubao", name: "豆包", type: "asr", source: "cloud", icon: "audio-lines", model: "Doubao ASR 2.0 (Hourly)", rating: "4.6", tags: ["云端", "均衡", "实时"] },
+  { id: "groq", name: "Groq", type: "asr", source: "cloud", icon: "audio-lines", model: "whisper-large-v3-turbo", rating: "4.7", tags: ["云端", "快速"] },
+  { id: "whisper-local", name: "Whisper", type: "asr", source: "local", icon: "audio-lines", model: "whisper-large-v3", rating: "4.5", tags: ["本地", "离线"] },
+  { id: "deepseek", name: "DeepSeek", type: "llm", source: "cloud", icon: "sparkles", model: "DeepSeek V4 Flash", rating: "4.8", tags: ["云端", "推荐"] },
+  { id: "openai", name: "OpenAI", type: "llm", source: "cloud", icon: "sparkles", model: "gpt-4o-mini", rating: "4.7", tags: ["云端", "兼容"] },
 ];
 
-// Design model id → backend ASR provider enum (null = no real slot, e.g. doubao
-// streaming is auto when its token is set, so picking it is visual-only).
+// The keychain secrets a model needs before it's usable — the source of truth for
+// "已配置" badges (see useConfiguredModels), replacing the old mock status field.
+// whisper-local has none: local inference isn't wired until P3 model mgmt, so it
+// can't satisfy onboarding gating.
+export function requiredSecretsForModel(id: string): SecretKeyId[] {
+  switch (id) {
+    case "groq":
+      return ["groq_api_key"];
+    case "doubao":
+      // app_id is optional (old-console only); the new console uses just the
+      // access token / API key, so the token alone means configured (backend
+      // treats a blank app_id as new-console mode — client.rs from_settings).
+      return ["doubao_access_token"];
+    case "deepseek":
+    case "openai":
+      return ["openai_compatible_api_key"];
+    default:
+      return [];
+  }
+}
+
+// Design model id → backend ASR provider enum (null = card with no real slot).
+// Picking doubao now selects the streaming provider explicitly; the backend only
+// activates streaming when asr_provider == "doubao_stream" AND a token is stored.
 export function asrProviderForModelId(id: string): AsrProviderId | null {
   if (id === "groq") return "groq";
   if (id === "whisper-local") return "whisper_cpp";
+  if (id === "doubao") return "doubao_stream";
   return null;
 }
 
@@ -40,5 +62,40 @@ export function asrProviderForModelId(id: string): AsrProviderId | null {
 export function modelIdForAsrProvider(provider: AsrProviderId): string {
   if (provider === "groq") return "groq";
   if (provider === "whisper_cpp") return "whisper-local";
+  if (provider === "doubao_stream") return "doubao";
   return "doubao"; // openai ASR has no card — fall back to the streaming default
+}
+
+// LLM cards all drive the single openai_compatible slot; the card id picks a preset
+// (endpoint + model) so 选用 OpenAI configures OpenAI and 选用 DeepSeek configures
+// DeepSeek, instead of both showing whatever the one slot currently holds.
+export function llmPresetForModelId(id: string): { baseUrl: string; model: string } {
+  if (id === "openai") return { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" };
+  return { baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" }; // deepseek default
+}
+
+// Settings patch for picking an LLM card. Switches to openai_compatible and seeds
+// the provider preset (endpoint + model) ONLY when the slot is still an untouched
+// preset default (or empty) — so picking works on a fresh setup, but once you've
+// customized the endpoint/model, toggling cards never silently overwrites it. To
+// switch away from a customized slot, edit it in the config dialog.
+export function llmPickPatch(
+  id: string,
+  current: { baseUrl: string; model: string },
+): Partial<Settings> {
+  const patch: Partial<Settings> = { llm_provider: "openai_compatible" };
+  const presets = [llmPresetForModelId("openai"), llmPresetForModelId("deepseek")];
+  const untouched =
+    current.baseUrl.trim() === "" ||
+    presets.some((p) => p.baseUrl === current.baseUrl && p.model === current.model);
+  if (!untouched) return patch;
+  const preset = llmPresetForModelId(id);
+  return { ...patch, openai_compatible_base_url: preset.baseUrl, openai_compatible_model: preset.model };
+}
+
+// Which LLM card the saved openai_compatible base_url maps to, so the picker's
+// 使用中 highlight persists across restarts (like ASR derives from asr_provider).
+// Custom endpoints fall back to the deepseek card.
+export function llmModelIdForBaseUrl(baseUrl: string): string {
+  return baseUrl.includes("openai.com") ? "openai" : "deepseek";
 }

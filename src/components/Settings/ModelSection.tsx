@@ -1,23 +1,27 @@
 // 模型 — the design's model picker. Type tabs (ASR/LLM) + source filter + model
 // cards. The active pick maps to the real provider enum where one exists; rating/
-// tags/configured-status are mock (see models.ts + plan).
+// tags are mock, but configured-status is real (keychain has_secret via
+// useConfiguredModels — see models.ts + plan).
 
 import { useState } from "react";
 
 import type { UseSettings } from "../../hooks/useSettings";
+import { useConfiguredModels } from "../../hooks/useConfiguredModels";
 import { Badge, Button, Icon, Segmented } from "../ui";
-import { MODELS, asrProviderForModelId, modelIdForAsrProvider, type ModelMeta, type ModelType } from "./models";
+import { MODELS, asrProviderForModelId, llmModelIdForBaseUrl, llmPickPatch, modelIdForAsrProvider, type ModelMeta, type ModelType } from "./models";
 import { ModelConfigDialog } from "./ModelConfigDialog";
 
 type Source = "all" | "cloud" | "local";
 
 function ModelCard({
   m,
+  configured,
   inUse,
   onPick,
   onConfigure,
 }: {
   m: ModelMeta;
+  configured: boolean;
   inUse: boolean;
   onPick: () => void;
   onConfigure: () => void;
@@ -30,7 +34,7 @@ function ModelCard({
           <Badge tone="neutral">{m.source === "local" ? "本地" : "云端"}</Badge>
           {inUse ? (
             <Badge tone="accent">使用中</Badge>
-          ) : m.status === "configured" ? (
+          ) : configured ? (
             <Badge tone="success">已配置</Badge>
           ) : (
             <Badge tone="neutral">未配置</Badge>
@@ -38,7 +42,7 @@ function ModelCard({
         </div>
         <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{m.model}</div>
       </div>
-      {!inUse && m.status === "configured" ? (
+      {!inUse && configured ? (
         <Button size="sm" variant="secondary" onClick={onPick}>
           选用
         </Button>
@@ -56,19 +60,29 @@ export function ModelSection({ data }: { data: UseSettings }) {
   const [source, setSource] = useState<Source>("all");
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
 
-  // Active pick: ASR derives from the real provider; LLM is visual (one slot).
-  const [pickedLlm, setPickedLlm] = useState("deepseek");
+  // Real "已配置" state from keychain has_secret (no-read presence check) for every
+  // model, refreshed on focus + after the config dialog saves a key.
+  const { configured, refresh } = useConfiguredModels();
+
+  // Active pick derives from saved settings so the 使用中 highlight persists: ASR
+  // from asr_provider, LLM from the openai_compatible base_url (deepseek/openai).
   const pickedAsr = settings ? modelIdForAsrProvider(settings.asr_provider) : "doubao";
+  const pickedLlm = settings ? llmModelIdForBaseUrl(settings.openai_compatible_base_url) : "deepseek";
   const picked: Record<ModelType, string> = { asr: pickedAsr, llm: pickedLlm };
 
   const onPick = (m: ModelMeta) => {
     if (m.type === "asr") {
       const provider = asrProviderForModelId(m.id);
+      // doubao → "doubao_stream"; the backend activates streaming only when this
+      // is selected AND a token exists, otherwise it surfaces a Provider error.
       if (provider) update({ asr_provider: provider });
-      // doubao = streaming overlay (auto when token set) → visual only
     } else {
-      setPickedLlm(m.id);
-      update({ llm_provider: "openai_compatible" });
+      update(
+        llmPickPatch(m.id, {
+          baseUrl: settings?.openai_compatible_base_url ?? "",
+          model: settings?.openai_compatible_model ?? "",
+        }),
+      );
     }
   };
 
@@ -108,6 +122,7 @@ export function ModelSection({ data }: { data: UseSettings }) {
             <ModelCard
               key={m.id}
               m={m}
+              configured={configured(m.id)}
               inUse={picked[m.type] === m.id}
               onPick={() => onPick(m)}
               onConfigure={() => setConfigModel(m)}
@@ -124,7 +139,14 @@ export function ModelSection({ data }: { data: UseSettings }) {
         )}
       </div>
 
-      <ModelConfigDialog model={configModel} data={data} onClose={() => setConfigModel(null)} />
+      <ModelConfigDialog
+        model={configModel}
+        data={data}
+        onClose={() => {
+          setConfigModel(null);
+          refresh(); // a just-saved key should flip the badge to 已配置
+        }}
+      />
     </section>
   );
 }

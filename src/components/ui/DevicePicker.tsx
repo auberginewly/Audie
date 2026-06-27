@@ -30,7 +30,11 @@ export function DevicePicker({
     setInternal(v);
     onChange?.(v);
   };
-  const clamped = Math.max(0, Math.min(1, level));
+  // Meter sensitivity. sqrt = perceptual curve (lifts quiet speech, whose raw
+  // peak amplitude reads low); METER_GAIN scales it — raise for more bars, lower
+  // if it pegs at full scale too easily.
+  const METER_GAIN = 4;
+  const clamped = Math.min(1, Math.sqrt(Math.max(0, level) * METER_GAIN));
 
   return (
     <div className="flex w-full items-center gap-3.5">

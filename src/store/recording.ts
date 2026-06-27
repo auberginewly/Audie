@@ -9,6 +9,9 @@ interface RecordingStore {
   state: AppState;
   error: AppErrorEvent | null;
   enhanceProgress: EnhanceProgressEvent | null;
+  // Latched true on the first SUCCESS — drives the onboarding「试一下」step's
+  // persistent checkmark (survives the wizard reopening; resets on app restart).
+  everSucceeded: boolean;
   setState: (next: AppState) => void;
   setError: (err: AppErrorEvent) => void;
   setEnhanceProgress: (progress: EnhanceProgressEvent) => void;
@@ -18,12 +21,16 @@ export const useRecordingStore = create<RecordingStore>((set) => ({
   state: "IDLE",
   error: null,
   enhanceProgress: null,
-  // A fresh recording clears any stale error so the capsule starts clean.
+  everSucceeded: false,
+  // A fresh recording clears any stale error so the capsule starts clean; a SUCCESS
+  // latches everSucceeded (never reset within the session).
   setState: (next) =>
     set(
       next === "RECORDING"
         ? { state: next, error: null, enhanceProgress: null }
-        : { state: next },
+        : next === "SUCCESS"
+          ? { state: next, everSucceeded: true }
+          : { state: next },
     ),
   setError: (err) => set({ error: err }),
   setEnhanceProgress: (progress) => set({ enhanceProgress: progress }),

@@ -6,10 +6,20 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import type { SecretKeyId, Settings } from "../../types/settings";
+import { ProviderTestResultSchema, type SecretKeyId, type Settings } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
 import { Button, IconButton, Input, Select, StatusMessage, type StatusTone } from "../ui";
-import type { ModelMeta } from "./models";
+import { llmPresetForModelId, type ModelMeta } from "./models";
+
+// Tauri serializes AppError as { code, message } (error.rs serde tag/content), so
+// a rejected command surfaces its user-facing message here.
+function errorMessage(err: unknown): string {
+  if (err && typeof err === "object" && "message" in err) {
+    const m = (err as { message: unknown }).message;
+    if (typeof m === "string" && m) return m;
+  }
+  return typeof err === "string" && err ? err : "测试失败，请查看日志";
+}
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -82,6 +92,59 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
     }
   };
 
+  // Live connection test (replaces the old mock). Doubao is WebSocket-only so it
+  // routes to a dedicated command; the rest probe /models via test_provider. Keys
+  // come from the visible input, else the saved keychain value (user-initiated, so
+  // a keychain prompt is acceptable).
+  const readKey = async (keyId: SecretKeyId): Promise<string | null> => {
+    const el = document.querySelector<HTMLInputElement>(`input[data-key-id="${keyId}"]`);
+    const typed = el?.value.trim();
+    if (typed) return typed;
+    try {
+      const raw = await invoke("get_secret_for_settings", { keyId });
+      return typeof raw === "string" && raw ? raw : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const runTest = async () => {
+    setStatus({ tone: "pending", message: "测试中…" });
+    const startedAt = performance.now();
+    try {
+      let raw: unknown;
+      if (model.id === "doubao") {
+        raw = await invoke("test_doubao_connection");
+      } else if (model.id === "groq") {
+        raw = await invoke("test_provider", {
+          request: {
+            kind: "asr",
+            provider_id: "groq",
+            key_id: "groq_api_key",
+            api_key: await readKey("groq_api_key"),
+            base_url: null,
+          },
+        });
+      } else {
+        raw = await invoke("test_provider", {
+          request: {
+            kind: "llm",
+            provider_id: "openai_compatible",
+            key_id: "openai_compatible_api_key",
+            api_key: await readKey("openai_compatible_api_key"),
+            base_url: settings.openai_compatible_base_url,
+          },
+        });
+      }
+      const ms = Math.round(performance.now() - startedAt);
+      const parsed = ProviderTestResultSchema.safeParse(raw);
+      const base = parsed.success ? parsed.data.message : "连接测试通过";
+      setStatus({ tone: "success", message: `${base} · ${ms}ms` });
+    } catch (err) {
+      setStatus({ tone: "danger", message: errorMessage(err) });
+    }
+  };
+
   const setField = (patch: Partial<Settings>) => update(patch);
 
   return (
@@ -107,10 +170,16 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
         </div>
 
         <div className="flex shrink-0 items-center gap-2 px-[18px] py-4">
-          <Button variant="secondary" icon="audio-lines" onClick={() => setStatus({ tone: "neutral", message: "测试为演示（见 plan）" })}>
-            测试
-          </Button>
-          {status ? <StatusMessage tone={status.tone}>{status.message}</StatusMessage> : null}
+          {model.id !== "whisper-local" ? (
+            <Button variant="secondary" disabled={status?.tone === "pending"} onClick={runTest}>
+              测试
+            </Button>
+          ) : null}
+          {status ? (
+            <StatusMessage tone={status.tone} icon={null}>
+              {status.message}
+            </StatusMessage>
+          ) : null}
           <div className="flex-1" />
           <Button variant="ghost" onClick={onClose}>
             取消
@@ -212,7 +281,9 @@ function ModelBody({
     );
   }
 
-  // deepseek / openai — both drive the single openai_compatible LLM slot.
+  // deepseek / openai — both drive the single openai_compatible LLM slot; the card
+  // id only flavors the placeholders (picking a card writes that provider's preset).
+  const preset = llmPresetForModelId(model.id);
   return (
     <>
       <Field label="端点">
@@ -220,7 +291,7 @@ function ModelBody({
           mono
           defaultValue={settings.openai_compatible_base_url}
           onChange={(e) => setField({ openai_compatible_base_url: e.target.value })}
-          placeholder="https://api.deepseek.com/v1"
+          placeholder={preset.baseUrl}
         />
       </Field>
       <Field label="API Key">
@@ -231,7 +302,7 @@ function ModelBody({
           mono
           defaultValue={settings.openai_compatible_model}
           onChange={(e) => setField({ openai_compatible_model: e.target.value })}
-          placeholder="deepseek-chat"
+          placeholder={preset.model}
         />
       </Field>
     </>

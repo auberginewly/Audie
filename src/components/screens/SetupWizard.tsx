@@ -4,41 +4,53 @@
 // are mock (real TCC flow is P3). Picked state is local to the wizard demo.
 
 import { useEffect, useState, type ReactNode } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { Hotkey } from "../../types/settings";
+import {
+  EVENT_STATE_CHANGE,
+  EVENT_ERROR,
+  StateChangeSchema,
+  AppErrorSchema,
+  type AppErrorEvent,
+} from "../../types/events";
 import type { UseSettings } from "../../hooks/useSettings";
-import { Badge, Button, Icon, IconButton, type IconName } from "../ui";
+import { usePermissions, type PermissionState } from "../../hooks/usePermissions";
+import { useConfiguredModels } from "../../hooks/useConfiguredModels";
+import { useRecordingStore } from "../../store/recording";
+import { Badge, Button, Icon, IconButton, InlineNotice, type IconName } from "../ui";
+import { openExternal } from "../../lib/open";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
-import { MODELS, asrProviderForModelId, type ModelMeta } from "../Settings/models";
+import { MODELS, asrProviderForModelId, llmPickPatch, type ModelMeta } from "../Settings/models";
 
-type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm";
-type StepState = "current" | "done" | "upcoming";
+type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm" | "test";
 
-const NUMBERED: StepId[] = ["permissions", "hotkey", "asr", "llm"];
+const NUMBERED: StepId[] = ["permissions", "hotkey", "asr", "llm", "test"];
 const STEP_LABEL: Record<StepId, string> = {
   welcome: "欢迎",
   permissions: "权限",
   hotkey: "快捷键",
   asr: "听写模型",
   llm: "润色模型",
+  test: "试一下",
 };
 
 function StepItem({
   index,
   label,
   sub,
-  state,
+  current,
+  done,
   onClick,
 }: {
   index: number;
   label: string;
   sub: string;
-  state: StepState;
+  current: boolean;
+  done: boolean;
   onClick: () => void;
 }) {
-  const current = state === "current";
-  const done = state === "done";
   return (
     <button
       onClick={onClick}
@@ -88,15 +100,16 @@ function PermItem({
   icon,
   name,
   desc,
-  granted,
-  onGrant,
+  hint,
+  state,
 }: {
   icon: IconName;
   name: string;
   desc: string;
-  granted: boolean;
-  onGrant: () => void;
+  hint?: string;
+  state: PermissionState;
 }) {
+  const granted = state.granted === true;
   return (
     <div className="flex items-center gap-3 rounded-md bg-surface-card p-3.5">
       <span className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-sm bg-gray-200 text-text-secondary">
@@ -105,13 +118,21 @@ function PermItem({
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-text-primary">{name}</div>
         <div className="mt-0.5 text-xs text-text-tertiary">{desc}</div>
+        {/* macOS won't re-prompt after a denial; Input Monitoring also only
+            reflects a fresh grant after relaunch (P3.9). */}
+        {!granted && hint ? <div className="mt-1 text-xs text-warning-text">{hint}</div> : null}
       </div>
       {granted ? (
         <Badge tone="success">已授权</Badge>
       ) : (
-        <Button size="sm" variant="secondary" onClick={onGrant}>
-          授权
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={state.request}>
+            授权
+          </Button>
+          <Button size="sm" variant="ghost" onClick={state.openSettings}>
+            打开系统设置
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -119,11 +140,13 @@ function PermItem({
 
 function WizModelRow({
   m,
+  configured,
   inUse,
   onPick,
   onConfigure,
 }: {
   m: ModelMeta;
+  configured: boolean;
   inUse: boolean;
   onPick: () => void;
   onConfigure: () => void;
@@ -136,7 +159,7 @@ function WizModelRow({
           <Badge tone="neutral">{m.source === "local" ? "本地" : "云端"}</Badge>
           {inUse ? (
             <Badge tone="accent">使用中</Badge>
-          ) : m.status === "configured" ? (
+          ) : configured ? (
             <Badge tone="success">已配置</Badge>
           ) : (
             <Badge tone="neutral">未配置</Badge>
@@ -144,7 +167,7 @@ function WizModelRow({
         </div>
         <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{m.model}</div>
       </div>
-      {!inUse && m.status === "configured" ? (
+      {!inUse && configured ? (
         <Button size="sm" variant="secondary" onClick={onPick}>
           选用
         </Button>
@@ -165,6 +188,104 @@ function WelPoint({ title, desc }: { title: string; desc: string }) {
   );
 }
 
+type TestPhase = "idle" | "recording" | "processing" | "success";
+
+// "Try it" step: the user focuses the textarea, presses the real trigger (fn) and
+// speaks; the dictation pipeline injects into the focused box. Success/failure is
+// judged from the Rust state-change/error events — NOT the textarea contents — so
+// it stays reliable regardless of where injection focus lands. Reuses the real
+// hotkey path; no new backend command.
+function TestStep() {
+  const [phase, setPhase] = useState<TestPhase>("idle");
+  const [err, setErr] = useState<AppErrorEvent | null>(null);
+
+  useEffect(() => {
+    const unsubs: UnlistenFn[] = [];
+    let cancelled = false;
+    const track = (fn: UnlistenFn) => (cancelled ? fn() : unsubs.push(fn));
+
+    listen(EVENT_STATE_CHANGE, (e) => {
+      const parsed = StateChangeSchema.safeParse(e.payload);
+      if (!parsed.success) return;
+      switch (parsed.data.to) {
+        case "RECORDING":
+          setErr(null);
+          setPhase("recording");
+          break;
+        case "PROCESSING":
+          setPhase("processing");
+          break;
+        case "SUCCESS":
+          setPhase("success");
+          break;
+        case "ERROR":
+          setPhase("idle"); // the message arrives via the `error` event below
+          break;
+        // IDLE (incl. the ~150ms post-SUCCESS settle) leaves "success" shown.
+      }
+    })
+      .then(track)
+      .catch((e2) => console.error("test state-change subscribe failed:", e2));
+
+    listen(EVENT_ERROR, (e) => {
+      const parsed = AppErrorSchema.safeParse(e.payload);
+      if (parsed.success) {
+        setErr(parsed.data);
+        setPhase("idle");
+      }
+    })
+      .then(track)
+      .catch((e2) => console.error("test error subscribe failed:", e2));
+
+    return () => {
+      cancelled = true;
+      unsubs.forEach((fn) => fn());
+    };
+  }, []);
+
+  return (
+    <>
+      <StepHeader
+        title="试一下"
+        desc="把光标点进下面的输入框，按一下触发键（默认 fn）说句话，松手后文字会插入进去。"
+        tag="可选"
+      />
+      <textarea
+        rows={3}
+        placeholder="光标点这里，然后按 fn 说话…"
+        className="w-full resize-none rounded-md bg-surface-card px-3.5 py-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:ring-1 focus:ring-accent-fill"
+      />
+      <div className="mt-3 text-xs">
+        {phase === "recording" ? (
+          <span className="text-accent-text">录音中…</span>
+        ) : phase === "processing" ? (
+          <span className="text-text-secondary">处理中…</span>
+        ) : phase === "success" ? (
+          <span className="text-success-text">已插入 ✓ 看到框里出现文字就成了。</span>
+        ) : err ? (
+          <span className="text-warning-text">
+            {err.message}
+            {err.code === "permission" ? (
+              <button
+                className="ml-1 underline"
+                onClick={() => openExternal("x-apple.systempreferences:com.apple.preference.security")}
+              >
+                打开系统设置
+              </button>
+            ) : (
+              "（修好后再按一次 fn 重试）"
+            )}
+          </span>
+        ) : (
+          <span className="text-text-tertiary">
+            没反应？确认「输入监控」已授权、🌐 键已设为「无操作」，并重启过 Audie。
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
 type SetupWizardProps = {
   open: boolean;
   onClose: () => void;
@@ -175,10 +296,14 @@ type SetupWizardProps = {
 
 export function SetupWizard({ open, onClose, onComplete, data, welcome = true }: SetupWizardProps) {
   const [step, setStep] = useState(0);
-  const [granted, setGranted] = useState({ mic: false, acc: false });
+  const perms = usePermissions();
+  const configuredModels = useConfiguredModels();
   const [pickedAsr, setPickedAsr] = useState<string | null>(null);
   const [pickedLlm, setPickedLlm] = useState<string | null>(null);
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
+  // 试一下 completion is persistent (a dictation has succeeded) via the recording
+  // store, so the checkmark survives reopening the wizard.
+  const everSucceeded = useRecordingStore((s) => s.everSucceeded);
 
   useEffect(() => {
     if (open) setStep(0);
@@ -190,12 +315,25 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   const cur = Math.min(step, last);
   const id = ids[cur];
 
-  const permDone = granted.mic && granted.acc;
-  const asrDone = !!pickedAsr;
-  const doneMap: Record<string, boolean> = { permissions: permDone, hotkey: false, asr: asrDone, llm: !!pickedLlm };
-  const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选" };
+  const permDone =
+    perms.microphone.granted === true &&
+    perms.accessibility.granted === true &&
+    perms.inputMonitoring.granted === true;
+  // ASR step needs a picked model whose key is actually configured (real
+  // has_secret), so onboarding can't "complete" with an unusable transcriber.
+  const asrDone = !!pickedAsr && configuredModels.configured(pickedAsr);
+  // A step is "done" when its own requirement is actually met (not merely passed),
+  // so the sidebar checks each step the moment it's complete — current step included.
+  const doneMap: Record<string, boolean> = {
+    permissions: permDone,
+    hotkey: !!data.settings?.hotkey,
+    asr: asrDone,
+    llm: !!pickedLlm,
+    test: everSucceeded,
+  };
+  const subMap: Record<string, string> = { permissions: "必选", hotkey: "必选", asr: "必选", llm: "可选", test: "可选" };
 
-  const isLast = id === "llm";
+  const isLast = id === "test";
   const blockNext = id === "asr" && !asrDone;
   const next = () => {
     if (!blockNext) setStep(Math.min(last, cur + 1));
@@ -209,7 +347,12 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   };
   const pickLlm = (m: ModelMeta) => {
     setPickedLlm(m.id);
-    data.update({ llm_provider: "openai_compatible" });
+    data.update(
+      llmPickPatch(m.id, {
+        baseUrl: data.settings?.openai_compatible_base_url ?? "",
+        model: data.settings?.openai_compatible_model ?? "",
+      }),
+    );
   };
 
   const asrModels = MODELS.filter((m) => m.type === "asr");
@@ -230,11 +373,40 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   } else if (id === "permissions") {
     body = (
       <>
-        <StepHeader title="授予权限" desc="Audie 需要这些权限来录制你的语音，并将文字粘贴到你正在使用的应用。" tag="必选" />
+        <StepHeader title="授予权限" desc="Audie 需要这些权限来录制语音、把文字粘贴到当前应用，并监听触发键。若某项被拒，可在这里再次申请或直接打开系统设置。" tag="必选" />
         <div className="flex flex-col gap-2">
-          <PermItem icon="mic" name="麦克风" desc="录制时采集你的语音。" granted={granted.mic} onGrant={() => setGranted((g) => ({ ...g, mic: true }))} />
-          <PermItem icon="command" name="辅助功能" desc="将转写文字粘贴到当前应用。" granted={granted.acc} onGrant={() => setGranted((g) => ({ ...g, acc: true }))} />
+          <PermItem icon="mic" name="麦克风" desc="录制时采集你的语音。" state={perms.microphone} />
+          <PermItem icon="command" name="辅助功能" desc="将转写文字粘贴到当前应用。" state={perms.accessibility} />
+          <PermItem
+            icon="key"
+            name="输入监控"
+            desc="监听触发键（默认 fn）以开始/结束录音。"
+            hint="授权后需重启 Audie 才能生效。"
+            state={perms.inputMonitoring}
+          />
         </div>
+        {/* Default trigger is fn/🌐, which macOS consumes (emoji picker / input
+            switch) unless the user reassigns the Globe key. Only nudge when the
+            trigger is still the fn default. */}
+        {data.settings?.hotkey === "Fn" ? (
+          <div className="mt-3">
+            <InlineNotice
+              tone="warning"
+              title="让 fn 键专门触发 Audie"
+              action={
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => openExternal("x-apple.systempreferences:com.apple.preference.keyboard")}
+                >
+                  键盘设置
+                </Button>
+              }
+            >
+              默认按 🌐(fn) 会弹表情或切换输入法。到「系统设置 → 键盘 → 按下 🌐 键用来」选「无操作」，fn 才能专门触发 Audie。
+            </InlineNotice>
+          </div>
+        ) : null}
       </>
     );
   } else if (id === "hotkey") {
@@ -258,23 +430,27 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         <StepHeader title="选择听写模型" desc="Audie 用这个模型把你的语音转写成文字。至少选用一个才能继续。" tag="必选" />
         <div className="flex flex-col gap-2">
           {asrModels.map((m) => (
-            <WizModelRow key={m.id} m={m} inUse={pickedAsr === m.id} onPick={() => pickAsr(m)} onConfigure={() => setConfigModel(m)} />
+            <WizModelRow key={m.id} m={m} configured={configuredModels.configured(m.id)} inUse={pickedAsr === m.id} onPick={() => pickAsr(m)} onConfigure={() => setConfigModel(m)} />
           ))}
         </div>
-        {!asrDone ? <div className="mt-3 text-xs text-text-tertiary">选用一个听写模型后继续。</div> : null}
+        {!asrDone ? (
+          <div className="mt-3 text-xs text-text-tertiary">选用一个已配置的听写模型后继续；未配置的先点「配置」填入 API key。</div>
+        ) : null}
       </>
     );
-  } else {
+  } else if (id === "llm") {
     body = (
       <>
         <StepHeader title="选择润色模型" desc="插入前先整理转写文本 —— 去口水话、修口误、补标点。不配置则直接插入原文。" tag="可选" />
         <div className="flex flex-col gap-2">
           {llmModels.map((m) => (
-            <WizModelRow key={m.id} m={m} inUse={pickedLlm === m.id} onPick={() => pickLlm(m)} onConfigure={() => setConfigModel(m)} />
+            <WizModelRow key={m.id} m={m} configured={configuredModels.configured(m.id)} inUse={pickedLlm === m.id} onPick={() => pickLlm(m)} onConfigure={() => setConfigModel(m)} />
           ))}
         </div>
       </>
     );
+  } else {
+    body = <TestStep />;
   }
 
   return (
@@ -299,11 +475,17 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
               <div className="mt-[3px] text-xs text-text-tertiary">几步即可开始听写。</div>
             </div>
             <div className="flex flex-col gap-0.5">
-              {NUMBERED.map((sid, i) => {
-                const curNum = NUMBERED.indexOf(id);
-                const state: StepState = sid === id ? "current" : doneMap[sid] || (curNum > -1 && i < curNum) ? "done" : "upcoming";
-                return <StepItem key={sid} index={i} label={STEP_LABEL[sid]} sub={subMap[sid]} state={state} onClick={() => setStep(ids.indexOf(sid))} />;
-              })}
+              {NUMBERED.map((sid, i) => (
+                <StepItem
+                  key={sid}
+                  index={i}
+                  label={STEP_LABEL[sid]}
+                  sub={subMap[sid]}
+                  current={sid === id}
+                  done={doneMap[sid] === true}
+                  onClick={() => setStep(ids.indexOf(sid))}
+                />
+              ))}
             </div>
           </nav>
 
@@ -318,11 +500,6 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
                 </Button>
               ) : null}
               <div className="flex-1" />
-              {id === "llm" ? (
-                <Button variant="ghost" onClick={onClose}>
-                  跳过此步
-                </Button>
-              ) : null}
               {isLast ? (
                 <Button variant="accent" onClick={onComplete ?? onClose}>
                   开始使用 Audie
@@ -336,7 +513,14 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
           </div>
         </div>
 
-        <ModelConfigDialog model={configModel} data={data} onClose={() => setConfigModel(null)} />
+        <ModelConfigDialog
+          model={configModel}
+          data={data}
+          onClose={() => {
+            setConfigModel(null);
+            configuredModels.refresh(); // a just-saved key should flip the badge
+          }}
+        />
       </div>
     </div>
   );

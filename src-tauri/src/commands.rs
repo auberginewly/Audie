@@ -1,30 +1,21 @@
 // Tauri commands for settings persistence (PROJECT_SPEC.md §3.5).
 //
-// P0.5 scope: hotkey only (microphone selection deferred to the future Settings
-// page). Settings live in a tauri-plugin-store JSON file — NO manager owns them;
-// the store plugin is the persistence layer per the P0.5 plan. Secrets never go
-// here (those are P1 keychain, §6.6).
+// Settings live in a human-editable TOML file (`settings.toml` in the app config
+// dir) — NO manager owns them. The legacy tauri-plugin-store JSON is read once,
+// directly (no store plugin), to migrate existing installs into TOML. Secrets never
+// go here (those are P1 keychain, §6.6).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_store::StoreExt;
 
 use crate::error::AppError;
 use crate::platform::Platform;
 
-const STORE_FILE: &str = "settings.json";
-const KEY_HOTKEY: &str = "hotkey";
-const KEY_ASR_PROVIDER: &str = "asr_provider";
-const KEY_LLM_PROVIDER: &str = "llm_provider";
-const KEY_ENHANCE_ENABLED: &str = "enhance_enabled";
-const KEY_ENHANCE_PROMPT: &str = "enhance_prompt";
-const KEY_WHISPER_CPP_MODEL_PATH: &str = "whisper_cpp_model_path";
-const KEY_OPENAI_COMPATIBLE_BASE_URL: &str = "openai_compatible_base_url";
-const KEY_OPENAI_COMPATIBLE_MODEL: &str = "openai_compatible_model";
-const KEY_DOUBAO_ENDPOINT: &str = "doubao_endpoint";
-const KEY_DOUBAO_RESOURCE_ID: &str = "doubao_resource_id";
+/// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
+const LEGACY_SETTINGS_JSON: &str = "settings.json";
 const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
 // Doubao credentials live in the keychain, so they're listed here for export
 // placeholders / import refill. `doubao_access_token` stores either new-console
@@ -37,7 +28,7 @@ const SECRET_KEY_IDS: &[&str] = &[
     crate::asr::doubao::config::SECRET_API_KEY_OR_ACCESS_TOKEN,
 ];
 
-pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
+pub const DEFAULT_HOTKEY: &str = "Fn";
 pub const DEFAULT_ASR_PROVIDER: &str = "groq";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
@@ -45,23 +36,28 @@ pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
 pub const DEFAULT_ENHANCE_PROMPT: &str =
     "去掉口水话，修正明显口误，补充标点和换行；不要改原意，不要添加信息，不要翻译。";
 
-/// The only hotkeys the UI lets you pick in P0.5. A free-form key recorder is
-/// P3 Settings-page work; presets keep this slice small and parseable by
-/// `tauri-plugin-global-shortcut`.
-pub const HOTKEY_PRESETS: &[&str] = &["Ctrl+Shift+Space", "Alt+Space", "Ctrl+Alt+Space"];
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)] // missing TOML keys fall back to Default (hand-edited / old files)
 pub struct Settings {
     pub hotkey: String,
     pub asr_provider: String,
     pub llm_provider: String,
     pub enhance_enabled: bool,
     pub enhance_prompt: String,
+    // TOML has no null — omit when None, else serialization errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: String,
     pub openai_compatible_model: String,
     pub doubao_endpoint: String,
     pub doubao_resource_id: String,
+    /// Manually selected input device name (matches `cpal` device.name()). Empty
+    /// string = automatic (P0.7 picks a reliable mic). Not `Option` so the patch
+    /// can express "clear back to auto" via an empty string.
+    pub input_device: String,
+    /// Whether first-run onboarding has been completed (P3.12). Default false so a
+    /// fresh install auto-opens the SetupWizard; set true when the user finishes it.
+    pub onboarding_completed: bool,
 }
 
 impl Default for Settings {
@@ -77,6 +73,8 @@ impl Default for Settings {
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
             doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
+            input_device: String::new(),
+            onboarding_completed: false,
         }
     }
 }
@@ -93,6 +91,8 @@ pub struct SettingsPatch {
     pub openai_compatible_model: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
+    pub input_device: Option<String>,
+    pub onboarding_completed: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -125,38 +125,108 @@ pub struct ProviderMetadata {
     pub tags: Vec<String>,
 }
 
-/// Read the persisted hotkey, falling back to the default when the store is
-/// empty or holds something unexpected. Called at startup (lib.rs) and by
-/// `get_settings`.
+/// The persisted hotkey, for startup (lib.rs) + `apply_hotkey_if_changed`. Derived
+/// from the full settings load so there's a single source of truth.
 pub fn load_hotkey(app: &AppHandle) -> String {
-    let stored = app
-        .store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(KEY_HOTKEY))
-        .and_then(|value| value.as_str().map(str::to_string));
+    load_settings(app).hotkey
+}
 
-    match stored {
-        Some(hotkey) if HOTKEY_PRESETS.contains(&hotkey.as_str()) => hotkey,
-        _ => DEFAULT_HOTKEY.to_string(),
+/// Path to the human-editable settings file (TOML), in the platform config dir.
+fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("settings.toml"))
+        .map_err(|err| AppError::Internal(format!("resolve config dir: {err}")))
+}
+
+fn write_settings_toml(path: &Path, settings: &Settings) -> Result<(), AppError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| AppError::Internal(format!("create config dir: {err}")))?;
     }
+    let text = toml::to_string_pretty(settings)
+        .map_err(|err| AppError::Internal(format!("serialize settings: {err}")))?;
+    std::fs::write(path, text)
+        .map_err(|err| AppError::Internal(format!("write settings.toml: {err}")))
 }
 
-fn read_string_setting(app: &AppHandle, key: &str, default: &str) -> String {
-    app.store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(key))
-        .and_then(|value| value.as_str().map(str::to_string))
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| default.to_string())
+/// Load user settings from `settings.toml`. The first run after the TOML switch the
+/// file is absent, so we migrate the legacy tauri-plugin-store JSON (which yields
+/// defaults when empty) and write the TOML once. Parse failures degrade to defaults
+/// rather than wedging settings. Always normalized so callers get valid values.
+pub fn load_settings(app: &AppHandle) -> Settings {
+    let path = match settings_path(app) {
+        Ok(path) => path,
+        Err(err) => {
+            log::error!("{err}");
+            return Settings::default();
+        }
+    };
+
+    if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match toml::from_str::<Settings>(&text) {
+                Ok(settings) => return normalize_settings(settings),
+                Err(err) => log::error!("parse settings.toml, using defaults: {err}"),
+            },
+            Err(err) => log::error!("read settings.toml: {err}"),
+        }
+        return normalize_settings(Settings::default());
+    }
+
+    let migrated = normalize_settings(migrate_from_legacy_json(app));
+    if let Err(err) = write_settings_toml(&path, &migrated) {
+        log::error!("write settings.toml during migration: {err}");
+    }
+    migrated
 }
 
-fn read_doubao_resource_id(app: &AppHandle) -> String {
-    let stored = read_string_setting(
-        app,
-        KEY_DOUBAO_RESOURCE_ID,
-        crate::asr::doubao::config::DEFAULT_RESOURCE_ID,
-    );
-    normalize_doubao_resource_id(stored)
+/// Clamp loaded settings to valid values — the validation the per-field store readers
+/// used to do, applied once after deserialize. Unknown asr/llm providers reset to
+/// default (but `doubao_stream` stays — streaming-only, absent from the batch list);
+/// legacy doubao resource id migrates; empty required strings fall back to defaults;
+/// a blank whisper model path becomes None.
+fn normalize_settings(mut settings: Settings) -> Settings {
+    if settings.asr_provider != "doubao_stream"
+        && !available_asr_providers()
+            .iter()
+            .any(|provider| provider.id == settings.asr_provider)
+    {
+        settings.asr_provider = DEFAULT_ASR_PROVIDER.to_string();
+    }
+    if !available_llm_providers()
+        .iter()
+        .any(|provider| provider.id == settings.llm_provider)
+    {
+        settings.llm_provider = DEFAULT_LLM_PROVIDER.to_string();
+    }
+    settings.doubao_resource_id = normalize_doubao_resource_id(settings.doubao_resource_id);
+
+    if settings.hotkey.trim().is_empty() {
+        settings.hotkey = DEFAULT_HOTKEY.to_string();
+    }
+    if settings.enhance_prompt.trim().is_empty() {
+        settings.enhance_prompt = DEFAULT_ENHANCE_PROMPT.to_string();
+    }
+    if settings.openai_compatible_base_url.trim().is_empty() {
+        settings.openai_compatible_base_url = DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string();
+    }
+    if settings.openai_compatible_model.trim().is_empty() {
+        settings.openai_compatible_model = DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string();
+    }
+    if settings.doubao_endpoint.trim().is_empty() {
+        settings.doubao_endpoint = crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string();
+    }
+    if settings.doubao_resource_id.trim().is_empty() {
+        settings.doubao_resource_id = crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string();
+    }
+
+    settings.whisper_cpp_model_path = settings
+        .whisper_cpp_model_path
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty());
+
+    settings
 }
 
 fn normalize_doubao_resource_id(stored: String) -> String {
@@ -167,71 +237,21 @@ fn normalize_doubao_resource_id(stored: String) -> String {
     }
 }
 
-fn read_bool_setting(app: &AppHandle, key: &str, default: bool) -> bool {
-    app.store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(key))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(default)
-}
-
-pub fn load_settings(app: &AppHandle) -> Settings {
-    Settings {
-        hotkey: load_hotkey(app),
-        asr_provider: read_provider_setting(
-            app,
-            KEY_ASR_PROVIDER,
-            DEFAULT_ASR_PROVIDER,
-            &available_asr_providers(),
-        ),
-        llm_provider: read_provider_setting(
-            app,
-            KEY_LLM_PROVIDER,
-            DEFAULT_LLM_PROVIDER,
-            &available_llm_providers(),
-        ),
-        enhance_enabled: read_bool_setting(app, KEY_ENHANCE_ENABLED, false),
-        enhance_prompt: read_string_setting(app, KEY_ENHANCE_PROMPT, DEFAULT_ENHANCE_PROMPT),
-        whisper_cpp_model_path: read_optional_string_setting(app, KEY_WHISPER_CPP_MODEL_PATH),
-        openai_compatible_base_url: read_string_setting(
-            app,
-            KEY_OPENAI_COMPATIBLE_BASE_URL,
-            DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-        ),
-        openai_compatible_model: read_string_setting(
-            app,
-            KEY_OPENAI_COMPATIBLE_MODEL,
-            DEFAULT_OPENAI_COMPATIBLE_MODEL,
-        ),
-        doubao_endpoint: read_string_setting(
-            app,
-            KEY_DOUBAO_ENDPOINT,
-            crate::asr::doubao::config::DEFAULT_ENDPOINT,
-        ),
-        doubao_resource_id: read_doubao_resource_id(app),
-    }
-}
-
-fn read_optional_string_setting(app: &AppHandle, key: &str) -> Option<String> {
-    app.store(STORE_FILE)
-        .ok()
-        .and_then(|store| store.get(key))
-        .and_then(|value| value.as_str().map(str::to_string))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn read_provider_setting(
-    app: &AppHandle,
-    key: &str,
-    default: &str,
-    providers: &[ProviderMetadata],
-) -> String {
-    let stored = read_string_setting(app, key, default);
-    if providers.iter().any(|provider| provider.id == stored) {
-        stored
-    } else {
-        default.to_string()
+/// One-time migration: read the legacy tauri-plugin-store JSON directly with serde
+/// (a flat key→value object whose keys match Settings fields), so we no longer
+/// depend on the store plugin. Unknown legacy keys are ignored and missing fields
+/// use Default (container `serde(default)`); an absent/unreadable/corrupt file
+/// yields Default.
+fn migrate_from_legacy_json(app: &AppHandle) -> Settings {
+    let Ok(dir) = app.path().app_config_dir() else {
+        return Settings::default();
+    };
+    match std::fs::read_to_string(dir.join(LEGACY_SETTINGS_JSON)) {
+        Ok(text) => serde_json::from_str::<Settings>(&text).unwrap_or_else(|err| {
+            log::warn!("parse legacy settings.json, using defaults: {err}");
+            Settings::default()
+        }),
+        Err(_) => Settings::default(),
     }
 }
 
@@ -363,6 +383,15 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.doubao_resource_id),
+        // Empty is meaningful here (= automatic), so unlike the others we keep an
+        // empty patch value instead of filtering it back to the current value.
+        input_device: patch
+            .input_device
+            .map(|value| value.trim().to_string())
+            .unwrap_or(current.input_device),
+        onboarding_completed: patch
+            .onboarding_completed
+            .unwrap_or(current.onboarding_completed),
     };
 
     validate_settings(&next)?;
@@ -370,15 +399,19 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
 }
 
 fn validate_settings(settings: &Settings) -> Result<(), AppError> {
-    if !HOTKEY_PRESETS.contains(&settings.hotkey.as_str()) {
-        return Err(AppError::Internal(format!(
-            "unsupported hotkey: {}",
-            settings.hotkey
-        )));
+    // The trigger string's real gate is parse_trigger at register time (platform
+    // layer); here we only reject an empty value, so the recorder can pick fn /
+    // function keys / combos freely (SPEC §5.8 P3.9).
+    if settings.hotkey.trim().is_empty() {
+        return Err(AppError::Internal("trigger key must not be empty".into()));
     }
-    if !available_asr_providers()
-        .iter()
-        .any(|provider| provider.id == settings.asr_provider)
+    // `doubao_stream` is a real, selectable ASR choice (the model picker writes it)
+    // but it's streaming-only, not a batch provider, so it stays out of
+    // `available_asr_providers` / `list_asr_providers`. Accept it explicitly here.
+    if settings.asr_provider != "doubao_stream"
+        && !available_asr_providers()
+            .iter()
+            .any(|provider| provider.id == settings.asr_provider)
     {
         return Err(AppError::Internal(format!(
             "unsupported ASR provider: {}",
@@ -419,33 +452,42 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
 }
 
 fn persist_settings(app: &AppHandle, settings: Settings) -> Result<(), AppError> {
-    let store = app
-        .store(STORE_FILE)
-        .map_err(|err| AppError::Internal(format!("open store: {err}")))?;
-    store.set(KEY_HOTKEY, settings.hotkey);
-    store.set(KEY_ASR_PROVIDER, settings.asr_provider);
-    store.set(KEY_LLM_PROVIDER, settings.llm_provider);
-    store.set(KEY_ENHANCE_ENABLED, settings.enhance_enabled);
-    store.set(KEY_ENHANCE_PROMPT, settings.enhance_prompt);
-    store.set(
-        KEY_OPENAI_COMPATIBLE_BASE_URL,
-        settings.openai_compatible_base_url,
-    );
-    store.set(
-        KEY_OPENAI_COMPATIBLE_MODEL,
-        settings.openai_compatible_model,
-    );
-    store.set(KEY_DOUBAO_ENDPOINT, settings.doubao_endpoint);
-    store.set(KEY_DOUBAO_RESOURCE_ID, settings.doubao_resource_id);
-    if let Some(model_path) = settings.whisper_cpp_model_path {
-        store.set(KEY_WHISPER_CPP_MODEL_PATH, model_path);
-    } else {
-        store.delete(KEY_WHISPER_CPP_MODEL_PATH);
-    }
-    store
-        .save()
-        .map_err(|err| AppError::Internal(format!("save store: {err}")))?;
+    let path = settings_path(app)?;
+    write_settings_toml(&path, &settings)
+}
 
+/// Enumerate input devices for the Settings device picker. A cheap CoreAudio/cpal
+/// query (not the hot path), so it stays a plain sync command like the provider
+/// lists. Returns names that `input_device` / device resolution match on.
+#[tauri::command]
+pub fn list_microphones() -> Vec<crate::managers::audio::MicrophoneInfo> {
+    crate::managers::audio::list_input_devices()
+}
+
+/// Name of the device the automatic path would open (P0.7's override or the
+/// system default), so the picker's "自动" row can show what it resolves to.
+#[tauri::command]
+pub fn auto_input_device(app: AppHandle) -> Option<String> {
+    let platform = app.state::<Arc<dyn Platform>>();
+    let preferred = platform.preferred_input_device_name();
+    crate::managers::audio::auto_input_device_name(preferred)
+}
+
+/// Start the Settings mic-preview monitor on `device` (None / "" = automatic).
+/// Emits `mic-monitor-level` until `stop_mic_monitor`, so the picker can show the
+/// chosen mic is actually picking up sound. Called when the device section mounts
+/// and on every selection change.
+#[tauri::command]
+pub fn start_mic_monitor(app: AppHandle, device: Option<String>) -> Result<(), AppError> {
+    let audio = app.state::<Arc<crate::managers::audio::AudioManager>>();
+    audio.start_monitor(app.clone(), device)
+}
+
+/// Stop the Settings mic-preview monitor (section unmounted / dialog closed).
+#[tauri::command]
+pub fn stop_mic_monitor(app: AppHandle) -> Result<(), AppError> {
+    let audio = app.state::<Arc<crate::managers::audio::AudioManager>>();
+    audio.stop_monitor();
     Ok(())
 }
 
@@ -590,38 +632,60 @@ fn platform_secret_for_settings(
     }
 }
 
-/// Dev-only connectivity probe for the Doubao streaming ASR (P2.5). Reads a
-/// local 16k/mono/16-bit wav and streams it to Doubao, logging partial/final
-/// text. Not registered in release builds — the recording hot path lands P2.6.
+/// Assemble the Doubao streaming config from settings (endpoint / resource_id) +
+/// keychain (app_id optional — blank = new-console single-key mode; access token
+/// required). Reads secrets synchronously and returns an owned config, so callers
+/// never hold the Tauri State across an await. Shared by the dev streaming probe
+/// and the production connection test.
+fn doubao_config_from_settings(
+    app: &AppHandle,
+) -> Result<crate::asr::doubao::client::DoubaoStreamConfig, AppError> {
+    use crate::asr::doubao::{client, config};
+
+    // endpoint / resource_id come from the (normalized) TOML settings; secrets from
+    // keychain. Read both before any await so no Tauri State is held across it.
+    let settings = load_settings(app);
+    let platform = app.state::<Arc<dyn Platform>>();
+    let app_id = platform
+        .read_secret(config::SECRET_APP_ID)
+        .unwrap_or_default();
+    let api_key_or_access_token = platform
+        .read_secret(config::SECRET_API_KEY_OR_ACCESS_TOKEN)
+        .map_err(|_| AppError::Provider("豆包 API Key / Access Token 未配置".into()))?;
+
+    Ok(client::DoubaoStreamConfig {
+        endpoint: settings.doubao_endpoint,
+        auth: client::DoubaoAuth::from_settings(app_id, api_key_or_access_token),
+        resource_id: settings.doubao_resource_id,
+    })
+}
+
+/// Production connectivity test for Doubao streaming ASR — drives the model config
+/// dialog's 测试 button. Doubao is WebSocket-only (no /models endpoint), so this
+/// can't go through `test_provider`; it opens the WS + handshake and checks one
+/// frame for an auth/config error (no audio sent). See `client::test_connection`.
+#[tauri::command]
+pub async fn test_doubao_connection(
+    app: AppHandle,
+) -> Result<crate::provider_test::ProviderTestResult, AppError> {
+    let cfg = doubao_config_from_settings(&app)?;
+    crate::asr::doubao::client::test_connection(&cfg).await?;
+    Ok(crate::provider_test::ProviderTestResult {
+        ok: true,
+        message: "连接测试通过".into(),
+    })
+}
+
+/// Dev-only streaming probe for the Doubao ASR (P2.5). Reads a local 16k/mono/16-bit
+/// wav and streams it to Doubao, logging partial/final text. Not registered in
+/// release builds — the recording hot path lands P2.6.
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn test_doubao_streaming(app: AppHandle, wav_path: String) -> Result<String, AppError> {
-    use crate::asr::doubao::{client, config};
+    use crate::asr::doubao::client;
 
     let pcm16 = read_wav_pcm16(&wav_path)?;
-
-    let endpoint = read_string_setting(&app, KEY_DOUBAO_ENDPOINT, config::DEFAULT_ENDPOINT);
-    let resource_id = read_doubao_resource_id(&app);
-
-    // Read secrets before the await so we don't hold the State across it.
-    let auth = {
-        let platform = app.state::<Arc<dyn Platform>>();
-        let app_id = platform
-            .read_secret(config::SECRET_APP_ID)
-            .unwrap_or_default();
-        let api_key_or_access_token = platform
-            .read_secret(config::SECRET_API_KEY_OR_ACCESS_TOKEN)
-            .map_err(|_| {
-                AppError::Provider("doubao API Key / Access Token not configured".into())
-            })?;
-        client::DoubaoAuth::from_settings(app_id, api_key_or_access_token)
-    };
-
-    let cfg = client::DoubaoStreamConfig {
-        endpoint,
-        auth,
-        resource_id,
-    };
+    let cfg = doubao_config_from_settings(&app)?;
     log::info!(
         "test_doubao_streaming: {} PCM bytes from {wav_path}",
         pcm16.len()
@@ -629,6 +693,66 @@ pub async fn test_doubao_streaming(app: AppHandle, wav_path: String) -> Result<S
     let text = client::transcribe_pcm16(&cfg, &pcm16).await?;
     log::info!("test_doubao_streaming final text: {text}");
     Ok(text)
+}
+
+/// Dev-only trigger-key probe (P3.8). Starts a listen-only CGEventTap so we can
+/// verify fn + custom single/combo keys reach us before P3.9 swaps the real
+/// trigger; key events surface as the `trigger-probe-key` event. SPEC §5.8.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn start_trigger_probe(app: AppHandle) -> Result<(), AppError> {
+    app.state::<Arc<dyn Platform>>().start_trigger_probe(&app)
+}
+
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn stop_trigger_probe(app: AppHandle) -> Result<(), AppError> {
+    app.state::<Arc<dyn Platform>>().stop_trigger_probe()
+}
+
+/// P3.9 — Input Monitoring permission (macOS). The default trigger (fn) needs it.
+/// `get` reads status without prompting; `request` shows the system prompt then
+/// returns the (possibly still-false) status — a fresh grant only applies after
+/// relaunch (SPEC §5.8 P3.9).
+#[tauri::command]
+pub fn get_input_monitoring_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().input_monitoring_status()
+}
+
+#[tauri::command]
+pub fn request_input_monitoring_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_input_monitoring();
+    platform.input_monitoring_status()
+}
+
+/// P3.12 — Microphone permission (macOS TCC). `get` reads status without prompting
+/// (the onboarding wizard polls it on focus); `request` shows the system prompt then
+/// returns the (possibly still-false) status.
+#[tauri::command]
+pub fn get_microphone_permission_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().microphone_status()
+}
+
+#[tauri::command]
+pub fn request_microphone_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_microphone();
+    platform.microphone_status()
+}
+
+/// P3.12 — Accessibility permission (macOS, post-event access). Injection's synthetic
+/// Cmd+V needs it. `get` preflights without prompting; `request` shows the prompt.
+#[tauri::command]
+pub fn get_accessibility_permission_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().accessibility_status()
+}
+
+#[tauri::command]
+pub fn request_accessibility_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_accessibility();
+    platform.accessibility_status()
 }
 
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
@@ -669,6 +793,7 @@ mod tests {
         assert_eq!(settings.asr_provider, "groq");
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
+        assert!(!settings.onboarding_completed);
         assert!(!settings.enhance_prompt.trim().is_empty());
         assert_eq!(settings.whisper_cpp_model_path, None);
         assert_eq!(
@@ -707,6 +832,81 @@ mod tests {
             normalize_doubao_resource_id(crate::asr::doubao::config::LEGACY_RESOURCE_ID.into()),
             crate::asr::doubao::config::DEFAULT_RESOURCE_ID
         );
+    }
+
+    #[test]
+    fn settings_round_trip_through_toml() {
+        let original = Settings::default();
+        let text = toml::to_string_pretty(&original).expect("serialize");
+        assert_eq!(
+            original,
+            toml::from_str::<Settings>(&text).expect("deserialize")
+        );
+
+        // Some(path) survives too — skip_serializing_if only omits None.
+        let with_path = Settings {
+            whisper_cpp_model_path: Some("/models/ggml.bin".into()),
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&with_path).expect("serialize");
+        assert_eq!(
+            with_path,
+            toml::from_str::<Settings>(&text).expect("deserialize")
+        );
+    }
+
+    #[test]
+    fn partial_toml_fills_missing_fields_from_default() {
+        // A hand-edited file with only a few keys must not error — container
+        // serde(default) backfills the rest.
+        let parsed: Settings = toml::from_str("hotkey = \"F13\"\nenhance_enabled = true\n")
+            .expect("deserialize partial");
+        assert_eq!(parsed.hotkey, "F13");
+        assert!(parsed.enhance_enabled);
+        assert_eq!(parsed.asr_provider, DEFAULT_ASR_PROVIDER);
+        assert_eq!(parsed.whisper_cpp_model_path, None);
+    }
+
+    #[test]
+    fn normalize_clamps_invalid_and_keeps_doubao_stream() {
+        let clamped = normalize_settings(Settings {
+            asr_provider: "bogus".into(),
+            ..Settings::default()
+        });
+        assert_eq!(clamped.asr_provider, DEFAULT_ASR_PROVIDER);
+
+        let kept = normalize_settings(Settings {
+            asr_provider: "doubao_stream".into(),
+            ..Settings::default()
+        });
+        assert_eq!(kept.asr_provider, "doubao_stream");
+
+        let fixed = normalize_settings(Settings {
+            openai_compatible_base_url: "  ".into(),
+            doubao_resource_id: crate::asr::doubao::config::LEGACY_RESOURCE_ID.into(),
+            ..Settings::default()
+        });
+        assert_eq!(
+            fixed.openai_compatible_base_url,
+            DEFAULT_OPENAI_COMPATIBLE_BASE_URL
+        );
+        assert_eq!(
+            fixed.doubao_resource_id,
+            crate::asr::doubao::config::DEFAULT_RESOURCE_ID
+        );
+    }
+
+    #[test]
+    fn legacy_json_migrates_into_settings() {
+        // The store wrote a flat JSON object: serde maps known keys, ignores unknown
+        // (e.g. the retired doubao_streaming_preview_enabled), defaults the missing.
+        let json = r#"{"hotkey":"F13","asr_provider":"doubao_stream","doubao_streaming_preview_enabled":true,"onboarding_completed":true}"#;
+        let parsed: Settings = serde_json::from_str(json).expect("deserialize legacy json");
+        assert_eq!(parsed.hotkey, "F13");
+        assert_eq!(parsed.asr_provider, "doubao_stream");
+        assert!(parsed.onboarding_completed);
+        assert_eq!(parsed.llm_provider, DEFAULT_LLM_PROVIDER);
+        assert_eq!(parsed.whisper_cpp_model_path, None);
     }
 
     #[test]

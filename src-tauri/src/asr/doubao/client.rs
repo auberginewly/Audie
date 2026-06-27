@@ -29,6 +29,10 @@ const CHUNK_SEND_INTERVAL_MS: u64 = 20;
 /// Upper bound on waiting for the final recognition after the input closes.
 const FINAL_TIMEOUT_SECS: u64 = 20;
 
+/// How long the connectivity test waits for the first server frame before treating
+/// the already-upgraded session as accepted (auth is verified at the WS upgrade).
+const CONNECT_TEST_TIMEOUT_SECS: u64 = 8;
+
 /// Doubao auth mode. New console uses one API key; old console uses AppID plus
 /// Access Token.
 #[derive(Clone)]
@@ -160,6 +164,40 @@ pub async fn transcribe_pcm16(cfg: &DoubaoStreamConfig, pcm16: &[u8]) -> AppResu
         Err(_) => Err(AppError::Network(
             "doubao stream timed out waiting for final result".into(),
         )),
+    }
+}
+
+/// Connectivity + auth probe for the model config dialog's 测试 button (Doubao has
+/// no /models endpoint, so `test_provider` can't cover it). Opens the WS, sends the
+/// full-client-request handshake, and inspects at most one server frame — without
+/// sending audio. Doubao authenticates at the WS upgrade, so a failed upgrade
+/// (401/403) maps to Provider; an error response frame maps via the codec; a valid
+/// frame or short silence means the session was accepted. §3.7, no panics.
+pub async fn test_connection(cfg: &DoubaoStreamConfig) -> AppResult<()> {
+    let request = build_request(cfg)?;
+    let (ws, _resp) = connect_async(request)
+        .await
+        .map_err(|err| classify_ws_error(&err, cfg))?;
+    let (mut write, mut read) = ws.split();
+
+    let payload = build_full_request_payload(&new_request_id())?;
+    write
+        .send(Message::Binary(codec::build_full_client_request(
+            1, &payload,
+        )))
+        .await
+        .map_err(|err| classify_ws_error(&err, cfg))?;
+
+    match tokio::time::timeout(Duration::from_secs(CONNECT_TEST_TIMEOUT_SECS), read.next()).await {
+        // An error frame (bad auth/config) surfaces as a codec error → Provider.
+        Ok(Some(Ok(Message::Binary(bytes)))) => {
+            codec::parse_server_packet(&bytes).map_err(classify_codec_error)?;
+            Ok(())
+        }
+        Ok(Some(Ok(_))) => Ok(()),
+        Ok(Some(Err(err))) => Err(classify_ws_error_without_context(&err)),
+        // Clean close or no frame in the window: the upgrade (auth) already passed.
+        Ok(None) | Err(_) => Ok(()),
     }
 }
 

@@ -53,7 +53,7 @@ const STATUS: Record<StatusTone, { color: string; icon: IconName }> = {
 
 type StatusMessageProps = {
   tone?: StatusTone;
-  icon?: IconName;
+  icon?: IconName | null; // null = no leading icon (text only)
   children: ReactNode;
 };
 
@@ -63,7 +63,9 @@ export function StatusMessage({ tone = "neutral", icon, children }: StatusMessag
   const spin = tone === "pending";
   return (
     <span className={["inline-flex items-center gap-1.5 text-xs leading-4", t.color].join(" ")}>
-      <Icon name={icon ?? t.icon} size={13} strokeWidth={2} className={spin ? "animate-spin" : undefined} />
+      {icon !== null ? (
+        <Icon name={icon ?? t.icon} size={13} strokeWidth={2} className={spin ? "animate-spin" : undefined} />
+      ) : null}
       <span className="min-w-0">{children}</span>
     </span>
   );

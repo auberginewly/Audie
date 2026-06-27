@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
 import { useSettings } from "./hooks/useSettings";
+import { usePermissions } from "./hooks/usePermissions";
+import { useConfiguredModels } from "./hooks/useConfiguredModels";
+import { useRecordingStore } from "./store/recording";
+import { modelIdForAsrProvider } from "./components/Settings/models";
+import type { Settings } from "./types/settings";
 import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState } from "./components/shell";
 import { Button, Dialog } from "./components/ui";
 import { HomeScreen } from "./components/screens/HomeScreen";
@@ -21,8 +26,25 @@ const UPDATE_LABELS: UpdateLabels = {
 // design's "available" state so the titlebar pill matches the mockup.
 const AVAILABLE_VERSION = "0.5.0";
 
-// Sidebar dock card nudging first-run setup — progress + CTA into the wizard.
-function SetupGuideCard({ done, total, onContinue }: { done: number; total: number; onContinue: () => void }) {
+// Sidebar dock card nudging first-run setup — real progress + CTA into the wizard.
+// Rendered only while onboarding is incomplete, so the permission/secret polls run
+// only then (completed users pay nothing). x/n mirrors the wizard's per-step
+// checkmarks (one unit per step): 权限 / 快捷键 / 听写 / 润色 / 试一下.
+function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; onContinue: () => void }) {
+  const perms = usePermissions();
+  const { configured } = useConfiguredModels();
+  const everSucceeded = useRecordingStore((s) => s.everSucceeded);
+  const steps = [
+    perms.microphone.granted === true &&
+      perms.accessibility.granted === true &&
+      perms.inputMonitoring.granted === true,
+    !!settings?.hotkey,
+    !!settings && configured(modelIdForAsrProvider(settings.asr_provider)),
+    configured("deepseek"), // 润色: the openai_compatible LLM slot's key
+    everSucceeded, // 试一下: a dictation has succeeded this session
+  ];
+  const total = steps.length;
+  const done = steps.filter(Boolean).length;
   return (
     <div className="rounded-md bg-gray-100 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -47,11 +69,28 @@ function App() {
   const [nav, setNav] = useState("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
-  // mock: no first-run persistence — the guide card shows until the wizard
-  // finishes this session (see plan).
-  const [setupDone, setSetupDone] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>("available");
   const [updateOpen, setUpdateOpen] = useState(false);
+
+  // First-run onboarding is persisted in settings (P3.12). Auto-open the wizard once
+  // when a fresh install reports it incomplete; the ref stops it reopening if the
+  // user closes it without finishing (it auto-opens again next launch, like Voxt).
+  const onboardingCompleted = data.settings?.onboarding_completed;
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (onboardingCompleted === false && !autoOpened.current) {
+      autoOpened.current = true;
+      setSetupOpen(true);
+    }
+  }, [onboardingCompleted]);
+
+  // "重新运行配置向导" (About page): mark onboarding incomplete and reopen the
+  // wizard, closing Settings so it's visible — saves the user editing the store.
+  const rerunSetup = () => {
+    void data.update({ onboarding_completed: false });
+    setSettingsOpen(false);
+    setSetupOpen(true);
+  };
 
   // The overlay's 去设置 (polish-unavailable toast) shows + focuses this window
   // via the backend, then fires `open-settings` so we surface the Settings dialog.
@@ -112,7 +151,9 @@ function App() {
             settingsActive={settingsOpen}
             onSettings={() => setSettingsOpen(true)}
             aboveDock={
-              setupDone ? undefined : <SetupGuideCard done={3} total={4} onContinue={() => setSetupOpen(true)} />
+              onboardingCompleted === false ? (
+                <SetupGuideCard settings={data.settings} onContinue={() => setSetupOpen(true)} />
+              ) : undefined
             }
           />
         }
@@ -120,13 +161,13 @@ function App() {
         {nav === "home" ? <HomeScreen /> : <HistoryScreen />}
       </AppShell>
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} />
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} onRerunSetup={rerunSetup} />
 
       <SetupWizard
         open={setupOpen}
         onClose={() => setSetupOpen(false)}
         onComplete={() => {
-          setSetupDone(true);
+          void data.update({ onboarding_completed: true });
           setSetupOpen(false);
         }}
         data={data}

@@ -18,14 +18,15 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# User settings persist as a human-editable TOML file (config dir), serialized from
+# the Settings struct. serde_json stays for migrating the old tauri-plugin-store.
+toml = "0.8"
 thiserror = "2"
 anyhow = "1"
 parking_lot = "0.12"
 log = "0.4"
 env_logger = "0.11"
-tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
-tauri-plugin-store = "2"
 # Open external URLs (GitHub repo, author site) in the system browser — Tauri has
 # no built-in way; this is the official link-opening plugin.
 tauri-plugin-opener = "2"
