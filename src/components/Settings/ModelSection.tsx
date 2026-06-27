@@ -1,6 +1,6 @@
 // 模型 — the design's model picker. Type tabs (ASR/LLM) + source filter + model
-// cards. The active pick maps to the real provider enum where one exists; rating/
-// tags are mock, but configured-status is real (keychain has_secret via
+// cards. The active pick maps to the real provider enum where one exists; tags
+// are mock, but configured-status is real (keychain has_secret via
 // useConfiguredModels — see models.ts + plan).
 
 import { useState } from "react";
