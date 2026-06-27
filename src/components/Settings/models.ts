@@ -84,3 +84,10 @@ export function llmPickPatch(id: string, currentBaseUrl: string): Partial<Settin
   const preset = llmPresetForModelId(id);
   return { ...patch, openai_compatible_base_url: preset.baseUrl, openai_compatible_model: preset.model };
 }
+
+// Which LLM card the saved openai_compatible base_url maps to, so the picker's
+// 使用中 highlight persists across restarts (like ASR derives from asr_provider).
+// Custom endpoints fall back to the deepseek card.
+export function llmModelIdForBaseUrl(baseUrl: string): string {
+  return baseUrl.includes("openai.com") ? "openai" : "deepseek";
+}

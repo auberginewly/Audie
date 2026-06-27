@@ -8,7 +8,7 @@ import { useState } from "react";
 import type { UseSettings } from "../../hooks/useSettings";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
 import { Badge, Button, Icon, Segmented } from "../ui";
-import { MODELS, asrProviderForModelId, llmPickPatch, modelIdForAsrProvider, type ModelMeta, type ModelType } from "./models";
+import { MODELS, asrProviderForModelId, llmModelIdForBaseUrl, llmPickPatch, modelIdForAsrProvider, type ModelMeta, type ModelType } from "./models";
 import { ModelConfigDialog } from "./ModelConfigDialog";
 
 type Source = "all" | "cloud" | "local";
@@ -64,9 +64,10 @@ export function ModelSection({ data }: { data: UseSettings }) {
   // model, refreshed on focus + after the config dialog saves a key.
   const { configured, refresh } = useConfiguredModels();
 
-  // Active pick: ASR derives from the real provider; LLM is visual (one slot).
-  const [pickedLlm, setPickedLlm] = useState("deepseek");
+  // Active pick derives from saved settings so the 使用中 highlight persists: ASR
+  // from asr_provider, LLM from the openai_compatible base_url (deepseek/openai).
   const pickedAsr = settings ? modelIdForAsrProvider(settings.asr_provider) : "doubao";
+  const pickedLlm = settings ? llmModelIdForBaseUrl(settings.openai_compatible_base_url) : "deepseek";
   const picked: Record<ModelType, string> = { asr: pickedAsr, llm: pickedLlm };
 
   const onPick = (m: ModelMeta) => {
@@ -76,7 +77,6 @@ export function ModelSection({ data }: { data: UseSettings }) {
       // is selected AND a token exists, otherwise it surfaces a Provider error.
       if (provider) update({ asr_provider: provider });
     } else {
-      setPickedLlm(m.id);
       update(llmPickPatch(m.id, settings?.openai_compatible_base_url ?? ""));
     }
   };
