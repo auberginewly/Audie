@@ -4,10 +4,16 @@
 // useConfiguredModels — see models.ts + plan).
 
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import type { UseSettings } from "../../hooks/useSettings";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
-import { Badge, Button, Icon, Segmented } from "../ui";
+import {
+  DiscoveredLocalLlmListSchema,
+  type DiscoveredLocalLlm,
+  type Settings,
+} from "../../types/settings";
+import { Badge, Button, Icon, Segmented, StatusMessage, type StatusTone } from "../ui";
 import {
   MODELS,
   asrProviderForModelId,
@@ -15,12 +21,101 @@ import {
   llmHasStoredModel,
   llmModelIdForBaseUrl,
   llmPickPatch,
+  localLlmPickPatch,
   modelIdForAsrProvider,
   type ModelMeta,
   type ModelSource,
   type ModelType,
 } from "./models";
 import { ModelConfigDialog } from "./ModelConfigDialog";
+
+// Display names for the local servers discover_local_llm probes (provider ids).
+const LOCAL_LLM_LABELS: Record<string, string> = {
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  llamacpp: "llama.cpp",
+};
+
+// 扫描本地: probe the well-known local LLM ports, then let the user one-click pick a
+// (server, model). Picking activates the matching local card + sets the chosen model
+// in the shared openai_compatible slot (localLlmPickPatch). Shown only for LLM+本地.
+function LocalLlmScan({
+  settings,
+  onPick,
+}: {
+  settings: Settings | null;
+  onPick: (patch: Partial<Settings>) => void;
+}) {
+  const [results, setResults] = useState<DiscoveredLocalLlm[] | null>(null);
+  const [status, setStatus] = useState<{ tone: StatusTone; message: string } | null>(null);
+
+  const scan = async () => {
+    setStatus({ tone: "pending", message: "扫描中…" });
+    setResults(null);
+    try {
+      const parsed = DiscoveredLocalLlmListSchema.safeParse(await invoke("discover_local_llm"));
+      if (!parsed.success) {
+        setStatus({ tone: "danger", message: "扫描结果格式异常" });
+        return;
+      }
+      const alive = parsed.data.filter((r) => r.alive);
+      setResults(alive);
+      setStatus(
+        alive.length
+          ? { tone: "success", message: `发现 ${alive.length} 个本地服务` }
+          : { tone: "neutral", message: "未发现本地服务，请确认 Ollama / LM Studio 已启动" },
+      );
+    } catch {
+      setStatus({ tone: "danger", message: "扫描失败，请查看日志" });
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-md bg-surface-card px-3.5 py-[13px]">
+      <div className="flex items-center gap-2.5">
+        <Button size="sm" variant="secondary" icon="cpu" onClick={scan}>
+          扫描本地
+        </Button>
+        {status ? (
+          <StatusMessage tone={status.tone} icon={null}>
+            {status.message}
+          </StatusMessage>
+        ) : (
+          <span className="text-xs text-text-tertiary">探测 Ollama / LM Studio / llama.cpp</span>
+        )}
+      </div>
+      {results?.length ? (
+        <div className="flex flex-col gap-2">
+          {results.map((svc) => (
+            <div key={svc.provider} className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-medium text-text-primary">
+                  {LOCAL_LLM_LABELS[svc.provider] ?? svc.provider}
+                </span>
+                <Badge tone="success">{svc.models.length} 个模型</Badge>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {svc.models.map((model) => (
+                  <Button
+                    key={model}
+                    size="sm"
+                    variant="ghost"
+                    disabled={!settings}
+                    onClick={() =>
+                      settings && onPick(localLlmPickPatch(svc.provider, svc.base_url, model, settings))
+                    }
+                  >
+                    {model}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 type Source = "all" | "cloud" | "local";
 
@@ -156,6 +251,12 @@ export function ModelSection({
           ]}
         />
       </div>
+
+      {type === "llm" && source === "local" ? (
+        <div className="mb-3">
+          <LocalLlmScan settings={settings} onPick={update} />
+        </div>
+      ) : null}
 
       {list.length ? (
         <div className="flex flex-col gap-5">

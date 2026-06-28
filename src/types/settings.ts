@@ -89,6 +89,20 @@ export const ProviderTestResultSchema = z.object({
 
 export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 
+// One local LLM server reported by `discover_local_llm` (P2). `alive` is true only
+// when its /models returned a usable list; down endpoints still appear so the UI
+// can show which ports were probed. provider is the card id (ollama/lmstudio/llamacpp).
+export const DiscoveredLocalLlmSchema = z.object({
+  provider: z.string(),
+  base_url: z.string(),
+  alive: z.boolean(),
+  models: z.array(z.string()),
+});
+
+export type DiscoveredLocalLlm = z.infer<typeof DiscoveredLocalLlmSchema>;
+
+export const DiscoveredLocalLlmListSchema = z.array(DiscoveredLocalLlmSchema);
+
 // Every keychain-backed secret id. Doubao keeps the historical
 // `doubao_access_token` id for either new-console API Key or old-console Access
 // Token, so export/import cover all five without migrating saved secrets.
