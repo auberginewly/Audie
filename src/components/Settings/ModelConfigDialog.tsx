@@ -1,7 +1,6 @@
 // Model config dialog — opened from a model card's 配置 button. Body is driven by
-// the model id (Doubao / Groq / DeepSeek·OpenAI / Whisper). Key, base_url, and
-// model fields write to real backend commands; the rest (model variant, language,
-// thinking, temperature, dictionary) are mock for visual fidelity (see plan).
+// the model id (Doubao / Groq / OpenAI Transcribe / Whisper / LLM cards). Key,
+// base_url, model, and asr_model fields write to real backend commands.
 
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -9,7 +8,38 @@ import { invoke } from "@tauri-apps/api/core";
 import { ProviderTestResultSchema, type SecretKeyId, type Settings } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
 import { Button, IconButton, Input, Select, StatusMessage, type StatusTone } from "../ui";
-import { llmPresetForModelId, type ModelMeta } from "./models";
+import {
+  asrModelOptionsForModelId,
+  llmKeyIdForModelId,
+  llmModelIdForBaseUrl,
+  llmPresetForModelId,
+  requiredSecretsForModel,
+  type ModelMeta,
+  type ModelOption,
+} from "./models";
+
+// Cloud ASR cards driven by the generic "模型 + API Key" body: model id written to
+// asr_model, key to each provider's own keychain id. doubao keeps its own body
+// (resource_id, dual fields); whisper-local is a file path.
+const GENERIC_ASR_MODEL_IDS = new Set([
+  "groq",
+  "openai-asr",
+  "glm-asr",
+  "aliyun-asr",
+  "stepfun-asr",
+]);
+
+// ASR cards without a reachable test probe yet — no 测试 button (like whisper-local).
+// glm / aliyun_fun / stepfun probes land in a later slice (see types/settings.ts
+// TestProviderKeyIdSchema). doubao routes to its dedicated WS connectivity command.
+const NO_TEST_BUTTON_IDS = new Set([
+  "whisper-local",
+  "glm-asr",
+  "aliyun-asr",
+  "stepfun-asr",
+]);
+
+const CUSTOM_OPTION = "__custom__";
 
 // Tauri serializes AppError as { code, message } (error.rs serde tag/content), so
 // a rejected command surfaces its user-facing message here.
@@ -30,21 +60,87 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// A keychain-backed password field. Shows whether a key is already stored via the
-// no-read `has_secret` presence check (which never asks macOS to unlock + reveal
-// the secret), and only writes a NEW value through save(). We deliberately do NOT
-// read the decrypted key back into the input: that data-read triggered a macOS
-// Keychain password prompt every time a model config opened. Leaving an already-
-// configured field blank keeps the stored key as-is (save() skips empty inputs).
+// A model picker over a curated list with a "自定义…" escape hatch. When the saved
+// value is off-list (or the user picks 自定义), it falls back to a free-text Input
+// so anything outside the curated list still works (the backend takes the raw id).
+function OptionSelect({
+  options,
+  value,
+  placeholder,
+  onChange,
+}: {
+  options: { id: string; title: string }[];
+  value: string;
+  placeholder: string;
+  onChange: (next: string) => void;
+}) {
+  const inList = options.some((o) => o.id === value);
+  const [custom, setCustom] = useState(value !== "" && !inList);
+
+  if (custom) {
+    return (
+      <div className="flex flex-col gap-[7px]">
+        <Select
+          value={CUSTOM_OPTION}
+          onChange={(e) => {
+            if (e.target.value !== CUSTOM_OPTION) {
+              setCustom(false);
+              onChange(e.target.value);
+            }
+          }}
+        >
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.title}
+            </option>
+          ))}
+          <option value={CUSTOM_OPTION}>自定义…</option>
+        </Select>
+        <Input
+          mono
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <Select
+      value={inList ? value : (options[0]?.id ?? "")}
+      onChange={(e) => {
+        if (e.target.value === CUSTOM_OPTION) {
+          setCustom(true);
+          return;
+        }
+        onChange(e.target.value);
+      }}
+    >
+      {options.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.title}
+        </option>
+      ))}
+      <option value={CUSTOM_OPTION}>自定义…</option>
+    </Select>
+  );
+}
+
+// A keychain-backed password field, standard "masked input + eye toggle". The
+// stored key is loaded into the field on open (masked, eye closed) so it sits
+// right in the row; the eye toggles show/hide. With stable app signing, reading
+// the app's own keychain item doesn't re-prompt. Editing overwrites; save()
+// persists a non-empty value (clearing leaves the stored key untouched).
 function KeyInput({ keyId, placeholder }: { keyId: SecretKeyId; placeholder: string }) {
   const [value, setValue] = useState("");
-  const [configured, setConfigured] = useState(false);
+  const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    invoke("has_secret", { keyId })
+    invoke("get_secret_for_settings", { keyId })
       .then((raw) => {
-        if (!cancelled && typeof raw === "boolean") setConfigured(raw);
+        if (!cancelled && typeof raw === "string") setValue(raw);
       })
       .catch(() => {});
     return () => {
@@ -53,14 +149,25 @@ function KeyInput({ keyId, placeholder }: { keyId: SecretKeyId; placeholder: str
   }, [keyId]);
 
   return (
-    <Input
-      mono
-      type="password"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      placeholder={configured ? "已配置（留空则保持不变）" : placeholder}
-      data-key-id={keyId}
-    />
+    <div className="relative">
+      <Input
+        mono
+        type={revealed ? "text" : "password"}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={placeholder}
+        data-key-id={keyId}
+        className="pr-9"
+      />
+      <div className="absolute inset-y-0 right-0 flex items-center pr-0.5">
+        <IconButton
+          name={revealed ? "eye" : "eye-off"}
+          label={revealed ? "隐藏" : "查看"}
+          size="sm"
+          onClick={() => setRevealed((r) => !r)}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -73,22 +180,106 @@ type ModelConfigDialogProps = {
 export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogProps) {
   const [status, setStatus] = useState<{ tone: StatusTone; message: string } | null>(null);
   const { settings, update } = data;
+
+  // LLM endpoint + model shown/edited in the dialog. All LLM cards share one
+  // backend slot (openai_compatible), so we seed from the saved slot ONLY when
+  // this card is the active provider; otherwise from the card's own preset — so
+  // opening Kimi shows api.moonshot.cn, not whatever the shared slot holds.
+  // Saving applies the draft (switches the slot to this provider), instead of
+  // writing live on open (which would leave the new endpoint paired with the old
+  // provider's key).
+  const [llmDraft, setLlmDraft] = useState({ baseUrl: "", model: "" });
+  // Live model list fetched from the provider's /models (null = use curated list).
+  const [liveModels, setLiveModels] = useState<ModelOption[] | null>(null);
+  const [modelFetch, setModelFetch] = useState<{ tone: StatusTone; message: string } | null>(null);
+  useEffect(() => {
+    if (!model || model.type !== "llm" || !settings) return;
+    const preset = llmPresetForModelId(model.id);
+    const active = llmModelIdForBaseUrl(settings.openai_compatible_base_url) === model.id;
+    setLlmDraft({
+      baseUrl: active ? settings.openai_compatible_base_url : preset.baseUrl,
+      // Leave the model blank for a not-yet-active card — no guessed/hardcoded
+      // model. The user fetches the live list (获取最新模型) or types one in.
+      model: active ? settings.openai_compatible_model : "",
+    });
+    setLiveModels(null); // dropping the previous card's fetched list
+    setModelFetch(null);
+    // Re-seed only when the opened card changes, not on every settings write.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model?.id]);
+
+  // Local providers (Ollama / LM Studio) need no key and run on a fixed localhost
+  // endpoint, so auto-fetch their model list on open (and auto-select the first) —
+  // the user just hits 保存. Cloud cards stay manual (need a key first).
+  useEffect(() => {
+    if (!model || model.type !== "llm" || model.source !== "local") return;
+    let cancelled = false;
+    const baseUrl = llmPresetForModelId(model.id).baseUrl;
+    setModelFetch({ tone: "pending", message: "获取中…" });
+    invoke("list_provider_models", { baseUrl, apiKey: null })
+      .then((raw) => {
+        if (cancelled) return;
+        const ids = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+        if (!ids.length) {
+          setModelFetch({ tone: "danger", message: "未获取到模型，请确认本地服务在运行" });
+          return;
+        }
+        setLiveModels(ids.map((id) => ({ id, title: id })));
+        setLlmDraft((d) => (d.model.trim() ? d : { ...d, model: ids[0] }));
+        setModelFetch({ tone: "success", message: `已获取 ${ids.length} 个模型` });
+      })
+      .catch((err) => {
+        if (!cancelled) setModelFetch({ tone: "danger", message: errorMessage(err) });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model?.id]);
+
   if (!model || !settings) return null;
 
   // Persist every keychain field currently rendered (reads the DOM inputs the
-  // KeyInput components own), plus base_url/model which update live.
-  const save = async () => {
+  // KeyInput components own). For an LLM card, also apply its endpoint+model draft
+  // to the shared openai_compatible slot — so saving Kimi's config switches the
+  // backend to Kimi's endpoint, not just stores a key under DeepSeek's endpoint.
+  const save = async (): Promise<boolean> => {
+    // An LLM provider with no model can't polish (it becomes 使用中 but errors at
+    // request time). Block saving until a model is fetched/typed.
+    if (model.type === "llm" && !llmDraft.model.trim()) {
+      setStatus({ tone: "danger", message: "请先「获取最新模型」或手动填写模型名" });
+      return false;
+    }
     const inputs = document.querySelectorAll<HTMLInputElement>("input[data-key-id]");
     try {
+      if (model.type === "llm") {
+        update({
+          llm_provider: "openai_compatible",
+          openai_compatible_base_url: llmDraft.baseUrl.trim(),
+          openai_compatible_model: llmDraft.model.trim(),
+          // 4b: bind the backend to this provider's own key slot.
+          llm_api_key_id: llmKeyIdForModelId(model.id) ?? "",
+          // Remember this provider's chosen model so 选用 can restore it later.
+          llm_models: { ...(settings.llm_models ?? {}), [model.id]: llmDraft.model.trim() },
+        });
+      }
+      let savedKey = false;
       for (const el of inputs) {
         const keyId = el.getAttribute("data-key-id");
         const val = el.value.trim();
         if (!keyId) continue;
-        if (val) await invoke("set_secret", { keyId, value: val });
+        if (val) {
+          await invoke("set_secret", { keyId, value: val });
+          savedKey = true;
+        }
       }
-      setStatus({ tone: "success", message: "已保存到系统 keychain" });
+      // Only claim the keychain when a key was actually written (local providers
+      // store no key — just endpoint/model).
+      setStatus({ tone: "success", message: savedKey ? "已保存到系统 keychain" : "已保存" });
+      return true;
     } catch {
       setStatus({ tone: "danger", message: "保存失败，请查看日志" });
+      return false;
     }
   };
 
@@ -105,6 +296,30 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
       return typeof raw === "string" && raw ? raw : null;
     } catch {
       return null;
+    }
+  };
+
+  // Fetch the live model list from this card's endpoint /models (4b refresh button).
+  // Falls back silently to the curated list on failure (liveModels stays null).
+  const refreshModels = async () => {
+    setModelFetch({ tone: "pending", message: "获取中…" });
+    try {
+      const keyId = llmKeyIdForModelId(model.id);
+      const apiKey = keyId ? await readKey(keyId) : null;
+      const raw = await invoke("list_provider_models", { baseUrl: llmDraft.baseUrl, apiKey });
+      const ids = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+      if (!ids.length) {
+        setModelFetch({ tone: "danger", message: "未返回模型，已保留内置列表" });
+        return;
+      }
+      setLiveModels(ids.map((id) => ({ id, title: id })));
+      // Auto-select the first fetched model when none is chosen yet, so the dropdown's
+      // displayed value is the ACTUAL llmDraft.model (otherwise it shows the first
+      // option but the draft stays "" → save is blocked / persists empty).
+      setLlmDraft((d) => (d.model.trim() ? d : { ...d, model: ids[0] }));
+      setModelFetch({ tone: "success", message: `已获取 ${ids.length} 个模型` });
+    } catch (err) {
+      setModelFetch({ tone: "danger", message: errorMessage(err) });
     }
   };
 
@@ -125,14 +340,27 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
             base_url: null,
           },
         });
+      } else if (model.id === "openai-asr") {
+        raw = await invoke("test_provider", {
+          request: {
+            kind: "asr",
+            provider_id: "openai",
+            key_id: "openai_api_key",
+            api_key: await readKey("openai_api_key"),
+            base_url: null,
+          },
+        });
       } else {
+        // LLM card: test THIS card's endpoint (draft) with its own key (4b), not
+        // the saved shared slot — so testing Kimi probes api.moonshot.cn + Kimi's key.
+        const llmKeyId = llmKeyIdForModelId(model.id);
         raw = await invoke("test_provider", {
           request: {
             kind: "llm",
             provider_id: "openai_compatible",
-            key_id: "openai_compatible_api_key",
-            api_key: await readKey("openai_compatible_api_key"),
-            base_url: settings.openai_compatible_base_url,
+            key_id: llmKeyId ?? "openai_compatible_api_key",
+            api_key: llmKeyId ? await readKey(llmKeyId) : null,
+            base_url: llmDraft.baseUrl,
           },
         });
       }
@@ -166,11 +394,20 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
         </div>
 
         <div className="flex flex-col gap-4 overflow-y-auto px-[18px] pb-1 pt-0.5">
-          <ModelBody model={model} settings={settings} setField={setField} />
+          <ModelBody
+            model={model}
+            settings={settings}
+            setField={setField}
+            llmDraft={llmDraft}
+            setLlmDraft={setLlmDraft}
+            liveModels={liveModels}
+            modelFetch={modelFetch}
+            onRefreshModels={refreshModels}
+          />
         </div>
 
         <div className="flex shrink-0 items-center gap-2 px-[18px] py-4">
-          {model.id !== "whisper-local" ? (
+          {!NO_TEST_BUTTON_IDS.has(model.id) ? (
             <Button variant="secondary" disabled={status?.tone === "pending"} onClick={runTest}>
               测试
             </Button>
@@ -187,8 +424,7 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
           <Button
             variant="accent"
             onClick={async () => {
-              await save();
-              onClose();
+              if (await save()) onClose();
             }}
           >
             保存
@@ -203,21 +439,26 @@ function ModelBody({
   model,
   settings,
   setField,
+  llmDraft,
+  setLlmDraft,
+  liveModels,
+  modelFetch,
+  onRefreshModels,
 }: {
   model: ModelMeta;
   settings: Settings;
   setField: (patch: Partial<Settings>) => void;
+  llmDraft: { baseUrl: string; model: string };
+  setLlmDraft: (next: { baseUrl: string; model: string }) => void;
+  liveModels: ModelOption[] | null;
+  modelFetch: { tone: StatusTone; message: string } | null;
+  onRefreshModels: () => void;
 }) {
   if (model.id === "doubao") {
+    // Doubao's model variant is selected via Resource ID (not asr_model), so there
+    // is no model dropdown here — Resource ID below is the real control.
     return (
       <>
-        <Field label="模型">
-          {/* mock: variant selection isn't backed */}
-          <Select defaultValue="hourly">
-            <option value="hourly">Doubao ASR 2.0 (Hourly)</option>
-            <option value="concurrent">Doubao ASR 2.0 (Concurrent)</option>
-          </Select>
-        </Field>
         <Field label="App ID">
           <KeyInput keyId="doubao_app_id" placeholder="旧版控制台 App ID" />
         </Field>
@@ -244,26 +485,26 @@ function ModelBody({
     );
   }
 
-  if (model.id === "groq") {
+  if (GENERIC_ASR_MODEL_IDS.has(model.id)) {
+    // Each ASR card declares exactly one keychain secret in requiredSecretsForModel,
+    // so it's the single source of truth for which key this body writes.
+    const keyId = requiredSecretsForModel(model.id)[0];
+    const options = asrModelOptionsForModelId(model.id);
     return (
       <>
         <Field label="模型">
-          <Select defaultValue="turbo">
-            <option value="turbo">whisper-large-v3-turbo</option>
-            <option value="v3">whisper-large-v3</option>
-          </Select>
+          <OptionSelect
+            options={options}
+            value={settings.asr_model}
+            placeholder={options[0]?.id ?? ""}
+            onChange={(asr_model) => setField({ asr_model })}
+          />
         </Field>
-        <Field label="API Key">
-          <KeyInput keyId="groq_api_key" placeholder="粘贴 API Key" />
-        </Field>
-        {/* mock: per-request language hint isn't backed */}
-        <Field label="语言">
-          <Select defaultValue="auto">
-            <option value="auto">自动检测</option>
-            <option value="zh">简体中文</option>
-            <option value="en">English</option>
-          </Select>
-        </Field>
+        {keyId ? (
+          <Field label="API Key">
+            <KeyInput keyId={keyId} placeholder="粘贴 API Key" />
+          </Field>
+        ) : null}
       </>
     );
   }
@@ -281,30 +522,70 @@ function ModelBody({
     );
   }
 
-  // deepseek / openai — both drive the single openai_compatible LLM slot; the card
-  // id only flavors the placeholders (picking a card writes that provider's preset).
+  // LLM cards — all drive the single openai_compatible slot. The endpoint+model
+  // come from llmDraft (seeded per-card in the parent: this card's preset unless
+  // it's the active provider), and save() applies the draft. Editing here only
+  // touches the draft, so opening a card never silently switches the live slot.
   const preset = llmPresetForModelId(model.id);
+  // 4b: each cloud LLM card writes/reads its own keychain key; local cards
+  // (Ollama / LM Studio) have no key id (key-optional localhost endpoint).
+  const llmKeyId = llmKeyIdForModelId(model.id);
   return (
     <>
       <Field label="端点">
         <Input
           mono
-          defaultValue={settings.openai_compatible_base_url}
-          onChange={(e) => setField({ openai_compatible_base_url: e.target.value })}
+          value={llmDraft.baseUrl}
+          onChange={(e) => setLlmDraft({ ...llmDraft, baseUrl: e.target.value })}
           placeholder={preset.baseUrl}
         />
       </Field>
-      <Field label="API Key">
-        <KeyInput keyId="openai_compatible_api_key" placeholder="粘贴 API Key" />
-      </Field>
-      <Field label="模型">
-        <Input
-          mono
-          defaultValue={settings.openai_compatible_model}
-          onChange={(e) => setField({ openai_compatible_model: e.target.value })}
-          placeholder={preset.model}
-        />
-      </Field>
+      {/* Local providers (Ollama / LM Studio) need no API key — omit the field. */}
+      {llmKeyId ? (
+        <Field label="API Key">
+          <KeyInput keyId={llmKeyId} placeholder="粘贴 API Key" />
+        </Field>
+      ) : null}
+      {/* Custom field: 获取最新模型 sits on the 模型 label line (right), not below. */}
+      <div className="flex flex-col gap-[7px]">
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[13px] text-text-secondary">模型</label>
+          <button
+            type="button"
+            disabled={modelFetch?.tone === "pending"}
+            onClick={onRefreshModels}
+            className="text-[12px] text-accent hover:underline disabled:opacity-50"
+          >
+            获取最新模型
+          </button>
+        </div>
+        {/* No hardcoded model list: a dropdown only once /models is fetched, else a
+            free-text field the user fills in (or fetches via 获取最新模型). */}
+        {liveModels && liveModels.length ? (
+          <OptionSelect
+            options={liveModels}
+            value={llmDraft.model}
+            placeholder="选择模型"
+            onChange={(value) => setLlmDraft({ ...llmDraft, model: value })}
+          />
+        ) : (
+          <Input
+            mono
+            value={llmDraft.model}
+            onChange={(e) => setLlmDraft({ ...llmDraft, model: e.target.value })}
+            placeholder={
+              llmKeyId
+                ? "填 API Key 后点「获取最新模型」，或手动填写"
+                : "点「获取最新模型」，或手动填写"
+            }
+          />
+        )}
+        {modelFetch ? (
+          <StatusMessage tone={modelFetch.tone} icon={null}>
+            {modelFetch.message}
+          </StatusMessage>
+        ) : null}
+      </div>
     </>
   );
 }
