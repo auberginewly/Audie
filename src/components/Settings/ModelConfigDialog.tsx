@@ -17,7 +17,7 @@ import {
   type ModelMeta,
   type ModelOption,
 } from "./models";
-import { LOCAL_MODEL_RECOMMENDATIONS } from "./localModelRecommendations";
+import { LOCAL_MODEL_RECOMMENDATIONS, type LocalModelRecommendation } from "./localModelRecommendations";
 
 // Cloud ASR cards driven by the generic "模型 + API Key" body: model id written to
 // asr_model, key to each provider's own keychain id. doubao keeps its own body
@@ -176,27 +176,57 @@ function KeyInput({ keyId, placeholder }: { keyId: SecretKeyId; placeholder: str
 // cards. Each row is clickable to fill the model field — no auto-detection of the
 // host's RAM (out of scope), the user picks the tier matching their machine.
 function RecommendedLocalModels({ onPick }: { onPick: (tag: string) => void }) {
+  // Group by RAM tier, preserving declaration order (主推 first within each tier).
+  const tiers = LOCAL_MODEL_RECOMMENDATIONS.reduce<{ ram: string; items: LocalModelRecommendation[] }[]>(
+    (acc, rec) => {
+      const tier = acc.find((t) => t.ram === rec.ram);
+      if (tier) tier.items.push(rec);
+      else acc.push({ ram: rec.ram, items: [rec] });
+      return acc;
+    },
+    [],
+  );
   return (
     <div className="flex flex-col gap-[7px]">
-      <label className="text-[13px] text-text-secondary">推荐模型（按内存）</label>
-      <div className="flex flex-col overflow-hidden rounded-sm border border-border-subtle">
-        {LOCAL_MODEL_RECOMMENDATIONS.map((rec) => (
-          <button
-            key={rec.tag}
-            type="button"
-            onClick={() => onPick(rec.tag)}
-            className="flex items-baseline gap-2.5 border-b border-border-subtle px-2.5 py-2 text-left last:border-b-0 hover:bg-gray-alpha-100"
-          >
-            <span className="w-[44px] shrink-0 text-[12px] text-text-tertiary">{rec.ram}</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-text-primary">
-              {rec.tag}
-            </span>
-            <span className="shrink-0 text-[11px] text-text-tertiary">{rec.note}</span>
-          </button>
+      <label className="text-[13px] text-text-secondary">推荐模型（按内存，点击填入）</label>
+      <div className="flex flex-col gap-2">
+        {tiers.map((tier) => (
+          <div key={tier.ram} className="overflow-hidden rounded-sm border border-border-subtle">
+            <div className="bg-surface-card px-2.5 py-1 text-[11px] font-medium text-text-tertiary">
+              {tier.ram}
+            </div>
+            {tier.items.map((rec) => (
+              <button
+                key={rec.ram + rec.name}
+                type="button"
+                onClick={() => onPick(rec.tag)}
+                className="flex w-full flex-col gap-0.5 border-t border-border-subtle px-2.5 py-2 text-left hover:bg-gray-alpha-100"
+              >
+                <div className="flex items-baseline gap-2">
+                  <span
+                    className={
+                      rec.primary
+                        ? "text-[12px] font-medium text-text-primary"
+                        : "text-[12px] text-text-secondary"
+                    }
+                  >
+                    {rec.name}
+                  </span>
+                  {rec.primary ? (
+                    <span className="shrink-0 rounded border border-border-subtle px-1 text-[10px] text-text-secondary">
+                      主推
+                    </span>
+                  ) : null}
+                  <span className="ml-auto shrink-0 font-mono text-[11px] text-text-tertiary">{rec.tag}</span>
+                </div>
+                <span className="text-[11px] text-text-tertiary">{rec.note}</span>
+              </button>
+            ))}
+          </div>
         ))}
       </div>
       <StatusMessage tone="neutral" icon={null}>
-        思考型已自动 /no_think 关闭 + 输出剥离，不会把 thinking 注入光标处
+        Qwen3 主推（中文最佳），Gemma / Granite 更快更省但中文偏弱。用 ollama pull &lt;tag&gt; 下载，或在 LM Studio 搜模型名。思考型已自动 /no_think + 输出剥离。
       </StatusMessage>
     </div>
   );
