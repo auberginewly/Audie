@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
 use crate::managers::model::{ModelInfo, ModelManager};
@@ -742,6 +742,51 @@ pub fn get_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, AppError> 
     manager
         .get_available_models()
         .map_err(|err| AppError::Internal(format!("list models: {err}")))
+}
+
+/// Download a catalog model. The manager streams to a `.partial`, verifies, and
+/// renames into place, emitting `model-download-progress` / `-complete` along the
+/// way; on error we additionally emit `model-download-failed` (mirroring Handy) so
+/// the frontend store can clear its row regardless of how the call fails.
+#[tauri::command]
+pub async fn download_model(app: AppHandle, model_id: String) -> Result<(), AppError> {
+    let manager = app.state::<Arc<ModelManager>>();
+    let result = manager
+        .download_model(&model_id)
+        .await
+        .map_err(|err| AppError::Provider(format!("下载模型失败：{err}")));
+    if let Err(ref err) = result {
+        let _ = app.emit(
+            "model-download-failed",
+            serde_json::json!({ "model_id": model_id, "error": err.message() }),
+        );
+    }
+    result
+}
+
+/// Cancel an in-flight download. The `.partial` file is kept so a later download
+/// resumes from where it stopped.
+#[tauri::command]
+pub fn cancel_download(app: AppHandle, model_id: String) -> Result<(), AppError> {
+    let manager = app.state::<Arc<ModelManager>>();
+    manager
+        .cancel_download(&model_id)
+        .map_err(|err| AppError::Provider(format!("取消下载失败：{err}")))
+}
+
+/// Delete a model's on-disk files. If it's the currently selected local-ASR model,
+/// clear the selection so the whisper.cpp path doesn't point at a deleted file.
+#[tauri::command]
+pub fn delete_model(app: AppHandle, model_id: String) -> Result<(), AppError> {
+    if load_settings(&app).selected_local_asr_model == model_id {
+        let mut next = load_settings(&app);
+        next.selected_local_asr_model = String::new();
+        persist_settings(&app, normalize_settings(next))?;
+    }
+    let manager = app.state::<Arc<ModelManager>>();
+    manager
+        .delete_model(&model_id)
+        .map_err(|err| AppError::Provider(format!("删除模型失败：{err}")))
 }
 
 /// The currently selected local-ASR model id, or empty when none is chosen (the

@@ -98,12 +98,30 @@ export const ModelInfoSchema = z.object({
   sha256: z.string().nullish(),
   size_mb: z.number(),
   is_downloaded: z.boolean(),
+  // Phase 2 download state: in-flight download + bytes already on disk in the
+  // `.partial` file (0 when none). Drive the picker's progress/cancel row.
+  is_downloading: z.boolean(),
+  partial_size: z.number(),
   is_recommended: z.boolean(),
   is_custom: z.boolean(),
   engine: z.string(),
 });
 
 export type ModelInfo = z.infer<typeof ModelInfoSchema>;
+
+// Hand-written mirror of Rust `managers::model::DownloadProgress` — payload of the
+// `model-download-progress` event (Phase 2 downloader). Keep field names in sync
+// with that serde struct. The companion events (model-download-complete /
+// -cancelled / -deleted) carry just the model_id string; -failed carries
+// { model_id, error }.
+export const DownloadProgressSchema = z.object({
+  model_id: z.string(),
+  downloaded: z.number(),
+  total: z.number(),
+  percentage: z.number(),
+});
+
+export type DownloadProgress = z.infer<typeof DownloadProgressSchema>;
 
 export const ProviderKindSchema = z.enum(["asr", "llm"]);
 export type ProviderKind = z.infer<typeof ProviderKindSchema>;
