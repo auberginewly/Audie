@@ -1,5 +1,5 @@
-// OpenAI ASR adapter — `whisper-1` over `/audio/transcriptions`.
-// PROJECT_SPEC.md §4.1 P1.4: fixed model, key from keychain, no model UI.
+// OpenAI ASR adapter — `/audio/transcriptions`, model selectable from settings
+// (whisper-1 default; gpt-4o-transcribe / -mini variants). Key from keychain.
 
 use serde::Deserialize;
 
@@ -11,11 +11,19 @@ const MODEL: &str = "whisper-1";
 
 pub struct OpenAiProvider {
     api_key: String,
+    /// Resolved at construction: the selected model, or the built-in default when
+    /// settings left asr_model empty. Kept owned so transcribe() needs no fallback.
+    model: String,
 }
 
 impl OpenAiProvider {
-    pub fn new(api_key: String) -> Self {
-        Self { api_key }
+    pub fn new(api_key: String, model: String) -> Self {
+        let model = if model.trim().is_empty() {
+            MODEL.to_string()
+        } else {
+            model
+        };
+        Self { api_key, model }
     }
 }
 
@@ -37,7 +45,7 @@ impl AsrProvider for OpenAiProvider {
             .mime_str("audio/wav")
             .map_err(|e| AppError::Internal(format!("build multipart part: {e}")))?;
         let form = reqwest::blocking::multipart::Form::new()
-            .text("model", MODEL)
+            .text("model", self.model.clone())
             .part("file", file_part);
 
         let client = reqwest::blocking::Client::new();

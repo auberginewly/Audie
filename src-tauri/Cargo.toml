@@ -62,6 +62,10 @@ hound = "3"
 # compiles the SQLite C lib in — consistent with our rustls choice of not relying
 # on a system library. Fresh schema, so no migration crate is needed.
 rusqlite = { version = "0.37", features = ["bundled"] }
+# Local whisper.cpp inference over GGML models. 0.16 matches Handy's lockfile.
+# `metal` is Apple-GPU-only so this stays macOS-first; Windows will split this into
+# its own target block with vulkan/CPU when it lands. Build needs cmake + libclang.
+whisper-rs = { version = "0.16", default-features = false, features = ["metal"] }
 
 # macOS-only: CGEvent to simulate the Cmd+V paste keystroke (clipboard inject).
 [target.'cfg(target_os = "macos")'.dependencies]

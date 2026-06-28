@@ -480,11 +480,12 @@ mod tests {
     #[test]
     fn parse_server_error_is_routed_as_provider_error() {
         let body = b"invalid token";
-        let mut frame = Vec::new();
-        frame.push((VERSION << 4) | HEADER_SIZE_WORDS);
-        frame.push((msg_type::SERVER_ERROR_RESPONSE << 4) | flags::POSITIVE_SEQUENCE);
-        frame.push((serialization::NONE << 4) | compression::NONE);
-        frame.push(0x00);
+        let mut frame = vec![
+            (VERSION << 4) | HEADER_SIZE_WORDS,
+            (msg_type::SERVER_ERROR_RESPONSE << 4) | flags::POSITIVE_SEQUENCE,
+            (serialization::NONE << 4) | compression::NONE,
+            0x00,
+        ];
         frame.extend_from_slice(&1i32.to_be_bytes()); // sequence
         frame.extend_from_slice(&45_000_001u32.to_be_bytes()); // error code
         frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
@@ -516,11 +517,12 @@ mod tests {
 
     #[test]
     fn parse_rejects_unsupported_compression() {
-        let mut frame = Vec::new();
-        frame.push((VERSION << 4) | HEADER_SIZE_WORDS);
-        frame.push((msg_type::FULL_SERVER_RESPONSE << 4) | flags::POSITIVE_SEQUENCE);
-        frame.push(0x0F); // serialization=0, compression=0xF (unknown)
-        frame.push(0x00);
+        let mut frame = vec![
+            (VERSION << 4) | HEADER_SIZE_WORDS,
+            (msg_type::FULL_SERVER_RESPONSE << 4) | flags::POSITIVE_SEQUENCE,
+            0x0F, // serialization=0, compression=0xF (unknown)
+            0x00,
+        ];
         frame.extend_from_slice(&1i32.to_be_bytes());
         frame.extend_from_slice(&3u32.to_be_bytes());
         frame.extend_from_slice(b"abc");
@@ -530,11 +532,12 @@ mod tests {
 
     #[test]
     fn parse_ack_returns_sequence_only() {
-        let mut frame = Vec::new();
-        frame.push((VERSION << 4) | HEADER_SIZE_WORDS);
-        frame.push((msg_type::SERVER_ACK << 4) | flags::POSITIVE_SEQUENCE);
-        frame.push(0x00);
-        frame.push(0x00);
+        let mut frame = vec![
+            (VERSION << 4) | HEADER_SIZE_WORDS,
+            (msg_type::SERVER_ACK << 4) | flags::POSITIVE_SEQUENCE,
+            0x00,
+            0x00,
+        ];
         frame.extend_from_slice(&42i32.to_be_bytes());
         let parsed = parse_server_packet(&frame).unwrap();
         assert_eq!(parsed, ServerPacket::Ack { sequence: Some(42) });
@@ -547,11 +550,12 @@ mod tests {
         sequence: i32,
         compression_kind: u8,
     ) -> Vec<u8> {
-        let mut frame = Vec::new();
-        frame.push((VERSION << 4) | HEADER_SIZE_WORDS);
-        frame.push((msg_type::FULL_SERVER_RESPONSE << 4) | (message_flags & 0x0F));
-        frame.push((serialization::JSON << 4) | (compression_kind & 0x0F));
-        frame.push(0x00);
+        let mut frame = vec![
+            (VERSION << 4) | HEADER_SIZE_WORDS,
+            (msg_type::FULL_SERVER_RESPONSE << 4) | (message_flags & 0x0F),
+            (serialization::JSON << 4) | (compression_kind & 0x0F),
+            0x00,
+        ];
         let has_sequence = (message_flags & flags::POSITIVE_SEQUENCE) != 0
             || (message_flags & flags::LAST_AUDIO_PACKET) != 0;
         if has_sequence {

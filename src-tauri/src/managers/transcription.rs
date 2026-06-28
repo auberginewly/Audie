@@ -4,9 +4,12 @@
 // This manager only chooses and calls an ASR adapter; it does not emit UI events,
 // mutate app state, or decide fallback behavior. Those decisions stay in lib.rs.
 
+use crate::asr::aliyun::client::AliyunProvider;
 use crate::asr::doubao::client::{DoubaoAuth, DoubaoStreamConfig, DoubaoStreamingProvider};
+use crate::asr::glm::GlmProvider;
 use crate::asr::groq::GroqProvider;
 use crate::asr::openai::OpenAiProvider;
+use crate::asr::stepfun::client::StepFunProvider;
 use crate::asr::whisper_cpp::WhisperCppProvider;
 use crate::asr::{AsrProvider, AudioChunkStream, AudioData, TranscriptStream};
 use crate::error::{AppError, AppResult};
@@ -16,6 +19,8 @@ pub struct TranscriptionManager;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TranscriptionConfig {
     pub asr_provider: String,
+    /// Selected ASR model id; empty = adapter built-in default. Doubao ignores it.
+    pub asr_model: String,
     pub groq_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub whisper_cpp_model_path: Option<String>,
@@ -23,6 +28,9 @@ pub struct TranscriptionConfig {
     pub doubao_resource_id: Option<String>,
     pub doubao_app_id: Option<String>,
     pub doubao_api_key_or_access_token: Option<String>,
+    pub glm_api_key: Option<String>,
+    pub aliyun_api_key: Option<String>,
+    pub stepfun_api_key: Option<String>,
 }
 
 impl TranscriptionManager {
@@ -66,14 +74,20 @@ fn required_key(value: &Option<String>, message: &str) -> AppResult<String> {
 
 fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider>> {
     match config.asr_provider.as_str() {
-        "groq" => Ok(Box::new(GroqProvider::new(required_key(
-            &config.groq_api_key,
-            "Groq API key 未配置，请先到设置页填写",
-        )?))),
-        "openai" => Ok(Box::new(OpenAiProvider::new(required_key(
-            &config.openai_api_key,
-            "OpenAI API key 未配置，请先到设置页填写",
-        )?))),
+        "groq" => Ok(Box::new(GroqProvider::new(
+            required_key(
+                &config.groq_api_key,
+                "Groq API key 未配置，请先到设置页填写",
+            )?,
+            config.asr_model.clone(),
+        ))),
+        "openai" => Ok(Box::new(OpenAiProvider::new(
+            required_key(
+                &config.openai_api_key,
+                "OpenAI API key 未配置，请先到设置页填写",
+            )?,
+            config.asr_model.clone(),
+        ))),
         "whisper_cpp" => match config
             .whisper_cpp_model_path
             .as_deref()
@@ -85,6 +99,24 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
         },
         "doubao_stream" => Ok(Box::new(DoubaoStreamingProvider::new(
             doubao_stream_config(config)?,
+        ))),
+        "glm" => Ok(Box::new(GlmProvider::new(
+            required_key(&config.glm_api_key, "GLM API key 未配置，请先到设置页填写")?,
+            config.asr_model.clone(),
+        ))),
+        "aliyun_fun" => Ok(Box::new(AliyunProvider::new(
+            required_key(
+                &config.aliyun_api_key,
+                "通义 DashScope API key 未配置，请先到设置页填写",
+            )?,
+            config.asr_model.clone(),
+        ))),
+        "stepfun" => Ok(Box::new(StepFunProvider::new(
+            required_key(
+                &config.stepfun_api_key,
+                "StepFun API key 未配置，请先到设置页填写",
+            )?,
+            config.asr_model.clone(),
         ))),
         other => Err(AppError::Internal(format!(
             "unsupported ASR provider: {other}"
@@ -116,6 +148,7 @@ mod tests {
     fn openai_requires_keychain_secret() {
         let config = TranscriptionConfig {
             asr_provider: "openai".into(),
+            asr_model: String::new(),
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
             whisper_cpp_model_path: None,
@@ -123,6 +156,9 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
         let err = match build_provider(&config) {
@@ -138,6 +174,7 @@ mod tests {
     fn groq_requires_keychain_secret() {
         let config = TranscriptionConfig {
             asr_provider: "groq".into(),
+            asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: Some("openai-key".into()),
             whisper_cpp_model_path: None,
@@ -145,6 +182,9 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
         let err = match build_provider(&config) {
@@ -160,6 +200,7 @@ mod tests {
     fn whisper_cpp_without_model_path_is_device_error() {
         let config = TranscriptionConfig {
             asr_provider: "whisper_cpp".into(),
+            asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: None,
             whisper_cpp_model_path: None,
@@ -167,6 +208,9 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
         let err = match build_provider(&config) {
@@ -179,30 +223,58 @@ mod tests {
     }
 
     #[test]
-    fn whisper_cpp_with_model_path_still_defers_local_inference_to_p3() {
+    fn whisper_cpp_with_missing_model_path_is_device_error() {
+        // whisper_cpp now does real inference; a configured-but-missing model file
+        // is a recoverable user mistake (Device), not an engine fault. build_provider
+        // succeeds (path is non-empty); the missing file surfaces at transcribe time.
         let config = TranscriptionConfig {
             asr_provider: "whisper_cpp".into(),
+            asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: None,
-            whisper_cpp_model_path: Some("/tmp/ggml.bin".into()),
+            whisper_cpp_model_path: Some("/nonexistent/ggml-base.bin".into()),
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
-        let err = match build_provider(&config) {
-            Ok(provider) => provider.transcribe(&AudioData {
+        let provider = build_provider(&config).expect("non-empty model path must build");
+        let err = provider
+            .transcribe(&AudioData {
                 samples: vec![0.0],
                 sample_rate: 16_000,
                 channels: 1,
-            }),
-            Err(err) => Err(err),
-        }
-        .unwrap_err();
+            })
+            .expect_err("missing model file must fail");
 
         assert!(matches!(err, AppError::Device(_)));
-        assert_eq!(err.message(), "本地 Whisper 推理将在 P3 模型管理中接入");
+        assert!(err.message().contains("模型文件不存在"));
+    }
+
+    #[test]
+    fn groq_with_selected_model_builds_provider() {
+        // A non-empty asr_model must not break construction (model flows into the
+        // adapter); with a key present, build_provider succeeds.
+        let config = TranscriptionConfig {
+            asr_provider: "groq".into(),
+            asr_model: "whisper-large-v3".into(),
+            groq_api_key: Some("groq-key".into()),
+            openai_api_key: None,
+            whisper_cpp_model_path: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            doubao_app_id: None,
+            doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
+        };
+
+        assert!(build_provider(&config).is_ok());
     }
 
     #[test]
@@ -215,6 +287,7 @@ mod tests {
         };
         let config = TranscriptionConfig {
             asr_provider: "groq".into(),
+            asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: None,
             whisper_cpp_model_path: None,
@@ -222,6 +295,9 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
         let err = manager.transcribe(&audio, &config).unwrap_err();
@@ -246,6 +322,7 @@ mod tests {
         drop(chunks_tx);
         let config = TranscriptionConfig {
             asr_provider: "groq".into(),
+            asr_model: String::new(),
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
             whisper_cpp_model_path: None,
@@ -253,6 +330,9 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
         let err = manager.transcribe_stream(chunks_rx, &config).unwrap_err();
@@ -268,6 +348,7 @@ mod tests {
     fn doubao_stream_requires_token_for_streaming_provider() {
         let config = TranscriptionConfig {
             asr_provider: "doubao_stream".into(),
+            asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: None,
             whisper_cpp_model_path: None,
@@ -275,6 +356,9 @@ mod tests {
             doubao_resource_id: Some("resource".into()),
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_api_key: None,
+            aliyun_api_key: None,
+            stepfun_api_key: None,
         };
 
         let err = match build_provider(&config) {
