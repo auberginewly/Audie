@@ -8,6 +8,8 @@ use crate::asr::aliyun::client::AliyunProvider;
 use crate::asr::doubao::client::{DoubaoAuth, DoubaoStreamConfig, DoubaoStreamingProvider};
 use crate::asr::glm::GlmProvider;
 use crate::asr::groq::GroqProvider;
+#[cfg(target_os = "macos")]
+use crate::asr::macos_native::MacosNativeProvider;
 use crate::asr::openai::OpenAiProvider;
 use crate::asr::stepfun::client::StepFunProvider;
 use crate::asr::whisper_cpp::WhisperCppProvider;
@@ -118,6 +120,11 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
             )?,
             config.asr_model.clone(),
         ))),
+        // macOS on-device dictation: keyless, OS-managed model. The authorization /
+        // on-device-availability guards live in the provider's transcribe (they need
+        // a live recognizer), so construction here is unconditional on macOS.
+        #[cfg(target_os = "macos")]
+        "macos_native" => Ok(Box::new(MacosNativeProvider::new())),
         other => Err(AppError::Internal(format!(
             "unsupported ASR provider: {other}"
         ))),

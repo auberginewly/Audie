@@ -355,7 +355,8 @@ fn provider_metadata(
 }
 
 pub fn available_asr_providers() -> Vec<ProviderMetadata> {
-    vec![
+    #[allow(unused_mut)] // macos_native is pushed only on macOS; other targets leave it as-is.
+    let mut providers = vec![
         provider_metadata(
             "groq",
             "Groq",
@@ -410,7 +411,21 @@ pub fn available_asr_providers() -> Vec<ProviderMetadata> {
             true,
             &["Remote", "中文"],
         ),
-    ]
+    ];
+    // macOS native dictation is a keyless, built-in toggle provider — no model id,
+    // no API key, always present on macOS. Gated so non-macOS builds don't offer a
+    // provider their build_provider can't construct.
+    #[cfg(target_os = "macos")]
+    providers.push(provider_metadata(
+        "macos_native",
+        "macOS 本机听写",
+        "asr",
+        "Local ASR",
+        None,
+        false,
+        &["Local", "Built-in"],
+    ));
+    providers
 }
 
 pub fn available_llm_providers() -> Vec<ProviderMetadata> {
@@ -1000,6 +1015,21 @@ pub fn request_accessibility_permission(app: AppHandle) -> bool {
     platform.accessibility_status()
 }
 
+/// P4 — Speech Recognition permission (macOS). The macOS-native ASR provider needs
+/// it. `get` reads status without prompting; `request` shows the system prompt then
+/// returns the (possibly still-false) status.
+#[tauri::command]
+pub fn get_speech_recognition_permission_status(app: AppHandle) -> bool {
+    app.state::<Arc<dyn Platform>>().speech_recognition_status()
+}
+
+#[tauri::command]
+pub fn request_speech_recognition_permission(app: AppHandle) -> bool {
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.request_speech_recognition();
+    platform.speech_recognition_status()
+}
+
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
 #[cfg(debug_assertions)]
 fn read_wav_pcm16(path: &str) -> Result<Vec<u8>, AppError> {
@@ -1319,18 +1349,23 @@ mod tests {
         let asr = available_asr_providers();
         let llm = available_llm_providers();
 
+        // macos_native is appended only on macOS (keyless built-in toggle provider);
+        // mirror that gate so the list assertion holds on every target.
+        let mut expected_asr = vec![
+            "groq",
+            "openai",
+            "whisper_cpp",
+            "glm",
+            "aliyun_fun",
+            "stepfun",
+        ];
+        #[cfg(target_os = "macos")]
+        expected_asr.push("macos_native");
         assert_eq!(
             asr.iter()
                 .map(|provider| provider.id.as_str())
                 .collect::<Vec<_>>(),
-            [
-                "groq",
-                "openai",
-                "whisper_cpp",
-                "glm",
-                "aliyun_fun",
-                "stepfun",
-            ]
+            expected_asr
         );
         assert_eq!(
             llm.iter()

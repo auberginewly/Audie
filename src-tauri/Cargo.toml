@@ -88,3 +88,12 @@ objc2 = "0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 security-framework = "3.7.0"
 security-framework-sys = "2.17.0"
+# macOS native on-device dictation (decision B1: SFSpeechRecognizer). Default
+# features pull in the SF* recognizer/request/result/transcription types plus
+# objc2-avf-audio (the AVAudioPCMBuffer we feed it) and block2 (the result-handler
+# block). objc2-foundation / block2 already resolve to versions in the tree (objc2
+# 0.6), so these add no new transitive major versions.
+objc2-speech = "0.3.2"
+objc2-avf-audio = "0.3.2"
+objc2-foundation = "0.3.2"
+block2 = "0.6"

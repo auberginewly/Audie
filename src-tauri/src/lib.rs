@@ -186,6 +186,8 @@ pub fn run() {
             commands::request_microphone_permission,
             commands::get_accessibility_permission_status,
             commands::request_accessibility_permission,
+            commands::get_speech_recognition_permission_status,
+            commands::request_speech_recognition_permission,
             begin_trigger_capture,
             end_trigger_capture,
             provider_test::test_provider,

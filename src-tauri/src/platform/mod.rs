@@ -93,6 +93,15 @@ pub trait Platform: Send + Sync {
     }
     fn request_accessibility(&self) {}
 
+    /// P4 — Speech Recognition authorization (macOS). The macOS-native ASR provider
+    /// (SFSpeechRecognizer) needs it. `status` reads without prompting; `request`
+    /// shows the system prompt (NSSpeechRecognitionUsageDescription). Default
+    /// granted/no-op so non-macOS never gates here.
+    fn speech_recognition_status(&self) -> bool {
+        true
+    }
+    fn request_speech_recognition(&self) {}
+
     /// P3.10 — start/stop a listen-only capture tap for the Settings recorder. macOS
     /// emits `trigger-captured` / `trigger-capture-rejected`; default no-op elsewhere.
     fn start_trigger_capture(&self, _app: &AppHandle) -> AppResult<()> {

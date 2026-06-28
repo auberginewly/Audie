@@ -8,6 +8,10 @@ pub mod aliyun;
 pub mod doubao;
 pub mod glm;
 pub mod groq;
+// macOS-only: SFSpeechRecognizer on-device dictation (objc2-speech). The provider
+// id "macos_native" only exists on macOS — build_provider gates the arm too.
+#[cfg(target_os = "macos")]
+pub mod macos_native;
 pub mod openai;
 pub mod stepfun;
 pub mod whisper_cpp;

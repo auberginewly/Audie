@@ -16,6 +16,10 @@ export const SettingsSchema = z.object({
     "glm",
     "aliyun_fun",
     "stepfun",
+    // macOS-only keyless on-device dictation (SFSpeechRecognizer). The backend
+    // only lists it on macOS; normalize resets an unknown provider to default, so a
+    // settings.toml carrying it on a non-macOS build degrades gracefully.
+    "macos_native",
   ]),
   // Selected ASR model id (front/back share the exact string). "" = use each
   // adapter's built-in default. default("") tolerates the field being absent

@@ -30,6 +30,9 @@ export const MODELS: ModelMeta[] = [
   { id: "aliyun-asr", name: "通义 Paraformer ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "fun-asr-realtime", tags: ["云端"] },
   { id: "stepfun-asr", name: "StepFun ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "stepaudio-2.5-asr", tags: ["云端"] },
   { id: "whisper-local", name: "Whisper", type: "asr", source: "local", icon: "audio-lines", model: "whisper-large-v3", tags: ["本地", "离线"] },
+  // macOS 本机听写: keyless, OS-managed model — always "installed", nothing to download.
+  // model copy is a label only (no model id / variant); maps to the macos_native provider.
+  { id: "macos-native", name: "macOS 本机听写", type: "asr", source: "local", icon: "audio-lines", model: "系统内置（离线）", tags: ["本地", "内置", "离线"] },
   // LLM — all drive the single openai_compatible slot. No hardcoded model: the card
   // subtitle shows the real configured model (active card) or nothing; model field
   // is unused for LLM display, kept empty so the catalog carries no guessed ids.
@@ -124,6 +127,7 @@ export function asrProviderForModelId(id: string): AsrProviderId | null {
   if (id === "groq") return "groq";
   if (id === "openai-asr") return "openai";
   if (id === "whisper-local") return "whisper_cpp";
+  if (id === "macos-native") return "macos_native";
   if (id === "doubao") return "doubao_stream";
   if (id === "glm-asr") return "glm";
   if (id === "aliyun-asr") return "aliyun_fun";
@@ -136,6 +140,7 @@ export function modelIdForAsrProvider(provider: AsrProviderId): string {
   if (provider === "groq") return "groq";
   if (provider === "openai") return "openai-asr";
   if (provider === "whisper_cpp") return "whisper-local";
+  if (provider === "macos_native") return "macos-native";
   if (provider === "glm") return "glm-asr";
   if (provider === "aliyun_fun") return "aliyun-asr";
   if (provider === "stepfun") return "stepfun-asr";
