@@ -231,27 +231,6 @@ export function llmPickPatch(id: string, settings: Settings): Partial<Settings> 
   };
 }
 
-// Settings patch for one-click picking a discovered local server (扫描本地, P2).
-// Ollama / LM Studio map to their catalog card so 使用中 highlights; llama.cpp has
-// no card, so we point the shared slot straight at the probed base_url + model (no
-// key, key-optional local). Reuses llmPickPatch where a card exists.
-export function localLlmPickPatch(
-  provider: string,
-  baseUrl: string,
-  model: string,
-  settings: Settings,
-): Partial<Settings> {
-  const hasCard = MODELS.some((m) => m.id === provider && m.type === "llm");
-  const base = hasCard
-    ? llmPickPatch(provider, settings)
-    : {
-        llm_provider: "openai_compatible" as const,
-        openai_compatible_base_url: baseUrl,
-        llm_api_key_id: "",
-      };
-  return { ...base, openai_compatible_model: model };
-}
-
 // Whether an LLM provider card has a stored model the user chose (ready to 选用).
 // The active card's model lives in openai_compatible_model until it's switched away
 // (then llmPickPatch preserves it into llm_models), so callers OR this with inUse.

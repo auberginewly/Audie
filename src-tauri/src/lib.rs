@@ -183,7 +183,6 @@ pub fn run() {
             end_trigger_capture,
             provider_test::test_provider,
             provider_test::list_provider_models,
-            provider_test::discover_local_llm,
             commands::test_doubao_connection,
             // Overlay capsule controls (fe.8b / fe.8c).
             confirm_recording,

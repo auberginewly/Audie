@@ -10,18 +10,6 @@ const GROQ_MODELS_ENDPOINT: &str = "https://api.groq.com/openai/v1/models";
 const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
 const OPENAI_COMPATIBLE_MODELS_PATH: &str = "/models";
 const TEST_TIMEOUT_SECS: u64 = 8;
-// Local discovery probes localhost-only, so a missing server should fail fast
-// instead of blocking the whole scan for seconds.
-const DISCOVER_TIMEOUT_MS: u64 = 400;
-
-/// Local OpenAI-compatible servers we probe keyless for auto-discovery. Each tuple
-/// is (provider id surfaced to the UI, default base URL) — Ollama / LM Studio /
-/// llama.cpp ship on these well-known ports.
-const LOCAL_LLM_ENDPOINTS: &[(&str, &str)] = &[
-    ("ollama", "http://localhost:11434/v1"),
-    ("lmstudio", "http://localhost:1234/v1"),
-    ("llamacpp", "http://localhost:8080/v1"),
-];
 
 #[derive(Deserialize)]
 pub struct ProviderTestRequest {
@@ -97,38 +85,6 @@ pub fn list_provider_models(
         api_key.as_deref(),
         std::time::Duration::from_secs(TEST_TIMEOUT_SECS),
     )
-}
-
-/// One discovered local LLM server. `alive` is true only when `/models` returned a
-/// usable chat-model list; a down endpoint still appears (alive=false, empty models)
-/// so the UI can show which ports were probed.
-#[derive(Serialize)]
-pub struct DiscoveredLocalLlm {
-    pub provider: String,
-    pub base_url: String,
-    pub alive: bool,
-    pub models: Vec<String>,
-}
-
-/// Probe the well-known local LLM ports (Ollama / LM Studio / llama.cpp) keyless and
-/// report which are running plus their pulled models. One endpoint being down never
-/// fails the command — each probe is collected independently with a short timeout.
-#[tauri::command]
-pub fn discover_local_llm() -> Vec<DiscoveredLocalLlm> {
-    let timeout = std::time::Duration::from_millis(DISCOVER_TIMEOUT_MS);
-    LOCAL_LLM_ENDPOINTS
-        .iter()
-        .map(|(provider, base_url)| {
-            let endpoint = join_url(base_url, OPENAI_COMPATIBLE_MODELS_PATH);
-            let models = fetch_chat_model_ids(&endpoint, None, timeout).unwrap_or_default();
-            DiscoveredLocalLlm {
-                provider: (*provider).to_string(),
-                base_url: (*base_url).to_string(),
-                alive: !models.is_empty(),
-                models,
-            }
-        })
-        .collect()
 }
 
 fn fetch_chat_model_ids(
