@@ -196,7 +196,7 @@ function RecommendedLocalModels({ onPick }: { onPick: (tag: string) => void }) {
         ))}
       </div>
       <StatusMessage tone="neutral" icon={null}>
-        均为原生非思考模型，不会把 thinking 注入到光标处
+        思考型已自动 /no_think 关闭 + 输出剥离，不会把 thinking 注入光标处
       </StatusMessage>
     </div>
   );
