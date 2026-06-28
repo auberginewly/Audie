@@ -231,6 +231,33 @@ export function llmPickPatch(id: string, settings: Settings): Partial<Settings> 
   };
 }
 
+// Settings patch for picking a specific auto-detected local LLM (A2 zero-click
+// probe → 选用). Points the single openai_compatible slot at the discovered
+// server's base_url + the exact model the user chose. Key-optional (localhost), and
+// the model is remembered under the card id so 选用 can restore it. Used for the
+// 本地 LLM rows the probe fills in — distinct from llmPickPatch, which restores a
+// card's stored model rather than selecting a concrete live one.
+export function discoveredLlmPickPatch(
+  cardId: string,
+  baseUrl: string,
+  model: string,
+  settings: Settings,
+): Partial<Settings> {
+  const models = { ...(settings.llm_models ?? {}) };
+  const outgoing = llmModelIdForBaseUrl(settings.openai_compatible_base_url);
+  if (outgoing && settings.openai_compatible_model) {
+    models[outgoing] = settings.openai_compatible_model;
+  }
+  models[cardId] = model;
+  return {
+    llm_provider: "openai_compatible",
+    openai_compatible_base_url: baseUrl,
+    openai_compatible_model: model,
+    llm_api_key_id: "", // key-optional localhost server
+    llm_models: models,
+  };
+}
+
 // Whether an LLM provider card has a stored model the user chose (ready to 选用).
 // The active card's model lives in openai_compatible_model until it's switched away
 // (then llmPickPatch preserves it into llm_models), so callers OR this with inUse.

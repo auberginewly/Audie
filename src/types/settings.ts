@@ -123,6 +123,18 @@ export const DownloadProgressSchema = z.object({
 
 export type DownloadProgress = z.infer<typeof DownloadProgressSchema>;
 
+// Hand-written mirror of Rust `provider_test::DiscoveredLocalLlm` — one auto-detected
+// local-LLM server returned by the discover_local_llm command (A2 zero-click probe).
+// Keep field names in sync with that serde struct.
+export const DiscoveredLocalLlmSchema = z.object({
+  // Picker card id: ollama / lmstudio / llamacpp.
+  provider: z.string(),
+  base_url: z.string(),
+  models: z.array(z.string()),
+});
+
+export type DiscoveredLocalLlm = z.infer<typeof DiscoveredLocalLlmSchema>;
+
 export const ProviderKindSchema = z.enum(["asr", "llm"]);
 export type ProviderKind = z.infer<typeof ProviderKindSchema>;
 

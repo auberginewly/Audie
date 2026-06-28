@@ -11,6 +11,20 @@ const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
 const OPENAI_COMPATIBLE_MODELS_PATH: &str = "/models";
 const TEST_TIMEOUT_SECS: u64 = 8;
 
+/// Short per-endpoint timeout for the zero-click local-LLM probe — three sequential
+/// probes must stay snappy on model-section mount, so a down server fails fast
+/// instead of stalling the list.
+const DISCOVER_TIMEOUT_MS: u64 = 600;
+
+/// Known local-LLM servers to auto-probe, paired with the picker card id they map
+/// to (matches models.ts llmPresetForModelId). llama.cpp / llamafile has no card —
+/// it surfaces under the generic "llamacpp" id so its live models still list.
+const LOCAL_LLM_TARGETS: &[(&str, &str)] = &[
+    ("ollama", "http://localhost:11434/v1"),
+    ("lmstudio", "http://localhost:1234/v1"),
+    ("llamacpp", "http://localhost:8080/v1"),
+];
+
 #[derive(Deserialize)]
 pub struct ProviderTestRequest {
     pub kind: ProviderKind,
@@ -85,6 +99,44 @@ pub fn list_provider_models(
         api_key.as_deref(),
         std::time::Duration::from_secs(TEST_TIMEOUT_SECS),
     )
+}
+
+/// One auto-detected local-LLM server. Hand-written Zod mirror in
+/// src/types/settings.ts (DiscoveredLocalLlmSchema) — keep field names in sync
+/// (Audie hand-writes Zod, no specta).
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct DiscoveredLocalLlm {
+    /// Picker card id this maps to (ollama / lmstudio / llamacpp).
+    pub provider: String,
+    pub base_url: String,
+    /// Live chat models the server reports (empty when alive but none pulled).
+    pub models: Vec<String>,
+}
+
+/// Zero-click local-LLM auto-detect (A2): probe the known local servers and return
+/// only the ones that answered with at least one chat model. Invoked automatically
+/// when the model section mounts — NOT a button — so the 本地 list fills itself.
+/// Down/absent servers fail fast (short timeout) and are simply omitted.
+#[tauri::command]
+pub fn discover_local_llm() -> Vec<DiscoveredLocalLlm> {
+    let timeout = std::time::Duration::from_millis(DISCOVER_TIMEOUT_MS);
+    LOCAL_LLM_TARGETS
+        .iter()
+        .filter_map(|(provider, base_url)| {
+            let endpoint = join_url(base_url, OPENAI_COMPATIBLE_MODELS_PATH);
+            // Keyless localhost probe; any error (connection refused / timeout) drops
+            // the server from the list. Empty model lists are dropped too — an alive
+            // server with nothing pulled gives the user nothing to select.
+            match fetch_chat_model_ids(&endpoint, None, timeout) {
+                Ok(models) if !models.is_empty() => Some(DiscoveredLocalLlm {
+                    provider: provider.to_string(),
+                    base_url: base_url.to_string(),
+                    models,
+                }),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 fn fetch_chat_model_ids(
@@ -266,6 +318,19 @@ mod tests {
         assert!(!is_chat_model("gpt-4o-transcribe"));
         assert!(!is_chat_model("tts-1"));
         assert!(!is_chat_model("dall-e-3"));
+    }
+
+    #[test]
+    fn local_llm_targets_map_to_picker_card_ids() {
+        // The probe's provider ids must match the picker cards (models.ts) so the
+        // discovered server lights up the right 本地 card. llamacpp has no card but
+        // is still listed under its generic id.
+        let ids: Vec<&str> = LOCAL_LLM_TARGETS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, ["ollama", "lmstudio", "llamacpp"]);
+        // Each base_url joins cleanly to the OpenAI-compatible /models path.
+        for (_, base) in LOCAL_LLM_TARGETS {
+            assert!(join_url(base, OPENAI_COMPATIBLE_MODELS_PATH).ends_with("/v1/models"));
+        }
     }
 
     #[test]
