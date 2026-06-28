@@ -118,6 +118,20 @@ export function isKeyOptionalModel(id: string): boolean {
   return id === "ollama" || id === "lmstudio";
 }
 
+// Whether an ASR model is actually ready to use — drives onboarding gating (the ASR
+// step / setup-progress). Keyless local providers have no secret to check:
+//  - macos-native: ready once Speech recognition is authorized (transcribe gates on it)
+//  - whisper-local: ready once a model is available (a catalog pick or a manual .bin path)
+//  - else (cloud): its key is configured
+export function asrModelReady(
+  id: string,
+  deps: { configured: (id: string) => boolean; speechGranted: boolean; whisperModelPresent: boolean },
+): boolean {
+  if (id === "macos-native") return deps.speechGranted;
+  if (id === "whisper-local") return deps.whisperModelPresent;
+  return deps.configured(id);
+}
+
 // ── ASR ──────────────────────────────────────────────────────────────────────
 
 // Design model id → backend ASR provider enum (null = card with no real slot).

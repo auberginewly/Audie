@@ -16,6 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { UseSettings } from "../../hooks/useSettings";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
+import { usePermissions } from "../../hooks/usePermissions";
 import { useModelStore } from "../../stores/modelStore";
 import { DiscoveredLocalLlmSchema, type DiscoveredLocalLlm, type ModelInfo } from "../../types/settings";
 import { Badge, Button, Icon, Segmented } from "../ui";
@@ -33,6 +34,7 @@ import {
 } from "./models";
 import { ModelConfigDialog } from "./ModelConfigDialog";
 import { LocalAsrCard } from "./LocalAsrCard";
+import { NativeAsrCard } from "./NativeAsrCard";
 
 type Source = "all" | "cloud" | "local";
 
@@ -159,6 +161,7 @@ export function ModelSection({
   // Real "已配置" state from keychain has_secret (no-read presence check), refreshed
   // on focus + after the config dialog saves a key.
   const { configured, refresh } = useConfiguredModels();
+  const perms = usePermissions();
 
   // Local-ASR catalog + on-disk state, auto-refreshed from the P2 download events.
   const models = useModelStore((s) => s.models);
@@ -346,6 +349,13 @@ export function ModelSection({
                       onConfigure={() => setConfigModel(manualLocalAsr)}
                     />
                   ) : null}
+                  {/* macOS 本机听写: keyless built-in provider; selectable + Speech
+                      auth row. Re-wired here after P4 added the backend but not the card. */}
+                  <NativeAsrCard
+                    inUse={settings?.asr_provider === "macos_native"}
+                    speech={perms.speechRecognition}
+                    onPick={() => update({ asr_provider: "macos_native", asr_model: "" })}
+                  />
                 </>
               ) : (
                 <>
