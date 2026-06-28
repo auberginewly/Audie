@@ -17,6 +17,7 @@ import {
   type ModelMeta,
   type ModelOption,
 } from "./models";
+import { LOCAL_MODEL_RECOMMENDATIONS } from "./localModelRecommendations";
 
 // Cloud ASR cards driven by the generic "模型 + API Key" body: model id written to
 // asr_model, key to each provider's own keychain id. doubao keeps its own body
@@ -167,6 +168,36 @@ function KeyInput({ keyId, placeholder }: { keyId: SecretKeyId; placeholder: str
           onClick={() => setRevealed((r) => !r)}
         />
       </div>
+    </div>
+  );
+}
+
+// Recommended local models by RAM tier (Ollama tags). Shown only for local LLM
+// cards. Each row is clickable to fill the model field — no auto-detection of the
+// host's RAM (out of scope), the user picks the tier matching their machine.
+function RecommendedLocalModels({ onPick }: { onPick: (tag: string) => void }) {
+  return (
+    <div className="flex flex-col gap-[7px]">
+      <label className="text-[13px] text-text-secondary">推荐模型（按内存）</label>
+      <div className="flex flex-col overflow-hidden rounded-sm border border-border-subtle">
+        {LOCAL_MODEL_RECOMMENDATIONS.map((rec) => (
+          <button
+            key={rec.tag}
+            type="button"
+            onClick={() => onPick(rec.tag)}
+            className="flex items-baseline gap-2.5 border-b border-border-subtle px-2.5 py-2 text-left last:border-b-0 hover:bg-gray-alpha-100"
+          >
+            <span className="w-[44px] shrink-0 text-[12px] text-text-tertiary">{rec.ram}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-text-primary">
+              {rec.tag}
+            </span>
+            <span className="shrink-0 text-[11px] text-text-tertiary">{rec.note}</span>
+          </button>
+        ))}
+      </div>
+      <StatusMessage tone="neutral" icon={null}>
+        均为原生非思考模型，不会把 thinking 注入到光标处
+      </StatusMessage>
     </div>
   );
 }
@@ -586,6 +617,13 @@ function ModelBody({
           </StatusMessage>
         ) : null}
       </div>
+      {/* Local cards (Ollama / LM Studio): suggest RAM-tier-matched tags so the
+          user doesn't have to know which Ollama model fits their machine. */}
+      {model.source === "local" ? (
+        <RecommendedLocalModels
+          onPick={(tag) => setLlmDraft({ ...llmDraft, model: tag })}
+        />
+      ) : null}
     </>
   );
 }
