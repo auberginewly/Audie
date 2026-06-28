@@ -1,14 +1,10 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 
 use crate::commands::{
     available_asr_providers, available_llm_providers, validate_secret_key_id, DEFAULT_ASR_PROVIDER,
     DEFAULT_LLM_PROVIDER,
 };
 use crate::error::{AppError, AppResult};
-use crate::platform::Platform;
 
 const GROQ_MODELS_ENDPOINT: &str = "https://api.groq.com/openai/v1/models";
 const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
@@ -38,19 +34,16 @@ pub struct ProviderTestResult {
 }
 
 #[tauri::command]
-pub fn test_provider(
-    app: AppHandle,
-    request: ProviderTestRequest,
-) -> Result<ProviderTestResult, AppError> {
+pub fn test_provider(request: ProviderTestRequest) -> Result<ProviderTestResult, AppError> {
     validate_provider_target(request.kind, &request.provider_id)?;
     validate_secret_key_id(&request.key_id)?;
 
-    let platform = app.state::<Arc<dyn Platform>>();
-    let api_key = read_api_key_for_test(
-        platform.inner().as_ref(),
-        &request.key_id,
-        request.api_key.as_deref(),
-    )?;
+    // Local endpoints (Ollama / LM Studio on localhost) need no key — don't demand one.
+    let local = request
+        .base_url
+        .as_deref()
+        .is_some_and(crate::llm::is_local_endpoint);
+    let api_key = read_api_key_for_test(request.api_key.as_deref(), local)?;
 
     let endpoint = provider_test_endpoint(request.kind, &request.provider_id, request.base_url)?;
     test_models_endpoint(&endpoint, &api_key)?;
@@ -61,18 +54,101 @@ pub fn test_provider(
     })
 }
 
-fn read_api_key_for_test(
-    _platform: &dyn Platform,
-    _key_id: &str,
-    inline_api_key: Option<&str>,
-) -> AppResult<String> {
-    if let Some(api_key) = inline_api_key
+/// Models response from an OpenAI-compatible `/models` endpoint.
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
+/// Fetch the live model id list from an OpenAI-compatible provider's `/models`.
+/// Every LLM card is OpenAI-compatible, so this works for all cloud cards and for
+/// local servers (Ollama / LM Studio return exactly the pulled models, no key).
+/// Driven by the 刷新 button in the model config dialog; the curated static list is
+/// the offline fallback when this isn't run / fails.
+#[tauri::command]
+pub fn list_provider_models(
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, AppError> {
+    let base = base_url.trim();
+    if base.is_empty() {
+        return Err(AppError::Provider("请先填写 base URL".into()));
+    }
+    let endpoint = join_url(base, OPENAI_COMPATIBLE_MODELS_PATH);
+    fetch_chat_model_ids(&endpoint, api_key.as_deref())
+}
+
+fn fetch_chat_model_ids(endpoint: &str, api_key: Option<&str>) -> AppResult<Vec<String>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(TEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|err| AppError::Internal(format!("build model list client: {err}")))?;
+
+    let mut request = client.get(endpoint);
+    // Local servers need no key; cloud providers do (401 surfaces as Provider).
+    if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    let resp = request.send().map_err(classify_reqwest_error)?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        return Err(classify_http_status(status.as_u16(), &body));
+    }
+
+    let parsed: ModelsResponse = resp
+        .json()
+        .map_err(|err| AppError::Provider(format!("解析模型列表失败：{err}")))?;
+
+    let mut ids: Vec<String> = parsed
+        .data
+        .into_iter()
+        .map(|entry| entry.id)
+        .filter(|id| is_chat_model(id))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Heuristic chat-model filter: the standard /models response has no capability
+/// field, so we strip the obvious non-chat ids (embeddings / speech / image),
+/// which OpenAI in particular mixes into one list. Imperfect but removes the noise.
+fn is_chat_model(id: &str) -> bool {
+    let lower = id.to_ascii_lowercase();
+    const NON_CHAT: &[&str] = &[
+        "embed",
+        "tts",
+        "whisper",
+        "transcribe",
+        "dall-e",
+        "dalle",
+        "rerank",
+        "moderation",
+        "image",
+        "stable-diffusion",
+        "flux",
+        "speech",
+        "realtime",
+    ];
+    !NON_CHAT.iter().any(|needle| lower.contains(needle))
+}
+
+fn read_api_key_for_test(inline_api_key: Option<&str>, local: bool) -> AppResult<String> {
+    match inline_api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Ok(api_key.to_string())
-    } else {
-        Err(AppError::Provider("请先填写 API key".into()))
+        Some(api_key) => Ok(api_key.to_string()),
+        // Local providers run keyless against localhost; cloud must supply a key.
+        None if local => Ok(String::new()),
+        None => Err(AppError::Provider("请先填写 API key".into())),
     }
 }
 
@@ -126,11 +202,12 @@ fn test_models_endpoint(endpoint: &str, api_key: &str) -> AppResult<()> {
         .build()
         .map_err(|err| AppError::Internal(format!("build provider test client: {err}")))?;
 
-    let resp = client
-        .get(endpoint)
-        .bearer_auth(api_key)
-        .send()
-        .map_err(classify_reqwest_error)?;
+    let mut request = client.get(endpoint);
+    // No bearer for keyless local endpoints (empty key).
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let resp = request.send().map_err(classify_reqwest_error)?;
 
     let status = resp.status();
     if status.is_success() {
@@ -169,6 +246,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn is_chat_model_keeps_chat_drops_non_chat() {
+        // Chat models kept.
+        assert!(is_chat_model("gpt-5.2"));
+        assert!(is_chat_model("deepseek-chat"));
+        assert!(is_chat_model("glm-4.6"));
+        assert!(is_chat_model("qwen-plus-latest"));
+        // Non-chat noise dropped (OpenAI mixes these into /models).
+        assert!(!is_chat_model("text-embedding-3-large"));
+        assert!(!is_chat_model("whisper-1"));
+        assert!(!is_chat_model("gpt-4o-transcribe"));
+        assert!(!is_chat_model("tts-1"));
+        assert!(!is_chat_model("dall-e-3"));
+    }
+
+    #[test]
     fn openai_compatible_endpoint_joins_base_url_and_models_path() {
         let endpoint = provider_test_endpoint(
             ProviderKind::Llm,
@@ -190,152 +282,32 @@ mod tests {
     }
 
     #[test]
-    fn inline_api_key_is_used_without_reading_keychain() {
-        struct PanicOnReadPlatform;
-
-        impl Platform for PanicOnReadPlatform {
-            fn register_hotkey(
-                &self,
-                _app: &AppHandle,
-                _combo: &str,
-                _callback: crate::platform::HotkeyCallback,
-            ) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn ensure_microphone_permission(&self) -> bool {
-                unreachable!()
-            }
-
-            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
-                unreachable!()
-            }
-
-            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
-                panic!("inline provider test key must not read keychain")
-            }
-
-            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-        }
-
-        let api_key =
-            read_api_key_for_test(&PanicOnReadPlatform, "groq_api_key", Some("  inline-key  "))
-                .unwrap();
-
-        assert_eq!(api_key, "inline-key");
+    fn inline_api_key_is_trimmed() {
+        assert_eq!(
+            read_api_key_for_test(Some("  inline-key  "), false).unwrap(),
+            "inline-key"
+        );
     }
 
     #[test]
-    fn blank_inline_api_key_is_provider_error_without_reading_keychain() {
-        struct PanicOnReadPlatform;
-
-        impl Platform for PanicOnReadPlatform {
-            fn register_hotkey(
-                &self,
-                _app: &AppHandle,
-                _combo: &str,
-                _callback: crate::platform::HotkeyCallback,
-            ) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn ensure_microphone_permission(&self) -> bool {
-                unreachable!()
-            }
-
-            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
-                unreachable!()
-            }
-
-            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
-                panic!("blank provider test key must not read keychain")
-            }
-
-            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-        }
-
-        let err =
-            read_api_key_for_test(&PanicOnReadPlatform, "groq_api_key", Some("  ")).unwrap_err();
-
-        assert!(matches!(err, AppError::Provider(_)));
-        assert_eq!(err.message(), "请先填写 API key");
+    fn cloud_requires_a_key() {
+        // Blank or missing key for a non-local provider is an error.
+        assert_eq!(
+            read_api_key_for_test(Some("  "), false)
+                .unwrap_err()
+                .message(),
+            "请先填写 API key"
+        );
+        assert_eq!(
+            read_api_key_for_test(None, false).unwrap_err().message(),
+            "请先填写 API key"
+        );
     }
 
     #[test]
-    fn missing_inline_api_key_is_provider_error_without_reading_keychain() {
-        struct PanicOnReadPlatform;
-
-        impl Platform for PanicOnReadPlatform {
-            fn register_hotkey(
-                &self,
-                _app: &AppHandle,
-                _combo: &str,
-                _callback: crate::platform::HotkeyCallback,
-            ) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn ensure_microphone_permission(&self) -> bool {
-                unreachable!()
-            }
-
-            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
-                unreachable!()
-            }
-
-            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
-                panic!("missing provider test key must not read keychain")
-            }
-
-            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-        }
-
-        let err = read_api_key_for_test(&PanicOnReadPlatform, "groq_api_key", None).unwrap_err();
-
-        assert!(matches!(err, AppError::Provider(_)));
-        assert_eq!(err.message(), "请先填写 API key");
+    fn local_endpoint_needs_no_key() {
+        // Ollama / LM Studio (localhost) test keyless.
+        assert_eq!(read_api_key_for_test(None, true).unwrap(), "");
     }
 
     #[test]
