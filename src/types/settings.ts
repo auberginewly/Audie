@@ -8,7 +8,19 @@ export const SettingsSchema = z.object({
   // Trigger key: "Fn", a function key ("F13"), or a combo ("Ctrl+Shift+Space").
   // Backend parse_trigger is the real gate (SPEC §5.8 P3.9), so keep it permissive.
   hotkey: z.string().min(1),
-  asr_provider: z.enum(["groq", "openai", "whisper_cpp", "doubao_stream"]),
+  asr_provider: z.enum([
+    "groq",
+    "openai",
+    "whisper_cpp",
+    "doubao_stream",
+    "glm",
+    "aliyun_fun",
+    "stepfun",
+  ]),
+  // Selected ASR model id (front/back share the exact string). "" = use each
+  // adapter's built-in default. default("") tolerates the field being absent
+  // while the backend struct ships in parallel.
+  asr_model: z.string().default(""),
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
@@ -17,7 +29,13 @@ export const SettingsSchema = z.object({
   // may send it absent — a required nullable field would fail and blank all settings.
   whisper_cpp_model_path: z.string().nullish(),
   openai_compatible_base_url: z.string().min(1),
-  openai_compatible_model: z.string().min(1),
+  // Empty allowed: picking a provider seeds no model (hardcoded ids go stale) — the
+  // user fetches/types one. Backend errors clearly if enhance runs without a model.
+  openai_compatible_model: z.string(),
+  // Keychain key id for the active LLM provider's key (4b: each cloud LLM card
+  // stores its own key). "" = key-optional local provider. Defaults backend-side
+  // to the legacy shared id; permissive string — backend reads whatever id it holds.
+  llm_api_key_id: z.string().default("openai_compatible_api_key"),
   doubao_endpoint: z.string().min(1),
   doubao_resource_id: z.string().min(1),
   input_device: z.string(),
@@ -28,6 +46,9 @@ export const SettingsSchema = z.object({
   // How long dictation history is kept (History screen). Backend normalize clamps
   // anything unknown to "forever", so the enum is safe.
   history_retention: z.enum(["never", "day", "week", "month", "forever"]),
+  // Per-provider LLM model keyed by card id (deepseek/lmstudio/…). Lets 选用 restore
+  // each provider's own model instead of clearing it (single backend slot).
+  llm_models: z.record(z.string(), z.string()).default({}),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -75,8 +96,19 @@ export const SecretKeyIdSchema = z.enum([
   "groq_api_key",
   "openai_api_key",
   "openai_compatible_api_key",
+  // Per-provider LLM keys (4b): each cloud LLM card stores its own key. OpenAI LLM
+  // reuses openai_api_key (same account as OpenAI Transcribe).
+  "deepseek_api_key",
+  "kimi_api_key",
+  "siliconflow_api_key",
+  "zhipu_api_key",
+  "qwen_api_key",
+  "openrouter_api_key",
   "doubao_app_id",
   "doubao_access_token",
+  "glm_api_key",
+  "aliyun_dashscope_api_key",
+  "stepfun_api_key",
 ]);
 export type SecretKeyId = z.infer<typeof SecretKeyIdSchema>;
 

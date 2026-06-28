@@ -5,6 +5,7 @@
 // directly (no store plugin), to migrate existing installs into TOML. Secrets never
 // go here (those are P1 keychain, §6.6).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,8 +25,19 @@ const SECRET_KEY_IDS: &[&str] = &[
     "groq_api_key",
     "openai_api_key",
     "openai_compatible_api_key",
+    // Per-provider LLM keys (4b): each cloud LLM card stores its own key, selected
+    // via Settings.llm_api_key_id. openai_api_key (above) is reused for OpenAI LLM.
+    "deepseek_api_key",
+    "kimi_api_key",
+    "siliconflow_api_key",
+    "zhipu_api_key",
+    "qwen_api_key",
+    "openrouter_api_key",
     crate::asr::doubao::config::SECRET_APP_ID,
     crate::asr::doubao::config::SECRET_API_KEY_OR_ACCESS_TOKEN,
+    crate::asr::glm::SECRET_API_KEY,
+    crate::asr::aliyun::config::SECRET_API_KEY,
+    crate::asr::stepfun::config::SECRET_API_KEY,
 ];
 
 pub const DEFAULT_HOTKEY: &str = "Fn";
@@ -33,6 +45,9 @@ pub const DEFAULT_ASR_PROVIDER: &str = "groq";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
+// Legacy shared LLM key id — the default so pre-4b installs keep reading their key
+// until the user re-picks a provider (which writes a per-provider key id).
+pub const DEFAULT_LLM_API_KEY_ID: &str = "openai_compatible_api_key";
 pub const DEFAULT_HISTORY_RETENTION: &str = "forever";
 const HISTORY_RETENTION_IDS: &[&str] = &["never", "day", "week", "month", "forever"];
 // The factory-default enhance prompt is data, not source: it lives in
@@ -45,6 +60,11 @@ const HISTORY_RETENTION_IDS: &[&str] = &["never", "day", "week", "month", "forev
 pub struct Settings {
     pub hotkey: String,
     pub asr_provider: String,
+    /// ASR model id within the chosen provider (e.g. groq whisper-large-v3 vs
+    /// -turbo). Empty = use each adapter's built-in default const, so old TOML
+    /// files and untouched installs keep working. Doubao ignores it (豆包 uses
+    /// resource_id, not model — left blank for it, see normalize note).
+    pub asr_model: String,
     pub llm_provider: String,
     pub enhance_enabled: bool,
     pub enhance_prompt: String,
@@ -53,6 +73,13 @@ pub struct Settings {
     pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: String,
     pub openai_compatible_model: String,
+    /// Keychain key id holding the active LLM provider's API key. All cloud LLM
+    /// cards drive one backend slot (openai_compatible) but each stores its own
+    /// key (deepseek_api_key / kimi_api_key / …), so switching providers doesn't
+    /// reuse another's key. Empty = key-optional local provider (Ollama / LM
+    /// Studio). Defaults to the legacy shared id so existing installs keep working
+    /// until the user re-picks a provider.
+    pub llm_api_key_id: String,
     pub doubao_endpoint: String,
     pub doubao_resource_id: String,
     /// Manually selected input device name (matches `cpal` device.name()). Empty
@@ -70,6 +97,13 @@ pub struct Settings {
     /// `never | day | week | month | forever`; `never` skips recording entirely,
     /// the rest prune older rows. `normalize_settings` clamps anything else.
     pub history_retention: String,
+    /// Per-provider LLM model the user chose, keyed by the front-end card id
+    /// (deepseek / lmstudio / …). All LLM cards share one backend slot, so this
+    /// lets 选用 restore each provider's own model instead of clearing it. Backend
+    /// treats it as an opaque string→string map. MUST stay the last field: a TOML
+    /// table has to follow all scalar keys at the same level.
+    #[serde(default)]
+    pub llm_models: HashMap<String, String>,
 }
 
 impl Default for Settings {
@@ -77,6 +111,7 @@ impl Default for Settings {
         Self {
             hotkey: DEFAULT_HOTKEY.to_string(),
             asr_provider: DEFAULT_ASR_PROVIDER.to_string(),
+            asr_model: String::new(),
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
             enhance_enabled: false,
             enhance_prompt: include_str!("../prompts/enhance_default.md")
@@ -85,12 +120,14 @@ impl Default for Settings {
             whisper_cpp_model_path: None,
             openai_compatible_base_url: DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string(),
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
+            llm_api_key_id: DEFAULT_LLM_API_KEY_ID.to_string(),
             doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
             input_device: String::new(),
             onboarding_completed: false,
             primary_language: String::new(),
             history_retention: DEFAULT_HISTORY_RETENTION.to_string(),
+            llm_models: HashMap::new(),
         }
     }
 }
@@ -99,18 +136,21 @@ impl Default for Settings {
 pub struct SettingsPatch {
     pub hotkey: Option<String>,
     pub asr_provider: Option<String>,
+    pub asr_model: Option<String>,
     pub llm_provider: Option<String>,
     pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
     pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_compatible_model: Option<String>,
+    pub llm_api_key_id: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
     pub input_device: Option<String>,
     pub onboarding_completed: Option<bool>,
     pub primary_language: Option<String>,
     pub history_retention: Option<String>,
+    pub llm_models: Option<HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -219,6 +259,9 @@ fn normalize_settings(mut settings: Settings) -> Settings {
         settings.llm_provider = DEFAULT_LLM_PROVIDER.to_string();
     }
     settings.doubao_resource_id = normalize_doubao_resource_id(settings.doubao_resource_id);
+    // asr_model is free-form (each adapter validates / defaults at request time);
+    // empty = built-in default. Only trim hand-edited whitespace, never reset.
+    settings.asr_model = settings.asr_model.trim().to_string();
 
     if settings.hotkey.trim().is_empty() {
         settings.hotkey = DEFAULT_HOTKEY.to_string();
@@ -229,9 +272,11 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     if settings.openai_compatible_base_url.trim().is_empty() {
         settings.openai_compatible_base_url = DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string();
     }
-    if settings.openai_compatible_model.trim().is_empty() {
-        settings.openai_compatible_model = DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string();
-    }
+    // No empty→default reset for the model: an empty model is a meaningful "not yet
+    // chosen" state (picking a provider no longer seeds a hardcoded/stale model id —
+    // the user fetches the live list or types one). build_provider surfaces a clear
+    // "model 未配置" error when enhance runs without one.
+    settings.openai_compatible_model = settings.openai_compatible_model.trim().to_string();
     if settings.doubao_endpoint.trim().is_empty() {
         settings.doubao_endpoint = crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string();
     }
@@ -326,6 +371,33 @@ pub fn available_asr_providers() -> Vec<ProviderMetadata> {
             false,
             &["Local"],
         ),
+        provider_metadata(
+            "glm",
+            "智谱 GLM ASR",
+            "asr",
+            "Remote ASR",
+            Some(crate::asr::glm::DEFAULT_MODEL),
+            true,
+            &["Remote", "中文"],
+        ),
+        provider_metadata(
+            "aliyun_fun",
+            "通义 Paraformer ASR",
+            "asr",
+            "Remote ASR",
+            Some(crate::asr::aliyun::config::DEFAULT_MODEL),
+            true,
+            &["Remote", "实时", "中文"],
+        ),
+        provider_metadata(
+            "stepfun",
+            "StepFun ASR",
+            "asr",
+            "Remote ASR",
+            Some(crate::asr::stepfun::config::DEFAULT_MODEL),
+            true,
+            &["Remote", "中文"],
+        ),
     ]
 }
 
@@ -381,6 +453,12 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
     let next = Settings {
         hotkey: patch.hotkey.unwrap_or(current.hotkey),
         asr_provider: patch.asr_provider.unwrap_or(current.asr_provider),
+        // Empty is meaningful (= adapter built-in default), so like input_device we
+        // keep an empty patch value rather than filtering it back to current.
+        asr_model: patch
+            .asr_model
+            .map(|value| value.trim().to_string())
+            .unwrap_or(current.asr_model),
         llm_provider: patch.llm_provider.unwrap_or(current.llm_provider),
         enhance_enabled: patch.enhance_enabled.unwrap_or(current.enhance_enabled),
         enhance_prompt: patch.enhance_prompt.unwrap_or(current.enhance_prompt),
@@ -390,11 +468,19 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.openai_compatible_base_url),
+        // Empty is meaningful (= no model chosen yet; provider pick no longer seeds
+        // a hardcoded one), so keep an explicit empty patch value rather than
+        // filtering it back to current.
         openai_compatible_model: patch
             .openai_compatible_model
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
             .unwrap_or(current.openai_compatible_model),
+        // Empty is meaningful (= key-optional local provider), so keep an empty
+        // patch value rather than filtering it back to current (like input_device).
+        llm_api_key_id: patch
+            .llm_api_key_id
+            .map(|value| value.trim().to_string())
+            .unwrap_or(current.llm_api_key_id),
         doubao_endpoint: patch
             .doubao_endpoint
             .map(|value| value.trim().to_string())
@@ -424,6 +510,8 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.history_retention),
+        // Whole-map replace when provided (the front-end sends the merged map).
+        llm_models: patch.llm_models.unwrap_or(current.llm_models),
     };
 
     validate_settings(&next)?;
@@ -467,11 +555,8 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
             "OpenAI-compatible base URL cannot be empty".into(),
         ));
     }
-    if settings.openai_compatible_model.trim().is_empty() {
-        return Err(AppError::Internal(
-            "OpenAI-compatible model cannot be empty".into(),
-        ));
-    }
+    // openai_compatible_model may be empty: picking a provider seeds no model (ids go
+    // stale), the user fetches/types one. build_provider errors only when enhance runs.
     if settings.doubao_endpoint.trim().is_empty() {
         return Err(AppError::Internal("Doubao endpoint cannot be empty".into()));
     }
@@ -853,6 +938,8 @@ mod tests {
 
         assert_eq!(settings.hotkey, DEFAULT_HOTKEY);
         assert_eq!(settings.asr_provider, "groq");
+        // Empty = each adapter uses its built-in default model (no behavior change).
+        assert_eq!(settings.asr_model, "");
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
@@ -916,6 +1003,92 @@ mod tests {
             with_path,
             toml::from_str::<Settings>(&text).expect("deserialize")
         );
+
+        // A non-empty asr_model is a plain string field (no skip_serializing_if) —
+        // it survives the round trip just like asr_provider.
+        let with_model = Settings {
+            asr_model: "whisper-large-v3".into(),
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&with_model).expect("serialize");
+        assert_eq!(
+            with_model,
+            toml::from_str::<Settings>(&text).expect("deserialize")
+        );
+
+        // A populated per-provider model map serializes as the trailing [llm_models]
+        // table (it MUST be the last field — a TOML table follows all scalar keys).
+        let with_llm_models = Settings {
+            llm_models: HashMap::from([
+                ("lmstudio".to_string(), "qwen3-14b".to_string()),
+                ("deepseek".to_string(), "deepseek-chat".to_string()),
+            ]),
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&with_llm_models).expect("serialize");
+        assert_eq!(
+            with_llm_models,
+            toml::from_str::<Settings>(&text).expect("deserialize")
+        );
+    }
+
+    #[test]
+    fn patch_sets_asr_model_and_empty_clears_to_adapter_default() {
+        // Setting a model overrides current; an empty patch value is meaningful
+        // (= adapter built-in default), so it clears rather than keeping current.
+        let current = Settings {
+            asr_model: "gpt-4o-transcribe".into(),
+            ..Settings::default()
+        };
+        let patched = settings_from_patch(
+            current.clone(),
+            SettingsPatch {
+                hotkey: None,
+                asr_provider: None,
+                asr_model: Some("whisper-large-v3".into()),
+                llm_provider: None,
+                enhance_enabled: None,
+                enhance_prompt: None,
+                whisper_cpp_model_path: None,
+                openai_compatible_base_url: None,
+                openai_compatible_model: None,
+                llm_api_key_id: None,
+                doubao_endpoint: None,
+                doubao_resource_id: None,
+                input_device: None,
+                onboarding_completed: None,
+                primary_language: None,
+                history_retention: None,
+                llm_models: None,
+            },
+        )
+        .expect("patch with model");
+        assert_eq!(patched.asr_model, "whisper-large-v3");
+
+        let cleared = settings_from_patch(
+            current,
+            SettingsPatch {
+                hotkey: None,
+                asr_provider: None,
+                asr_model: Some(String::new()),
+                llm_provider: None,
+                enhance_enabled: None,
+                enhance_prompt: None,
+                whisper_cpp_model_path: None,
+                openai_compatible_base_url: None,
+                openai_compatible_model: None,
+                llm_api_key_id: None,
+                doubao_endpoint: None,
+                doubao_resource_id: None,
+                input_device: None,
+                onboarding_completed: None,
+                primary_language: None,
+                history_retention: None,
+                llm_models: None,
+            },
+        )
+        .expect("patch clearing model");
+        assert_eq!(cleared.asr_model, "");
     }
 
     #[test]
@@ -963,6 +1136,14 @@ mod tests {
             fixed.doubao_resource_id,
             crate::asr::doubao::config::DEFAULT_RESOURCE_ID
         );
+
+        // An empty LLM model is NOT reset to a default — picking a provider seeds no
+        // hardcoded model; the user fetches/types one (build_provider errors if blank).
+        let no_model = normalize_settings(Settings {
+            openai_compatible_model: "  ".into(),
+            ..Settings::default()
+        });
+        assert_eq!(no_model.openai_compatible_model, "");
     }
 
     #[test]
@@ -987,7 +1168,14 @@ mod tests {
             asr.iter()
                 .map(|provider| provider.id.as_str())
                 .collect::<Vec<_>>(),
-            ["groq", "openai", "whisper_cpp",]
+            [
+                "groq",
+                "openai",
+                "whisper_cpp",
+                "glm",
+                "aliyun_fun",
+                "stepfun",
+            ]
         );
         assert_eq!(
             llm.iter()
@@ -1246,8 +1434,17 @@ mod tests {
                 "groq_api_key".to_string(),
                 "openai_api_key".to_string(),
                 "openai_compatible_api_key".to_string(),
+                "deepseek_api_key".to_string(),
+                "kimi_api_key".to_string(),
+                "siliconflow_api_key".to_string(),
+                "zhipu_api_key".to_string(),
+                "qwen_api_key".to_string(),
+                "openrouter_api_key".to_string(),
                 "doubao_app_id".to_string(),
                 "doubao_access_token".to_string(),
+                "glm_api_key".to_string(),
+                "aliyun_dashscope_api_key".to_string(),
+                "stepfun_api_key".to_string(),
             ]
         );
     }

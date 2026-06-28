@@ -182,6 +182,7 @@ pub fn run() {
             begin_trigger_capture,
             end_trigger_capture,
             provider_test::test_provider,
+            provider_test::list_provider_models,
             commands::test_doubao_connection,
             // Overlay capsule controls (fe.8b / fe.8c).
             confirm_recording,
@@ -889,6 +890,7 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
 
     transcription_config_from_settings(
         settings.asr_provider,
+        settings.asr_model,
         settings.whisper_cpp_model_path,
         |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
     )
@@ -896,6 +898,7 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
 
 fn transcription_config_from_settings(
     asr_provider: String,
+    asr_model: String,
     whisper_cpp_model_path: Option<String>,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> TranscriptionConfig {
@@ -904,9 +907,21 @@ fn transcription_config_from_settings(
         "openai" => (None, read_secret("openai_api_key")),
         _ => (None, None),
     };
+    // Each new cloud ASR reads only its own keychain key (and only when selected),
+    // so picking another provider never touches an unrelated secret.
+    let glm_api_key = (asr_provider == "glm")
+        .then(|| read_secret(crate::asr::glm::SECRET_API_KEY))
+        .flatten();
+    let aliyun_api_key = (asr_provider == "aliyun_fun")
+        .then(|| read_secret(crate::asr::aliyun::config::SECRET_API_KEY))
+        .flatten();
+    let stepfun_api_key = (asr_provider == "stepfun")
+        .then(|| read_secret(crate::asr::stepfun::config::SECRET_API_KEY))
+        .flatten();
 
     TranscriptionConfig {
         asr_provider,
+        asr_model,
         groq_api_key,
         openai_api_key,
         whisper_cpp_model_path,
@@ -914,6 +929,9 @@ fn transcription_config_from_settings(
         doubao_resource_id: None,
         doubao_app_id: None,
         doubao_api_key_or_access_token: None,
+        glm_api_key,
+        aliyun_api_key,
+        stepfun_api_key,
     }
 }
 
@@ -945,6 +963,9 @@ fn doubao_streaming_config_from_settings(
 
     Some(TranscriptionConfig {
         asr_provider: "doubao_stream".into(),
+        // Doubao uses resource_id, not model; asr_model stays blank for it (left
+        // for a future provider-specific variant mapping if豆包 ever needs one).
+        asr_model: String::new(),
         groq_api_key: None,
         openai_api_key: None,
         whisper_cpp_model_path: None,
@@ -952,6 +973,9 @@ fn doubao_streaming_config_from_settings(
         doubao_resource_id: Some(resource_id),
         doubao_app_id: app_id,
         doubao_api_key_or_access_token: Some(api_key_or_access_token),
+        glm_api_key: None,
+        aliyun_api_key: None,
+        stepfun_api_key: None,
     })
 }
 
@@ -981,6 +1005,7 @@ fn enhance_config(app: &AppHandle) -> EnhanceConfig {
         enhance_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
+        settings.llm_api_key_id,
         |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
     )
 }
@@ -999,6 +1024,7 @@ fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
         enhance_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
+        settings.llm_api_key_id,
         |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
     )
 }
@@ -1009,13 +1035,18 @@ fn enhance_config_from_settings(
     enhance_prompt: String,
     openai_compatible_base_url: String,
     openai_compatible_model: String,
+    llm_api_key_id: String,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> EnhanceConfig {
-    let openai_compatible_api_key = if enhance_enabled && llm_provider == "openai_compatible" {
-        read_secret("openai_compatible_api_key")
-    } else {
-        None
-    };
+    // Read the active provider's own key (4b). Empty id = key-optional local
+    // provider (Ollama / LM Studio) → no key; build_provider allows that for
+    // localhost endpoints.
+    let openai_compatible_api_key =
+        if enhance_enabled && llm_provider == "openai_compatible" && !llm_api_key_id.is_empty() {
+            read_secret(&llm_api_key_id)
+        } else {
+            None
+        };
 
     EnhanceConfig {
         llm_provider,
@@ -1323,10 +1354,11 @@ mod tests {
     fn groq_transcription_config_reads_only_groq_key() {
         let mut requested = Vec::new();
 
-        let config = transcription_config_from_settings("groq".into(), None, |key_id| {
-            requested.push(key_id.to_string());
-            Some(format!("{key_id}-value"))
-        });
+        let config =
+            transcription_config_from_settings("groq".into(), String::new(), None, |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            });
 
         assert_eq!(requested, vec!["groq_api_key"]);
         assert_eq!(config.groq_api_key.as_deref(), Some("groq_api_key-value"));
@@ -1337,10 +1369,11 @@ mod tests {
     fn openai_transcription_config_reads_only_openai_key() {
         let mut requested = Vec::new();
 
-        let config = transcription_config_from_settings("openai".into(), None, |key_id| {
-            requested.push(key_id.to_string());
-            Some(format!("{key_id}-value"))
-        });
+        let config =
+            transcription_config_from_settings("openai".into(), String::new(), None, |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            });
 
         assert_eq!(requested, vec!["openai_api_key"]);
         assert_eq!(config.groq_api_key, None);
@@ -1351,11 +1384,68 @@ mod tests {
     }
 
     #[test]
+    fn glm_transcription_config_reads_only_glm_key() {
+        let mut requested = Vec::new();
+
+        let config =
+            transcription_config_from_settings("glm".into(), String::new(), None, |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            });
+
+        assert_eq!(requested, vec![crate::asr::glm::SECRET_API_KEY]);
+        assert_eq!(config.glm_api_key.as_deref(), Some("glm_api_key-value"));
+        assert_eq!(config.aliyun_api_key, None);
+        assert_eq!(config.stepfun_api_key, None);
+    }
+
+    #[test]
+    fn aliyun_transcription_config_reads_only_aliyun_key() {
+        let mut requested = Vec::new();
+
+        let config = transcription_config_from_settings(
+            "aliyun_fun".into(),
+            String::new(),
+            None,
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        );
+
+        assert_eq!(requested, vec![crate::asr::aliyun::config::SECRET_API_KEY]);
+        assert_eq!(
+            config.aliyun_api_key.as_deref(),
+            Some("aliyun_dashscope_api_key-value")
+        );
+        assert_eq!(config.glm_api_key, None);
+    }
+
+    #[test]
+    fn stepfun_transcription_config_reads_only_stepfun_key() {
+        let mut requested = Vec::new();
+
+        let config =
+            transcription_config_from_settings("stepfun".into(), String::new(), None, |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            });
+
+        assert_eq!(requested, vec![crate::asr::stepfun::config::SECRET_API_KEY]);
+        assert_eq!(
+            config.stepfun_api_key.as_deref(),
+            Some("stepfun_api_key-value")
+        );
+        assert_eq!(config.glm_api_key, None);
+    }
+
+    #[test]
     fn whisper_cpp_transcription_config_reads_no_api_keys() {
         let mut requested = Vec::new();
 
         let config = transcription_config_from_settings(
             "whisper_cpp".into(),
+            String::new(),
             Some("/tmp/ggml.bin".into()),
             |key_id| {
                 requested.push(key_id.to_string());
@@ -1457,6 +1547,7 @@ mod tests {
             "prompt".into(),
             "https://api.example.com/v1".into(),
             "model".into(),
+            "deepseek_api_key".into(),
             |key_id| {
                 requested.push(key_id.to_string());
                 Some(format!("{key_id}-value"))
@@ -1468,25 +1559,49 @@ mod tests {
     }
 
     #[test]
-    fn enabled_openai_compatible_enhance_config_reads_llm_key() {
+    fn enabled_openai_compatible_enhance_config_reads_active_provider_key() {
         let mut requested = Vec::new();
 
+        // 4b: reads the per-provider key id from settings, not a hardcoded one.
         let config = enhance_config_from_settings(
             "openai_compatible".into(),
             true,
             "prompt".into(),
-            "https://api.example.com/v1".into(),
+            "https://api.deepseek.com/v1".into(),
             "model".into(),
+            "deepseek_api_key".into(),
             |key_id| {
                 requested.push(key_id.to_string());
                 Some(format!("{key_id}-value"))
             },
         );
 
-        assert_eq!(requested, vec!["openai_compatible_api_key"]);
+        assert_eq!(requested, vec!["deepseek_api_key"]);
         assert_eq!(
             config.openai_compatible_api_key.as_deref(),
-            Some("openai_compatible_api_key-value")
+            Some("deepseek_api_key-value")
         );
+    }
+
+    #[test]
+    fn empty_llm_key_id_reads_no_key_for_local_provider() {
+        let mut requested = Vec::new();
+
+        // Ollama / LM Studio: empty key id = key-optional local provider, no read.
+        let config = enhance_config_from_settings(
+            "openai_compatible".into(),
+            true,
+            "prompt".into(),
+            "http://localhost:11434/v1".into(),
+            "qwen2.5".into(),
+            String::new(),
+            |key_id| {
+                requested.push(key_id.to_string());
+                Some(format!("{key_id}-value"))
+            },
+        );
+
+        assert!(requested.is_empty());
+        assert_eq!(config.openai_compatible_api_key, None);
     }
 }
