@@ -6,8 +6,10 @@
 //  - ASR: the backend ModelManager catalog (useModelStore) renders one row per
 //    model with its on-disk state — 未下载(可下载/进度/取消) / 已下载(选用/删除) / 使用中.
 //    Selecting a row activates whisper_cpp + that model. No static placeholder.
-//  - LLM: a zero-click probe (discover_local_llm) auto-detects Ollama / LM Studio /
-//    llama.cpp on mount and lists their live models for one-click 选用 — NO button.
+//  - LLM: provider cards (Ollama / LM Studio) with 配置 (endpoint/model + per-RAM
+//    recommendations) so it's always configurable, PLUS a zero-click probe
+//    (discover_local_llm) listing any running server's live models for one-click
+//    选用 below them — NO scan button.
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -237,6 +239,13 @@ export function ModelSection({
     () => (type === "asr" ? (MODELS.find((m) => m.id === "whisper-local") ?? null) : null),
     [type],
   );
+  // Local LLM provider cards (Ollama / LM Studio): always rendered so the user can
+  // 配置 endpoint/model (and see the per-RAM recommendations) even when no server is
+  // running yet. The auto-detected DiscoveredLlmCard list shows below them.
+  const localLlmCards = useMemo(
+    () => (type === "llm" ? MODELS.filter((m) => m.type === "llm" && m.source === "local") : []),
+    [type],
+  );
 
   const usableModel = (m: ModelMeta) => {
     if (m.type === "asr") return configured(m.id) || isKeyOptionalModel(m.id);
@@ -251,7 +260,7 @@ export function ModelSection({
   const localHasContent =
     type === "asr"
       ? localAsrModels.length > 0 || manualLocalAsr !== null
-      : discovered.length > 0;
+      : localLlmCards.length > 0 || discovered.length > 0;
   const anyContent = (showCloud && cloudCards.length > 0) || (showLocal && localHasContent);
 
   return (
@@ -339,15 +348,39 @@ export function ModelSection({
                   ) : null}
                 </>
               ) : (
-                discovered.map((server) => (
-                  <DiscoveredLlmCard
-                    key={server.provider}
-                    server={server}
-                    activeBaseUrlHost={activeBaseUrlHost}
-                    activeModel={activeModel}
-                    onPick={(model) => onPickDiscoveredLlm(server, model)}
-                  />
-                ))
+                <>
+                  {localLlmCards.map((m) => (
+                    <CloudModelCard
+                      key={m.id}
+                      m={m}
+                      subtitle={
+                        picked.llm === m.id
+                          ? (settings?.openai_compatible_model ?? "")
+                          : (settings?.llm_models?.[m.id] ?? "")
+                      }
+                      usable={usableModel(m)}
+                      inUse={picked.llm === m.id}
+                      onPick={() => onPickCloud(m)}
+                      onConfigure={() => setConfigModel(m)}
+                    />
+                  ))}
+                  {discovered.length ? (
+                    <>
+                      <div className="pl-1 pt-1 text-[11px] text-text-tertiary">
+                        运行中（点模型直接选用）
+                      </div>
+                      {discovered.map((server) => (
+                        <DiscoveredLlmCard
+                          key={server.provider}
+                          server={server}
+                          activeBaseUrlHost={activeBaseUrlHost}
+                          activeModel={activeModel}
+                          onPick={(model) => onPickDiscoveredLlm(server, model)}
+                        />
+                      ))}
+                    </>
+                  ) : null}
+                </>
               )}
             </div>
           ) : null}
