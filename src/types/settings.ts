@@ -21,6 +21,10 @@ export const SettingsSchema = z.object({
   // adapter's built-in default. default("") tolerates the field being absent
   // while the backend struct ships in parallel.
   asr_model: z.string().default(""),
+  // Selected local-ASR (whisper.cpp) model id from the ModelManager catalog, or a
+  // discovered custom id. "" = no catalog pick → fall back to whisper_cpp_model_path.
+  // default("") tolerates older settings.toml that predate the field.
+  selected_local_asr_model: z.string().default(""),
   llm_provider: z.enum(["openai_compatible"]),
   enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
@@ -78,6 +82,28 @@ export const ProviderMetadataSchema = z.object({
 });
 
 export type ProviderMetadata = z.infer<typeof ProviderMetadataSchema>;
+
+// Local ASR model from the backend ModelManager catalog (get_available_models).
+// Hand-written mirror of Rust `managers::model::ModelInfo` — keep field names and
+// optionality in sync with that serde struct (Audie hand-writes Zod, no specta).
+// Wired into the picker UI in Phase 3; defined here so the type lands with P1.
+export const ModelInfoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  filename: z.string(),
+  // Option<String> on the Rust side: present for catalog models, null for custom
+  // on-disk ones. nullish tolerates either null or an omitted key.
+  url: z.string().nullish(),
+  sha256: z.string().nullish(),
+  size_mb: z.number(),
+  is_downloaded: z.boolean(),
+  is_recommended: z.boolean(),
+  is_custom: z.boolean(),
+  engine: z.string(),
+});
+
+export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 
 export const ProviderKindSchema = z.enum(["asr", "llm"]);
 export type ProviderKind = z.infer<typeof ProviderKindSchema>;

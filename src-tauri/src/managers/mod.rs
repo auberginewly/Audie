@@ -5,4 +5,5 @@ pub mod audio;
 pub mod enhance;
 pub mod history;
 pub mod inject;
+pub mod model;
 pub mod transcription;

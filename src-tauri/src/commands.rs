@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
+use crate::managers::model::{ModelInfo, ModelManager};
 use crate::platform::Platform;
 
 /// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
@@ -65,6 +66,11 @@ pub struct Settings {
     /// files and untouched installs keep working. Doubao ignores it (豆包 uses
     /// resource_id, not model — left blank for it, see normalize note).
     pub asr_model: String,
+    /// Selected local-ASR (whisper.cpp) model id from the ModelManager catalog
+    /// (e.g. "small") or a discovered custom model. Empty = no catalog pick, fall
+    /// back to the manually-typed `whisper_cpp_model_path`. Only consulted when
+    /// `asr_provider == "whisper_cpp"`; keeps the manual path working alongside it.
+    pub selected_local_asr_model: String,
     pub llm_provider: String,
     pub enhance_enabled: bool,
     pub enhance_prompt: String,
@@ -112,6 +118,7 @@ impl Default for Settings {
             hotkey: DEFAULT_HOTKEY.to_string(),
             asr_provider: DEFAULT_ASR_PROVIDER.to_string(),
             asr_model: String::new(),
+            selected_local_asr_model: String::new(),
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
             enhance_enabled: false,
             enhance_prompt: include_str!("../prompts/enhance_default.md")
@@ -137,6 +144,7 @@ pub struct SettingsPatch {
     pub hotkey: Option<String>,
     pub asr_provider: Option<String>,
     pub asr_model: Option<String>,
+    pub selected_local_asr_model: Option<String>,
     pub llm_provider: Option<String>,
     pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
@@ -262,6 +270,10 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     // asr_model is free-form (each adapter validates / defaults at request time);
     // empty = built-in default. Only trim hand-edited whitespace, never reset.
     settings.asr_model = settings.asr_model.trim().to_string();
+    // selected_local_asr_model is an opaque catalog/custom id resolved by
+    // ModelManager at request time; empty = fall back to the manual path. Trim only,
+    // a stale id is harmless (resolution falls back). Never reset.
+    settings.selected_local_asr_model = settings.selected_local_asr_model.trim().to_string();
 
     if settings.hotkey.trim().is_empty() {
         settings.hotkey = DEFAULT_HOTKEY.to_string();
@@ -459,6 +471,12 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .asr_model
             .map(|value| value.trim().to_string())
             .unwrap_or(current.asr_model),
+        // Empty is meaningful (= no catalog pick → manual path), so keep an explicit
+        // empty patch value rather than filtering it back to current.
+        selected_local_asr_model: patch
+            .selected_local_asr_model
+            .map(|value| value.trim().to_string())
+            .unwrap_or(current.selected_local_asr_model),
         llm_provider: patch.llm_provider.unwrap_or(current.llm_provider),
         enhance_enabled: patch.enhance_enabled.unwrap_or(current.enhance_enabled),
         enhance_prompt: patch.enhance_prompt.unwrap_or(current.enhance_prompt),
@@ -716,6 +734,41 @@ pub fn list_llm_providers() -> Vec<ProviderMetadata> {
     available_llm_providers()
 }
 
+/// Local ASR model catalog with current on-disk state (downloaded / custom). Phase
+/// 1 read-only surface; the download path lands in Phase 2.
+#[tauri::command]
+pub fn get_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, AppError> {
+    let manager = app.state::<Arc<ModelManager>>();
+    manager
+        .get_available_models()
+        .map_err(|err| AppError::Internal(format!("list models: {err}")))
+}
+
+/// The currently selected local-ASR model id, or empty when none is chosen (the
+/// whisper.cpp path then falls back to the manual model path).
+#[tauri::command]
+pub fn get_current_local_asr_model(app: AppHandle) -> String {
+    load_settings(&app).selected_local_asr_model
+}
+
+/// Persist the selected local-ASR model id. The id must exist in the catalog or be
+/// a discovered custom model; an empty id clears the selection (back to the manual
+/// path). Reuses the settings patch path so normalization/validation stay in one place.
+#[tauri::command]
+pub fn set_active_local_asr_model(app: AppHandle, model_id: String) -> Result<Settings, AppError> {
+    let trimmed = model_id.trim().to_string();
+    if !trimmed.is_empty() {
+        let manager = app.state::<Arc<ModelManager>>();
+        if !manager.has_model(&trimmed) {
+            return Err(AppError::Provider(format!("未知的本地模型：{trimmed}")));
+        }
+    }
+    let mut next = load_settings(&app);
+    next.selected_local_asr_model = trimmed;
+    persist_settings(&app, normalize_settings(next))?;
+    Ok(load_settings(&app))
+}
+
 #[tauri::command]
 pub fn set_secret(app: AppHandle, key_id: String, value: String) -> Result<(), AppError> {
     validate_secret_key_id(&key_id)?;
@@ -940,6 +993,8 @@ mod tests {
         assert_eq!(settings.asr_provider, "groq");
         // Empty = each adapter uses its built-in default model (no behavior change).
         assert_eq!(settings.asr_model, "");
+        // Empty = no local-ASR catalog pick → manual whisper path is used.
+        assert_eq!(settings.selected_local_asr_model, "");
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
@@ -1046,6 +1101,7 @@ mod tests {
                 hotkey: None,
                 asr_provider: None,
                 asr_model: Some("whisper-large-v3".into()),
+                selected_local_asr_model: None,
                 llm_provider: None,
                 enhance_enabled: None,
                 enhance_prompt: None,
@@ -1071,6 +1127,7 @@ mod tests {
                 hotkey: None,
                 asr_provider: None,
                 asr_model: Some(String::new()),
+                selected_local_asr_model: None,
                 llm_provider: None,
                 enhance_enabled: None,
                 enhance_prompt: None,
@@ -1089,6 +1146,59 @@ mod tests {
         )
         .expect("patch clearing model");
         assert_eq!(cleared.asr_model, "");
+    }
+
+    #[test]
+    fn patch_sets_selected_local_asr_model_and_empty_clears_it() {
+        // Picking a catalog model stores the id; clearing it (empty patch value, the
+        // "back to manual path" state) is meaningful and overrides current.
+        let current = Settings {
+            selected_local_asr_model: "small".into(),
+            ..Settings::default()
+        };
+        let patched = settings_from_patch(
+            current.clone(),
+            SettingsPatch {
+                selected_local_asr_model: Some("  large-v3  ".into()),
+                ..empty_patch()
+            },
+        )
+        .expect("patch with selected model");
+        assert_eq!(patched.selected_local_asr_model, "large-v3");
+
+        let cleared = settings_from_patch(
+            current,
+            SettingsPatch {
+                selected_local_asr_model: Some(String::new()),
+                ..empty_patch()
+            },
+        )
+        .expect("patch clearing selected model");
+        assert_eq!(cleared.selected_local_asr_model, "");
+    }
+
+    /// All-None patch so a test can set just the field it cares about with `..`.
+    fn empty_patch() -> SettingsPatch {
+        SettingsPatch {
+            hotkey: None,
+            asr_provider: None,
+            asr_model: None,
+            selected_local_asr_model: None,
+            llm_provider: None,
+            enhance_enabled: None,
+            enhance_prompt: None,
+            whisper_cpp_model_path: None,
+            openai_compatible_base_url: None,
+            openai_compatible_model: None,
+            llm_api_key_id: None,
+            doubao_endpoint: None,
+            doubao_resource_id: None,
+            input_device: None,
+            onboarding_completed: None,
+            primary_language: None,
+            history_retention: None,
+            llm_models: None,
+        }
     }
 
     #[test]

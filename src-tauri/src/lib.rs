@@ -30,6 +30,7 @@ use crate::managers::audio::AudioManager;
 use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
 use crate::managers::history::HistoryManager;
 use crate::managers::inject::InjectManager;
+use crate::managers::model::ModelManager;
 use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
 use crate::platform::{current_platform, HotkeyCallback, Platform};
 use crate::state::{AppState, StateMachine};
@@ -155,6 +156,9 @@ pub fn run() {
             commands::import_config,
             commands::list_asr_providers,
             commands::list_llm_providers,
+            commands::get_available_models,
+            commands::get_current_local_asr_model,
+            commands::set_active_local_asr_model,
             commands::list_microphones,
             commands::auto_input_device,
             commands::list_history,
@@ -225,6 +229,17 @@ pub fn run() {
             let history = Arc::new(HistoryManager::new(&app_handle));
             let platform: Arc<dyn Platform> = Arc::from(current_platform());
             let inject = Arc::new(InjectManager::new(platform.clone()));
+            // ModelManager scans app_data_dir/models at construction so any GGML on
+            // disk is usable with zero clicks. A failure (e.g. unresolvable data dir)
+            // must not abort startup — degrade to an empty catalog, like history.
+            let model = match ModelManager::new(&app_handle) {
+                Ok(model) => model,
+                Err(err) => {
+                    log::error!("init ModelManager: {err:?}");
+                    ModelManager::empty(&app_handle)
+                }
+            };
+            let model = Arc::new(model);
 
             // This is the backend object graph for the P1 pipeline:
             // StateMachine owns legal UI states; Audio captures samples; ASR and
@@ -239,6 +254,7 @@ pub fn run() {
             app.manage(enhance);
             app.manage(history);
             app.manage(inject);
+            app.manage(model);
             app.manage(platform.clone());
             app.manage(Arc::new(parking_lot::Mutex::new(None::<TranscriptStream>)));
             // fe.8c: last-take store (undo / retry / insert-raw) + take generation
@@ -888,12 +904,39 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
 
+    // Resolve the local-ASR path: a selected catalog/custom model wins (its file in
+    // app_data_dir/models), else fall back to the manually-typed path. Both stay
+    // working — picking a downloaded model doesn't erase the manual escape hatch.
+    let whisper_cpp_model_path = resolve_whisper_cpp_path(
+        app,
+        &settings.selected_local_asr_model,
+        settings.whisper_cpp_model_path,
+    );
+
     transcription_config_from_settings(
         settings.asr_provider,
         settings.asr_model,
-        settings.whisper_cpp_model_path,
+        whisper_cpp_model_path,
         |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
     )
+}
+
+/// Resolve the whisper.cpp model path: a non-empty `selected_local_asr_model` that
+/// the ModelManager can map to a downloaded file takes priority; otherwise fall back
+/// to the manual `whisper_cpp_model_path` (a stale/un-downloaded selection silently
+/// degrades to the manual path rather than failing here).
+fn resolve_whisper_cpp_path(
+    app: &AppHandle,
+    selected_local_asr_model: &str,
+    manual_path: Option<String>,
+) -> Option<String> {
+    if !selected_local_asr_model.is_empty() {
+        let model = app.state::<Arc<ModelManager>>();
+        if let Some(path) = model.downloaded_model_path(selected_local_asr_model) {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    manual_path
 }
 
 fn transcription_config_from_settings(

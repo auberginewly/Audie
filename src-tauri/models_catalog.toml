@@ -1,0 +1,72 @@
+# Local ASR model catalog (whisper.cpp GGML).
+#
+# Data, not source (CLAUDE.md prompt-as-data; even Handy regrets hardcoding its
+# registry). ModelManager loads this at init via include_str! + toml parse.
+#
+# url: real HuggingFace ggerganov/whisper.cpp resolve links.
+# sha256: deliberately omitted — verification is skipped when absent (honest TODO,
+#         no fabricated hashes). Phase 2 (download) can fill real ones in.
+# size_mb: approximate on-disk size of the GGML file.
+# engine: whisper only for now.
+
+[[models]]
+id = "tiny"
+name = "Whisper Tiny"
+description = "Smallest, fastest, lowest accuracy. Good for quick tests."
+filename = "ggml-tiny.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+size_mb = 75
+is_recommended = false
+engine = "whisper"
+
+[[models]]
+id = "base"
+name = "Whisper Base"
+description = "Small and fast, modest accuracy."
+filename = "ggml-base.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+size_mb = 142
+is_recommended = false
+engine = "whisper"
+
+[[models]]
+id = "small"
+name = "Whisper Small"
+description = "Balanced speed and accuracy. Recommended starting point."
+filename = "ggml-small.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+size_mb = 466
+is_recommended = true
+engine = "whisper"
+
+[[models]]
+id = "medium"
+name = "Whisper Medium"
+description = "Higher accuracy, slower. Good for longer dictation."
+filename = "ggml-medium.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+size_mb = 1536
+is_recommended = false
+engine = "whisper"
+
+[[models]]
+id = "large-v3"
+name = "Whisper Large v3"
+description = "Best accuracy, multilingual, slowest. Needs a capable machine."
+filename = "ggml-large-v3.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
+size_mb = 3094
+is_recommended = false
+engine = "whisper"
+
+# Chinese-capable: large-v3 q5_0 quant keeps multilingual (incl. 中文) quality
+# at roughly a third of the disk size — a practical pick for 中文 dictation.
+[[models]]
+id = "large-v3-q5_0"
+name = "Whisper Large v3 (Q5, 中文友好)"
+description = "Quantized large-v3. Multilingual incl. Chinese, much smaller on disk."
+filename = "ggml-large-v3-q5_0.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin"
+size_mb = 1080
+is_recommended = false
+engine = "whisper"
