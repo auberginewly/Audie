@@ -98,7 +98,7 @@ export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 
 // Every keychain-backed secret id. Doubao keeps the historical
 // `doubao_access_token` id for either new-console API Key or old-console Access
-// Token, so export/import cover all five without migrating saved secrets.
+// Token, covering both without migrating saved secrets.
 export const SecretKeyIdSchema = z.enum([
   "groq_api_key",
   "openai_api_key",
@@ -137,25 +137,3 @@ export const ProviderTestRequestSchema = z.object({
 });
 
 export type ProviderTestRequest = z.infer<typeof ProviderTestRequestSchema>;
-
-export const KEYCHAIN_PLACEHOLDER = "<keychain>";
-
-export const ExportedSecretPlaceholderSchema = z.object({
-  key_id: SecretKeyIdSchema,
-  value: z.literal(KEYCHAIN_PLACEHOLDER),
-});
-
-export const ExportedConfigSchema = z.object({
-  settings: SettingsSchema,
-  secrets: z.array(ExportedSecretPlaceholderSchema),
-});
-
-export type ExportedConfig = z.infer<typeof ExportedConfigSchema>;
-
-export const ImportConfigResultSchema = z.object({
-  settings: SettingsSchema,
-  keys_to_refill: z.array(ExportedSecretPlaceholderSchema.shape.key_id),
-  message: z.string(),
-});
-
-export type ImportConfigResult = z.infer<typeof ImportConfigResultSchema>;

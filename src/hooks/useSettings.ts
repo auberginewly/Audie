@@ -26,7 +26,6 @@ export type UseSettings = {
   microphones: AudioDevice[];
   autoDevice: string | null;
   update: (patch: Partial<Settings>) => Promise<void>;
-  applyImported: (next: Settings) => void;
 };
 
 export function useSettings(): UseSettings {
@@ -78,6 +77,5 @@ export function useSettings(): UseSettings {
     microphones,
     autoDevice,
     update,
-    applyImported: setSettings,
   };
 }

@@ -47,7 +47,7 @@ const SECTIONS: SectionDef[] = [
     id: "about",
     icon: "book",
     label: "关于",
-    render: (data, { onRerunSetup }) => <AboutSection data={data} onRerunSetup={onRerunSetup} />,
+    render: (_data, { onRerunSetup }) => <AboutSection onRerunSetup={onRerunSetup} />,
   },
 ];
 

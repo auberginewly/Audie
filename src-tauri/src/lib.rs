@@ -151,8 +151,6 @@ pub fn run() {
             // while settings/keychain/provider-test stay here as explicit UI calls.
             commands::get_settings,
             commands::update_settings,
-            commands::export_config,
-            commands::import_config,
             commands::list_asr_providers,
             commands::list_llm_providers,
             commands::list_microphones,

@@ -1,14 +1,11 @@
-// 关于 — updates · project · author, plus import/export (the design's About omits
-// it, but we keep the functionality here so nothing is lost). Version is real;
-// the check-update button and beta toggle are mock (App owns the demo update flow).
+// 关于 — updates · project · author. Version is real; the check-update button and
+// beta toggle are mock (App owns the demo update flow).
 
 import { useState } from "react";
 
-import type { UseSettings } from "../../hooks/useSettings";
 import { Button, Icon, Switch } from "../ui";
 import { openExternal } from "../../lib/open";
 import { SettingSection, SettingRow } from "./SettingSection";
-import { ConfigSection } from "./ConfigSection";
 
 const REPO_URL = "https://github.com/auberginewly/Audie";
 
@@ -31,7 +28,7 @@ function ExtLink({ href, children, mono }: { href: string; children: string; mon
   );
 }
 
-export function AboutSection({ data, onRerunSetup }: { data: UseSettings; onRerunSetup: () => void }) {
+export function AboutSection({ onRerunSetup }: { onRerunSetup: () => void }) {
   const [beta, setBeta] = useState(false);
   return (
     <>
@@ -71,8 +68,6 @@ export function AboutSection({ data, onRerunSetup }: { data: UseSettings; onReru
           }
         />
       </SettingSection>
-
-      <ConfigSection onImported={data.applyImported} />
     </>
   );
 }

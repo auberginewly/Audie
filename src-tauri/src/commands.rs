@@ -17,28 +17,6 @@ use crate::platform::Platform;
 
 /// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
 const LEGACY_SETTINGS_JSON: &str = "settings.json";
-const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
-// Doubao credentials live in the keychain, so they're listed here for export
-// placeholders / import refill. `doubao_access_token` stores either new-console
-// API Key or old-console Access Token.
-const SECRET_KEY_IDS: &[&str] = &[
-    "groq_api_key",
-    "openai_api_key",
-    "openai_compatible_api_key",
-    // Per-provider LLM keys (4b): each cloud LLM card stores its own key, selected
-    // via Settings.llm_api_key_id. openai_api_key (above) is reused for OpenAI LLM.
-    "deepseek_api_key",
-    "kimi_api_key",
-    "siliconflow_api_key",
-    "zhipu_api_key",
-    "qwen_api_key",
-    "openrouter_api_key",
-    crate::asr::doubao::config::SECRET_APP_ID,
-    crate::asr::doubao::config::SECRET_API_KEY_OR_ACCESS_TOKEN,
-    crate::asr::glm::SECRET_API_KEY,
-    crate::asr::aliyun::config::SECRET_API_KEY,
-    crate::asr::stepfun::config::SECRET_API_KEY,
-];
 
 pub const DEFAULT_HOTKEY: &str = "Fn";
 pub const DEFAULT_ASR_PROVIDER: &str = "groq";
@@ -146,25 +124,6 @@ pub struct SettingsPatch {
     pub primary_language: Option<String>,
     pub history_retention: Option<String>,
     pub llm_models: Option<HashMap<String, String>>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct ExportedSecretPlaceholder {
-    pub key_id: String,
-    pub value: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct ExportedConfig {
-    pub settings: Settings,
-    pub secrets: Vec<ExportedSecretPlaceholder>,
-}
-
-#[derive(Serialize, Debug, PartialEq, Eq)]
-pub struct ImportConfigResult {
-    pub settings: Settings,
-    pub keys_to_refill: Vec<String>,
-    pub message: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -613,74 +572,6 @@ pub fn get_usage_stats(app: AppHandle) -> Result<crate::managers::history::Usage
 }
 
 #[tauri::command]
-pub fn export_config(app: AppHandle) -> Result<ExportedConfig, AppError> {
-    Ok(exportable_config_from_settings(load_settings(&app)))
-}
-
-fn exportable_config_from_settings(settings: Settings) -> ExportedConfig {
-    ExportedConfig {
-        settings,
-        secrets: secret_placeholders(),
-    }
-}
-
-fn secret_placeholders() -> Vec<ExportedSecretPlaceholder> {
-    SECRET_KEY_IDS
-        .iter()
-        .map(|key_id| ExportedSecretPlaceholder {
-            key_id: (*key_id).to_string(),
-            value: KEYCHAIN_PLACEHOLDER.to_string(),
-        })
-        .collect()
-}
-
-#[tauri::command]
-pub fn import_config(
-    app: AppHandle,
-    config: ExportedConfig,
-) -> Result<ImportConfigResult, AppError> {
-    let import = import_config_payload(config)?;
-    apply_hotkey_if_changed(&app, &import.settings.hotkey)?;
-    persist_settings(&app, import.settings.clone())?;
-
-    Ok(ImportConfigResult {
-        settings: load_settings(&app),
-        keys_to_refill: import.keys_to_refill,
-        message: import.message,
-    })
-}
-
-fn import_config_payload(config: ExportedConfig) -> Result<ImportConfigResult, AppError> {
-    validate_settings(&config.settings)?;
-    for secret in &config.secrets {
-        validate_secret_key_id(&secret.key_id)?;
-        if !SECRET_KEY_IDS.contains(&secret.key_id.as_str()) {
-            return Err(AppError::Internal(format!(
-                "unsupported secret key id: {}",
-                secret.key_id
-            )));
-        }
-    }
-    let keys_to_refill = config
-        .secrets
-        .iter()
-        .filter(|secret| secret.value == KEYCHAIN_PLACEHOLDER)
-        .map(|secret| secret.key_id.clone())
-        .collect::<Vec<_>>();
-    let message = if keys_to_refill.is_empty() {
-        "配置已导入".to_string()
-    } else {
-        "配置已导入，请重新填写 key".to_string()
-    };
-
-    Ok(ImportConfigResult {
-        settings: config.settings,
-        keys_to_refill,
-        message,
-    })
-}
-
-#[tauri::command]
 pub fn list_asr_providers() -> Vec<ProviderMetadata> {
     available_asr_providers()
 }
@@ -935,18 +826,6 @@ mod tests {
             settings.doubao_resource_id,
             crate::asr::doubao::config::DEFAULT_RESOURCE_ID
         );
-    }
-
-    #[test]
-    fn exported_config_lists_doubao_secrets_as_placeholders() {
-        let config = exportable_config_from_settings(Settings::default());
-        let json = serde_json::to_string(&config).unwrap();
-
-        assert!(json.contains("doubao_app_id"));
-        assert!(json.contains("doubao_access_token"));
-        // Endpoint + resource id are non-secret store fields, so they ARE present
-        // in plain; only the keychain secrets get redacted.
-        assert!(json.contains(crate::asr::doubao::config::DEFAULT_ENDPOINT));
     }
 
     #[test]
@@ -1351,69 +1230,5 @@ mod tests {
             platform_secret_for_settings(&PresentSecretPlatform, "openai_api_key").unwrap();
 
         assert_eq!(secret.as_deref(), Some("saved-openai-key"));
-    }
-
-    #[test]
-    fn exported_config_uses_keychain_placeholders_only() {
-        let config = exportable_config_from_settings(Settings::default());
-        let json = serde_json::to_string(&config).unwrap();
-
-        assert!(json.contains(KEYCHAIN_PLACEHOLDER));
-        assert!(json.contains("groq_api_key"));
-        assert!(json.contains("openai_api_key"));
-        assert!(json.contains("openai_compatible_api_key"));
-        assert!(!json.contains("sk-"));
-        assert!(!json.contains("super-secret-value"));
-    }
-
-    #[test]
-    fn importing_keychain_placeholders_reports_keys_to_refill() {
-        let config = exportable_config_from_settings(Settings::default());
-        let result = import_config_payload(config).unwrap();
-
-        assert_eq!(
-            result.keys_to_refill,
-            vec![
-                "groq_api_key".to_string(),
-                "openai_api_key".to_string(),
-                "openai_compatible_api_key".to_string(),
-                "deepseek_api_key".to_string(),
-                "kimi_api_key".to_string(),
-                "siliconflow_api_key".to_string(),
-                "zhipu_api_key".to_string(),
-                "qwen_api_key".to_string(),
-                "openrouter_api_key".to_string(),
-                "doubao_app_id".to_string(),
-                "doubao_access_token".to_string(),
-                "glm_api_key".to_string(),
-                "aliyun_dashscope_api_key".to_string(),
-                "stepfun_api_key".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn importing_invalid_provider_is_rejected() {
-        let mut config = exportable_config_from_settings(Settings::default());
-        config.settings.asr_provider = "not_real".into();
-
-        let err = import_config_payload(config).unwrap_err();
-
-        assert!(matches!(err, AppError::Internal(_)));
-        assert!(err.message().contains("unsupported ASR provider"));
-    }
-
-    #[test]
-    fn importing_unknown_secret_key_id_is_rejected() {
-        let mut config = exportable_config_from_settings(Settings::default());
-        config.secrets.push(ExportedSecretPlaceholder {
-            key_id: "other_api_key".into(),
-            value: KEYCHAIN_PLACEHOLDER.into(),
-        });
-
-        let err = import_config_payload(config).unwrap_err();
-
-        assert!(matches!(err, AppError::Internal(_)));
-        assert!(err.message().contains("unsupported secret key id"));
     }
 }
