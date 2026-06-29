@@ -359,7 +359,7 @@ fn end_trigger_capture(app: AppHandle) -> AppResult<()> {
 /// (startup + capture-restore both do).
 fn register_compose_hotkey(app: &AppHandle) {
     let settings = commands::load_settings(app);
-    if !settings.compose_enabled || settings.compose_hotkey.trim().is_empty() {
+    if settings.compose_hotkey.trim().is_empty() {
         return;
     }
     let platform = app.state::<Arc<dyn Platform>>();

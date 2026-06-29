@@ -44,8 +44,8 @@ export const SettingsSchema = z.object({
   // 写作模式（compose）：独立触发键（"" = 未配置）、总开关、提示词。后端 normalize 保证
   // prompt 非空，故沿用 enhance_prompt 的 min(1)。
   compose_hotkey: z.string(),
-  compose_enabled: z.boolean(),
   compose_prompt: z.string().min(1),
+  rewrite_prompt: z.string().min(1),
   // Per-provider LLM model keyed by card id (deepseek/lmstudio/…). Lets 选用 restore
   // each provider's own model instead of clearing it (single backend slot).
   llm_models: z.record(z.string(), z.string()).default({}),

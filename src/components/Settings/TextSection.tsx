@@ -1,12 +1,11 @@
-// 文本处理 — intent tabs (润色 / 改写 / 创作). Polish is wired to the real
-// enhance settings; rewrite & compose are mock previews of planned modes
-// (the design's chips + notice), with local enable toggles (see plan).
+// 文本处理 — intent tabs (润色 / 改写 / 写作)，三卡统一成润色卡的结构：一个模型行
+// (三模式共享同一个 LLM，点击跳设置) + 一个可折叠的提示词编辑器。写作触发键在「通用」，
+// 改写复用主触发键（靠选中态，逻辑见片2）。
 
 import { useState } from "react";
 
 import type { Settings } from "../../types/settings";
 import { Badge, Icon, InlineNotice, Segmented, Select, Switch, Textarea } from "../ui";
-import { HotkeyRecorder } from "./HotkeyRecorder";
 import { SettingRow } from "./SettingSection";
 
 type Mode = "polish" | "rewrite" | "compose";
@@ -26,10 +25,7 @@ type TextSectionProps = {
 
 export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionProps) {
   const [mode, setMode] = useState<Mode>("polish");
-  const [rewriteOn, setRewriteOn] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [promptOpen, setPromptOpen] = useState(false);
-  const [composePromptOpen, setComposePromptOpen] = useState(false);
 
   return (
     <section className="mb-7">
@@ -50,7 +46,7 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
         />
         {mode === "rewrite" ? (
           <Badge tone="neutral" dot>
-            探索中
+            即将支持
           </Badge>
         ) : null}
       </div>
@@ -62,28 +58,13 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
             divider={false}
             control={<Switch checked={settings.enhance_enabled} onChange={(v) => update({ enhance_enabled: v })} />}
           />
-          <button
-            type="button"
-            onClick={onJumpToModelLlm}
-            className="relative flex w-full cursor-pointer items-center justify-between gap-4 border-0 bg-transparent px-3.5 py-3 text-left transition-colors hover:bg-gray-alpha-100"
-          >
-            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <span className="text-sm text-text-primary">润色模型</span>
-            <span className="flex shrink-0 items-center gap-2">
-              <Icon name="sparkles" size={13} className="text-aubergine-900" />
-              <span className="font-mono text-[13px] text-text-secondary">{settings.openai_compatible_model}</span>
-              <Icon name="chevron-right" size={14} className="text-text-tertiary" />
-            </span>
-          </button>
+          <ModelRow label="润色模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} />
           <SettingRow
             label="主语言"
             description="润色按此语言整理，并保留口述里的混合语言"
             control={
               <div className="w-40">
-                <Select
-                  value={settings.primary_language}
-                  onChange={(e) => update({ primary_language: e.target.value })}
-                >
+                <Select value={settings.primary_language} onChange={(e) => update({ primary_language: e.target.value })}>
                   <option value="">跟随系统</option>
                   {LANGUAGES.map((lang) => (
                     <option key={lang} value={lang}>
@@ -94,34 +75,7 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
               </div>
             }
           />
-          <div className="relative">
-            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <button
-              onClick={() => setPromptOpen((o) => !o)}
-              className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
-            >
-              <span className="shrink-0 text-[13px] text-text-secondary">润色提示词</span>
-              {promptOpen ? (
-                <span className="flex-1" />
-              ) : (
-                <span className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">{settings.enhance_prompt}</span>
-              )}
-              <Icon
-                name="chevron-down"
-                size={15}
-                className={["shrink-0 text-text-tertiary transition-transform duration-150", promptOpen ? "rotate-180" : ""].join(" ")}
-              />
-            </button>
-            {promptOpen ? (
-              <div className="px-3.5 pb-3.5">
-                <Textarea
-                  value={settings.enhance_prompt}
-                  onChange={(e) => update({ enhance_prompt: e.target.value })}
-                  className="min-h-[100px]"
-                />
-              </div>
-            ) : null}
-          </div>
+          <PromptDisclosure label="润色提示词" value={settings.enhance_prompt} onChange={(v) => update({ enhance_prompt: v })} />
           <div className="relative">
             <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
             <button
@@ -146,87 +100,41 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
       ) : null}
 
       {mode === "rewrite" ? (
-        <MockModeCard
-          enabled={rewriteOn}
-          onToggle={setRewriteOn}
-          body="选中文字后按住快捷键说出指令，Audie 用结果替换选中的内容。"
-          examples={REWRITE_EX}
-          note="需先选中文字 · 替换选中内容"
-        />
+        <div className="overflow-hidden rounded-md bg-surface-card">
+          <ModelRow label="改写模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} divider={false} />
+          <PromptDisclosure label="改写提示词" value={settings.rewrite_prompt} onChange={(v) => update({ rewrite_prompt: v })} />
+          <div className="relative p-3.5">
+            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
+            <div className="mb-2 text-xs text-text-tertiary">可以这样说</div>
+            <ExampleChips items={REWRITE_EX} />
+            <div className="mt-3">
+              <InlineNotice tone="info" icon="info">
+                改写功能即将支持：选中文字后按主触发键说出指令，用结果替换选中内容。
+              </InlineNotice>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {mode === "compose" ? (
         <div className="overflow-hidden rounded-md bg-surface-card">
-          <SettingRow
-            label="启用写作"
-            divider={false}
-            control={
-              <Switch
-                checked={settings.compose_enabled}
-                onChange={(v) => update({ compose_enabled: v })}
-              />
-            }
-          />
-          <SettingRow
-            label="写作触发键"
-            description="独立于主触发键；按它说出要点，生成的文本插入光标处"
-            control={
-              <HotkeyRecorder
-                value={settings.compose_hotkey}
-                onChange={(h) => update({ compose_hotkey: h })}
-              />
-            }
-          />
-          <div className="relative">
-            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <button
-              onClick={() => setComposePromptOpen((o) => !o)}
-              className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
-            >
-              <span className="shrink-0 text-[13px] text-text-secondary">写作提示词</span>
-              {composePromptOpen ? (
-                <span className="flex-1" />
-              ) : (
-                <span className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">{settings.compose_prompt}</span>
-              )}
-              <Icon
-                name="chevron-down"
-                size={15}
-                className={["shrink-0 text-text-tertiary transition-transform duration-150", composePromptOpen ? "rotate-180" : ""].join(" ")}
-              />
-            </button>
-            {composePromptOpen ? (
-              <div className="px-3.5 pb-3.5">
-                <Textarea
-                  value={settings.compose_prompt}
-                  onChange={(e) => update({ compose_prompt: e.target.value })}
-                  className="min-h-[120px]"
-                />
-              </div>
-            ) : null}
-          </div>
+          <ModelRow label="写作模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} divider={false} />
+          <PromptDisclosure label="写作提示词" value={settings.compose_prompt} onChange={(v) => update({ compose_prompt: v })} />
           <div className="relative p-3.5">
             <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
             <div className="mb-2 text-xs text-text-tertiary">可以这样说</div>
-            <div className="mb-3 flex flex-wrap gap-2">
-              {COMPOSE_EX.map((x) => (
-                <span
-                  key={x}
-                  className="inline-flex h-[26px] items-center rounded-full bg-gray-200 px-3 text-[13px] text-text-secondary"
-                >
-                  {x}
-                </span>
-              ))}
+            <ExampleChips items={COMPOSE_EX} />
+            <div className="mt-3">
+              {settings.compose_hotkey ? (
+                <InlineNotice tone="info" icon="info">
+                  按「通用 → 触发键」里的写作触发键说要点 · 生成的文本插入光标处。
+                </InlineNotice>
+              ) : (
+                <InlineNotice tone="info" icon="info">
+                  写作未启用：到「通用 → 触发键」设一个写作触发键即可开启。
+                </InlineNotice>
+              )}
             </div>
-            {settings.compose_enabled && !settings.compose_hotkey ? (
-              <InlineNotice tone="info" icon="info">
-                已启用写作，但还没设置写作触发键
-              </InlineNotice>
-            ) : (
-              <InlineNotice tone="info" icon="info">
-                按写作触发键说要点 · 在光标处插入生成的文本
-              </InlineNotice>
-            )}
           </div>
         </div>
       ) : null}
@@ -234,41 +142,78 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
   );
 }
 
-// mock: rewrite/compose pipelines aren't implemented — local toggle only.
-function MockModeCard({
-  enabled,
-  onToggle,
-  body,
-  examples,
-  note,
+// 当前在用的 LLM 模型行（润色 / 改写 / 写作共享同一个 openai_compatible 模型）。点击跳设置 → 模型 → LLM。
+function ModelRow({
+  label,
+  model,
+  onJump,
+  divider = true,
 }: {
-  enabled: boolean;
-  onToggle: (v: boolean) => void;
-  body: string;
-  examples: string[];
-  note: string;
+  label: string;
+  model: string;
+  onJump: () => void;
+  divider?: boolean;
 }) {
   return (
-    <div className="overflow-hidden rounded-md bg-surface-card">
-      <SettingRow label="启用此模式" divider={false} control={<Switch checked={enabled} onChange={onToggle} />} />
-      <div className="relative p-3.5">
-        <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-        <div className="mb-3 text-[13px] leading-[18px] text-text-secondary">{body}</div>
-        <div className="mb-2 text-xs text-text-tertiary">可以这样说</div>
-        <div className="mb-3 flex flex-wrap gap-2">
-          {examples.map((x) => (
-            <span
-              key={x}
-              className="inline-flex h-[26px] items-center rounded-full bg-gray-200 px-3 text-[13px] text-text-secondary"
-            >
-              {x}
-            </span>
-          ))}
+    <button
+      type="button"
+      onClick={onJump}
+      className="relative flex w-full cursor-pointer items-center justify-between gap-4 border-0 bg-transparent px-3.5 py-3 text-left transition-colors hover:bg-gray-alpha-100"
+    >
+      {divider ? <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" /> : null}
+      <span className="text-sm text-text-primary">{label}</span>
+      <span className="flex shrink-0 items-center gap-2">
+        <Icon name="sparkles" size={13} className="text-aubergine-900" />
+        <span className="font-mono text-[13px] text-text-secondary">{model}</span>
+        <Icon name="chevron-right" size={14} className="text-text-tertiary" />
+      </span>
+    </button>
+  );
+}
+
+// 可折叠提示词编辑器（默认收起 + 单行预览）。自带 open state，三卡各一个、互不影响。
+function PromptDisclosure({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
+      >
+        <span className="shrink-0 text-[13px] text-text-secondary">{label}</span>
+        {open ? (
+          <span className="flex-1" />
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">{value}</span>
+        )}
+        <Icon
+          name="chevron-down"
+          size={15}
+          className={["shrink-0 text-text-tertiary transition-transform duration-150", open ? "rotate-180" : ""].join(" ")}
+        />
+      </button>
+      {open ? (
+        <div className="px-3.5 pb-3.5">
+          <Textarea value={value} onChange={(e) => onChange(e.target.value)} className="min-h-[120px]" />
         </div>
-        <InlineNotice tone="info" icon="info">
-          {note}
-        </InlineNotice>
-      </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ExampleChips({ items }: { items: string[] }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((x) => (
+        <span
+          key={x}
+          className="inline-flex h-[26px] items-center rounded-full bg-gray-200 px-3 text-[13px] text-text-secondary"
+        >
+          {x}
+        </span>
+      ))}
     </div>
   );
 }

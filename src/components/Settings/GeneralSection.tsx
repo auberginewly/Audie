@@ -53,6 +53,16 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
           </div>
         ) : null}
+        <SettingRow
+          label="写作触发键"
+          description="留空 = 不启用写作。按它说出要点，生成的文本插入光标处"
+          control={
+            <HotkeyRecorder
+              value={settings.compose_hotkey}
+              onChange={(h: Hotkey) => update({ compose_hotkey: h })}
+            />
+          }
+        />
       </SettingSection>
 
       <SettingSection icon="globe" title="语言" cardStyle={{ overflow: "visible" }}>

@@ -72,12 +72,12 @@ pub struct Settings {
     /// `never | day | week | month | forever`; `never` skips recording entirely,
     /// the rest prune older rows. `normalize_settings` clamps anything else.
     pub history_retention: String,
-    /// 写作模式（compose）独立触发键。空串 = 未配置（写作键不注册）。文法同主 hotkey。
+    /// 写作模式（compose）独立触发键。空串 = 未配置 = 写作不启用（配了键即启用）。文法同主 hotkey。
     pub compose_hotkey: String,
-    /// 写作模式总开关。默认 false；开 + compose_hotkey 非空才注册写作键、走写作分支。
-    pub compose_enabled: bool,
-    /// 写作模式提示词的出厂默认（数据文件，源码零 prompt，同 enhance_prompt 经 include_str! 读）。
+    /// 写作模式提示词出厂默认（数据文件，源码零 prompt，同 enhance_prompt 经 include_str! 读）。
     pub compose_prompt: String,
+    /// 改写模式（rewrite）提示词出厂默认（数据文件）。改写按口述指令改写选中文字（逻辑见片2）。
+    pub rewrite_prompt: String,
     /// Per-provider LLM model the user chose, keyed by the front-end card id
     /// (deepseek / lmstudio / …). All LLM cards share one backend slot, so this
     /// lets 选用 restore each provider's own model instead of clearing it. Backend
@@ -108,8 +108,10 @@ impl Default for Settings {
             primary_language: String::new(),
             history_retention: DEFAULT_HISTORY_RETENTION.to_string(),
             compose_hotkey: String::new(),
-            compose_enabled: false,
             compose_prompt: include_str!("../prompts/compose_default.md")
+                .trim_end()
+                .to_string(),
+            rewrite_prompt: include_str!("../prompts/rewrite_default.md")
                 .trim_end()
                 .to_string(),
             llm_models: HashMap::new(),
@@ -135,8 +137,8 @@ pub struct SettingsPatch {
     pub primary_language: Option<String>,
     pub history_retention: Option<String>,
     pub compose_hotkey: Option<String>,
-    pub compose_enabled: Option<bool>,
     pub compose_prompt: Option<String>,
+    pub rewrite_prompt: Option<String>,
     pub llm_models: Option<HashMap<String, String>>,
 }
 
@@ -257,6 +259,9 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     }
     if settings.compose_prompt.trim().is_empty() {
         settings.compose_prompt = Settings::default().compose_prompt;
+    }
+    if settings.rewrite_prompt.trim().is_empty() {
+        settings.rewrite_prompt = Settings::default().rewrite_prompt;
     }
 
     settings
@@ -424,10 +429,9 @@ fn apply_hotkeys_if_changed(
         );
     }
 
-    // 写作键 (compose). Live only when enabled + non-empty; same revive logic.
-    let compose_changed = next.compose_hotkey != current.compose_hotkey
-        || next.compose_enabled != current.compose_enabled;
-    let compose_on = next.compose_enabled && !next.compose_hotkey.trim().is_empty();
+    // 写作键 (compose). A non-empty 写作键 = 启用; same revive logic.
+    let compose_changed = next.compose_hotkey != current.compose_hotkey;
+    let compose_on = !next.compose_hotkey.trim().is_empty();
     if compose_changed {
         platform.unregister_hotkey(app, HotkeySlot::Compose);
         if compose_on {
@@ -516,8 +520,8 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .compose_hotkey
             .map(|value| value.trim().to_string())
             .unwrap_or(current.compose_hotkey),
-        compose_enabled: patch.compose_enabled.unwrap_or(current.compose_enabled),
         compose_prompt: patch.compose_prompt.unwrap_or(current.compose_prompt),
+        rewrite_prompt: patch.rewrite_prompt.unwrap_or(current.rewrite_prompt),
         // Whole-map replace when provided (the front-end sends the merged map).
         llm_models: patch.llm_models.unwrap_or(current.llm_models),
     };
@@ -975,8 +979,8 @@ mod tests {
                 primary_language: None,
                 history_retention: None,
                 compose_hotkey: None,
-                compose_enabled: None,
                 compose_prompt: None,
+                rewrite_prompt: None,
                 llm_models: None,
             },
         )
@@ -1002,8 +1006,8 @@ mod tests {
                 primary_language: None,
                 history_retention: None,
                 compose_hotkey: None,
-                compose_enabled: None,
                 compose_prompt: None,
+                rewrite_prompt: None,
                 llm_models: None,
             },
         )
