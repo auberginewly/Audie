@@ -36,6 +36,11 @@ export function LocalLlmCard({
   ) : (
     <Badge tone="neutral">未配置</Badge>
   );
+  // Live models to offer for switching — exclude the already-active one (the header
+  // already shows it + 使用中), so a single-model running server adds no redundant row.
+  const otherModels = server
+    ? server.models.filter((model) => !(isActive && model === activeModel))
+    : [];
   return (
     <div className="flex flex-col gap-2 rounded-md bg-surface-card px-3.5 py-[13px]">
       <div className="flex items-center gap-3">
@@ -61,25 +66,18 @@ export function LocalLlmCard({
           配置
         </Button>
       </div>
-      {server && server.models.length ? (
+      {otherModels.length ? (
         <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2">
-          {server.models.map((model) => {
-            const inUse = isActive && model === activeModel;
-            return (
-              <div key={model} className="flex items-center gap-3">
-                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-secondary">
-                  {model}
-                </span>
-                {inUse ? (
-                  <Badge tone="accent">使用中</Badge>
-                ) : (
-                  <Button size="sm" variant="ghost" onClick={() => onPickModel(model)}>
-                    选用
-                  </Button>
-                )}
-              </div>
-            );
-          })}
+          {otherModels.map((model) => (
+            <div key={model} className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-secondary">
+                {model}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => onPickModel(model)}>
+                选用
+              </Button>
+            </div>
+          ))}
         </div>
       ) : null}
     </div>
