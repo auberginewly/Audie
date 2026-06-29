@@ -533,6 +533,13 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
     if settings.hotkey.trim().is_empty() {
         return Err(AppError::Internal("trigger key must not be empty".into()));
     }
+    // 润色/改写键与写作键不能相同（前端 HotkeyRecorder 已实时拦，这里兜底防手改 toml）。
+    let compose = settings.compose_hotkey.trim();
+    if !compose.is_empty() && compose == settings.hotkey.trim() {
+        return Err(AppError::Internal(
+            "写作触发键不能和润色/改写触发键相同".into(),
+        ));
+    }
     // `doubao_stream` is a real, selectable ASR choice (the model picker writes it)
     // but it's streaming-only, not a batch provider, so it stays out of
     // `available_asr_providers` / `list_asr_providers`. Accept it explicitly here.
@@ -1017,6 +1024,33 @@ mod tests {
         assert_eq!(parsed.hotkey, "F13");
         assert!(parsed.onboarding_completed);
         assert_eq!(parsed.asr_provider, DEFAULT_ASR_PROVIDER);
+    }
+
+    #[test]
+    fn validate_rejects_compose_hotkey_equal_to_primary() {
+        let settings = Settings {
+            hotkey: "F13".into(),
+            compose_hotkey: "F13".into(),
+            ..Settings::default()
+        };
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn validate_allows_distinct_or_empty_compose_hotkey() {
+        let distinct = Settings {
+            hotkey: "Fn".into(),
+            compose_hotkey: "F13".into(),
+            ..Settings::default()
+        };
+        assert!(validate_settings(&distinct).is_ok());
+
+        let empty_compose = Settings {
+            hotkey: "Fn".into(),
+            compose_hotkey: String::new(),
+            ..Settings::default()
+        };
+        assert!(validate_settings(&empty_compose).is_ok());
     }
 
     #[test]

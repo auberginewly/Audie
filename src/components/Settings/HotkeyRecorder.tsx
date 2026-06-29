@@ -17,13 +17,19 @@ const BOX =
 type HotkeyRecorderProps = {
   value: Hotkey;
   onChange: (next: Hotkey) => void;
+  // 另一个触发键 —— 录到相同的键时拒绝（润色/改写键与写作键不能相同）。
+  conflictWith?: string;
 };
 
-export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
+export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
   const active = useRef(false); // guards against a double stop (capture + blur)
+
+  // Off the listener effect's deps (like stopRef) so changing it doesn't resubscribe.
+  const conflictWithRef = useRef(conflictWith);
+  conflictWithRef.current = conflictWith;
 
   // End a capture. A new key goes through `onChange` → update_settings, which
   // unregisters the capture tap and registers the new trigger; cancel / same key
@@ -50,6 +56,12 @@ export function HotkeyRecorder({ value, onChange }: HotkeyRecorderProps) {
     if (!recording) return;
     ref.current?.focus(); // so clicking away (blur) cancels
     const captured = listen<string>("trigger-captured", (e) => {
+      // Reject a key already used by the other trigger — keep recording so the user
+      // can try another (same UX as a rejected system combo).
+      if (conflictWithRef.current && e.payload === conflictWithRef.current) {
+        setHint("不能和另一个触发键相同");
+        return;
+      }
       setHint(null);
       stopRef.current(e.payload);
     });

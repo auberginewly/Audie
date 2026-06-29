@@ -8,7 +8,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import { Button, Dialog, Icon, IconButton, Menu, Select, StatusMessage } from "../ui";
+import { Button, Dialog, Icon, IconButton, Menu, Segmented, Select, StatusMessage } from "../ui";
 import { useHistory } from "../../hooks/useHistory";
 import type { UseSettings } from "../../hooks/useSettings";
 import type { Settings } from "../../types/settings";
@@ -20,6 +20,15 @@ const RETENTION_OPTIONS: { id: Settings["history_retention"]; label: string }[] 
   { id: "week", label: "7 天" },
   { id: "month", label: "30 天" },
   { id: "forever", label: "永远" },
+];
+
+// 按处理模式筛选历史。"all" = 全部；其余匹配 entry.mode（kind=empty 的 mode=polish，归润色/全部）。
+type Filter = "all" | HistoryEntry["mode"];
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "全部" },
+  { id: "polish", label: "润色" },
+  { id: "rewrite", label: "改写" },
+  { id: "compose", label: "写作" },
 ];
 
 // Local-day bucketing for the section headers (今天 / 昨天 / MM月DD日).
@@ -156,6 +165,7 @@ export function HistoryScreen({ data }: { data: UseSettings }) {
   const [toast, setToast] = useState<string | null>(null);
   const [reenhancingId, setReenhancingId] = useState<number | null>(null);
   const [llmConfigured, setLlmConfigured] = useState(false);
+  const [filter, setFilter] = useState<Filter>("all");
 
   // Show the 重试 (re-enhance) button only when an LLM key is set — re-checked each
   // time the History screen mounts (switching tabs remounts it).
@@ -188,7 +198,8 @@ export function HistoryScreen({ data }: { data: UseSettings }) {
   };
   const onDelete = (id: number) => void remove(id);
 
-  const groups = groupByDay(entries);
+  const visible = filter === "all" ? entries : entries.filter((e) => e.mode === filter);
+  const groups = groupByDay(visible);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -241,6 +252,10 @@ export function HistoryScreen({ data }: { data: UseSettings }) {
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="mb-2 pl-1">
+          <Segmented value={filter} onChange={setFilter} options={FILTERS} />
         </div>
       </div>
 

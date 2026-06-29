@@ -43,16 +43,17 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
     <>
       <SettingSection icon="command" title="触发键">
         <SettingRow
-          label="触发键"
-          description="按一下开始录音，再按一下结束。点右侧框可改键"
+          label="润色 / 改写触发键"
+          description="按一下开始、再按一下结束。有选中文字走改写，没选中走润色"
           divider={false}
-          control={<HotkeyRecorder value={settings.hotkey} onChange={(h: Hotkey) => update({ hotkey: h })} />}
+          control={
+            <HotkeyRecorder
+              value={settings.hotkey}
+              onChange={(h: Hotkey) => update({ hotkey: h })}
+              conflictWith={settings.compose_hotkey}
+            />
+          }
         />
-        {settings.hotkey === "Fn" ? (
-          <div className="px-3.5 pb-3 text-xs text-warning-text">
-            提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
-          </div>
-        ) : null}
         <SettingRow
           label="写作触发键"
           description="留空 = 不启用写作。按它说出要点，生成的文本插入光标处"
@@ -60,9 +61,15 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             <HotkeyRecorder
               value={settings.compose_hotkey}
               onChange={(h: Hotkey) => update({ compose_hotkey: h })}
+              conflictWith={settings.hotkey}
             />
           }
         />
+        {settings.hotkey === "Fn" ? (
+          <div className="px-3.5 pb-3 text-xs text-warning-text">
+            提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
+          </div>
+        ) : null}
       </SettingSection>
 
       <SettingSection icon="globe" title="语言" cardStyle={{ overflow: "visible" }}>
