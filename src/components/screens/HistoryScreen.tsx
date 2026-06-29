@@ -113,8 +113,11 @@ function RewriteRawBody({ raw }: { raw: string }) {
       <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">
         {instruction}
       </div>
-      <div className="whitespace-pre-wrap border-l-2 border-border-strong pl-2.5 text-[13px] leading-5 text-text-secondary [overflow-wrap:anywhere]">
-        {source}
+      <div className="flex gap-2.5">
+        <div className="w-0.5 shrink-0 self-stretch rounded-full bg-border-strong" />
+        <div className="min-w-0 whitespace-pre-wrap text-[13px] leading-5 text-text-secondary [overflow-wrap:anywhere]">
+          {source}
+        </div>
       </div>
     </div>
   );
