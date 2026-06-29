@@ -1,21 +1,25 @@
-// 文本处理 — intent tabs (润色 / 改写 / 写作)，三卡统一成润色卡的结构：一个模型行
-// (三模式共享同一个 LLM，点击跳设置) + 一个可折叠的提示词编辑器。写作触发键在「通用」，
+// 文本处理 — intent tabs (润色 / 改写 / 写作)，三卡统一成润色卡的结构：模型行
+// (三模式共享同一个 LLM，点击跳设置) + 提示词折叠 + 说明折叠。写作触发键在「通用」，
 // 改写复用主触发键（靠选中态，逻辑见片2）。
 
 import { useState } from "react";
 
 import type { Settings } from "../../types/settings";
-import { Badge, Icon, InlineNotice, Segmented, Select, Switch, Textarea } from "../ui";
+import { Badge, Icon, Segmented, Select, Switch, Textarea } from "../ui";
 import { SettingRow } from "./SettingSection";
 
 type Mode = "polish" | "rewrite" | "compose";
 
-const REWRITE_EX = ["翻译成英文", "改得更正式", "精简一下", "修一下语法"];
-const COMPOSE_EX = ["写一封请假邮件", "写一条状态同步", "列个周报提纲"];
-
 // "" = follow system locale (backend resolves it). The backend prepends the picked
 // label as a line to the prompt, so these read naturally (e.g. "用户主要语言：中文").
 const LANGUAGES = ["中文", "English"];
+
+const POLISH_NOTE =
+  "开启后，Audie 会在插入前用你选的 AI 把口述整理干净 —— 去掉「嗯、那个」这类口水话、修正口误、补好标点和分段，你可以用上面的提示词调教它的风格。这一步是可选的：关掉就原样插入转写文字，更快、也不消耗 LLM 额度；万一润色失败，Audie 也会自动退回插入原文，不会丢内容。";
+const COMPOSE_NOTE =
+  "写作不插入逐字稿，而是把你的口述要点交给上面的模型生成成稿 —— 比如说「写一封请假邮件」「列个周报提纲」，光标处就会出现写好的文本。先到「通用 → 触发键」设一个写作触发键，按它说要点即可；生成失败会退回插入你的原话。";
+const REWRITE_NOTE =
+  "改写是选中已有文字后、按主触发键说出指令（比如「翻译成英文」「改得更正式」「精简一下」），AI 按指令改写选中内容并替换。功能即将支持。";
 
 type TextSectionProps = {
   settings: Settings;
@@ -25,7 +29,6 @@ type TextSectionProps = {
 
 export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionProps) {
   const [mode, setMode] = useState<Mode>("polish");
-  const [aboutOpen, setAboutOpen] = useState(false);
 
   return (
     <section className="mb-7">
@@ -76,26 +79,7 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
             }
           />
           <PromptDisclosure label="润色提示词" value={settings.enhance_prompt} onChange={(v) => update({ enhance_prompt: v })} />
-          <div className="relative">
-            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <button
-              onClick={() => setAboutOpen((o) => !o)}
-              className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
-            >
-              <Icon name="sparkles" size={14} className="shrink-0 text-text-tertiary" />
-              <span className="flex-1 text-[13px] text-text-secondary">AI 润色说明</span>
-              <Icon
-                name="chevron-down"
-                size={15}
-                className={["shrink-0 text-text-tertiary transition-transform duration-150", aboutOpen ? "rotate-180" : ""].join(" ")}
-              />
-            </button>
-            {aboutOpen ? (
-              <div className="px-3.5 pb-3.5 text-[13px] leading-[18px] text-text-secondary">
-                开启后，Audie 会在插入前用你选的 AI 把口述整理干净 —— 去掉「嗯、那个」这类口水话、修正口误、补好标点和分段，你可以用上面的提示词调教它的风格。这一步是可选的：关掉就原样插入转写文字，更快、也不消耗 LLM 额度；万一润色失败，Audie 也会自动退回插入原文，不会丢内容。
-              </div>
-            ) : null}
-          </div>
+          <NoteDisclosure label="AI 润色说明" text={POLISH_NOTE} />
         </div>
       ) : null}
 
@@ -103,16 +87,7 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
         <div className="overflow-hidden rounded-md bg-surface-card">
           <ModelRow label="改写模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} divider={false} />
           <PromptDisclosure label="改写提示词" value={settings.rewrite_prompt} onChange={(v) => update({ rewrite_prompt: v })} />
-          <div className="relative p-3.5">
-            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <div className="mb-2 text-xs text-text-tertiary">可以这样说</div>
-            <ExampleChips items={REWRITE_EX} />
-            <div className="mt-3">
-              <InlineNotice tone="info" icon="info">
-                改写功能即将支持：选中文字后按主触发键说出指令，用结果替换选中内容。
-              </InlineNotice>
-            </div>
-          </div>
+          <NoteDisclosure label="改写说明" text={REWRITE_NOTE} />
         </div>
       ) : null}
 
@@ -120,22 +95,7 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
         <div className="overflow-hidden rounded-md bg-surface-card">
           <ModelRow label="写作模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} divider={false} />
           <PromptDisclosure label="写作提示词" value={settings.compose_prompt} onChange={(v) => update({ compose_prompt: v })} />
-          <div className="relative p-3.5">
-            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
-            <div className="mb-2 text-xs text-text-tertiary">可以这样说</div>
-            <ExampleChips items={COMPOSE_EX} />
-            <div className="mt-3">
-              {settings.compose_hotkey ? (
-                <InlineNotice tone="info" icon="info">
-                  按「通用 → 触发键」里的写作触发键说要点 · 生成的文本插入光标处。
-                </InlineNotice>
-              ) : (
-                <InlineNotice tone="info" icon="info">
-                  写作未启用：到「通用 → 触发键」设一个写作触发键即可开启。
-                </InlineNotice>
-              )}
-            </div>
-          </div>
+          <NoteDisclosure label="写作说明" text={COMPOSE_NOTE} />
         </div>
       ) : null}
     </section>
@@ -203,17 +163,26 @@ function PromptDisclosure({ label, value, onChange }: { label: string; value: st
   );
 }
 
-function ExampleChips({ items }: { items: string[] }) {
+// 可折叠的功能说明（默认收起）。三卡共用，模仿原「AI 润色说明」那一行。
+function NoteDisclosure({ label, text }: { label: string; text: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex flex-wrap gap-2">
-      {items.map((x) => (
-        <span
-          key={x}
-          className="inline-flex h-[26px] items-center rounded-full bg-gray-200 px-3 text-[13px] text-text-secondary"
-        >
-          {x}
-        </span>
-      ))}
+    <div className="relative">
+      <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
+      >
+        <Icon name="sparkles" size={14} className="shrink-0 text-text-tertiary" />
+        <span className="flex-1 text-[13px] text-text-secondary">{label}</span>
+        <Icon
+          name="chevron-down"
+          size={15}
+          className={["shrink-0 text-text-tertiary transition-transform duration-150", open ? "rotate-180" : ""].join(" ")}
+        />
+      </button>
+      {open ? <div className="px-3.5 pb-3.5 text-[13px] leading-[18px] text-text-secondary">{text}</div> : null}
     </div>
   );
 }
