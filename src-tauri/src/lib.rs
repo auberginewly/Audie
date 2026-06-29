@@ -864,6 +864,14 @@ fn finish_pipeline_tail(
     // 润色 cleans the transcript (配了 LLM 才润色，没配静默纯转写); 写作 generates from it
     // (写作键按下即生成). On LLM failure both fall back to raw text + the amber "去设置"
     // toast (Failed). 没配 LLM 的润色走 Disabled —— 静默注入原文、无 toast。
+    // 改写：peek（不 take）start 时探到的选中文字 —— rewrite_text 之后还会 take 它拼 LLM
+    // 输入；这里先留一份，让 History 的「原文」既含口述指令、又含被改写的引用内容。
+    let rewrite_source = if matches!(mode, DictationMode::Rewrite) {
+        app.state::<RewriteSourceSlot>().lock().clone()
+    } else {
+        None
+    };
+
     let (text_to_inject, outcome) = match mode {
         DictationMode::Polish => maybe_enhance_text(app, enhance, text),
         DictationMode::Rewrite => rewrite_text(app, enhance, text),
@@ -874,11 +882,23 @@ fn finish_pipeline_tail(
     // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
     inject.inject(app, &text_to_inject)?;
 
-    // Record the dictation (Home/History): raw transcript always, enhanced kept
-    // whenever polishing actually ran (so both versions show). A history failure
-    // must not break injection.
+    // Record the dictation (Home/History): 原文 = the transcript, except 改写 records
+    // 指令 + 引用的选中内容 (rewrite_history_raw) so the entry shows what was rewritten.
+    // enhanced is kept whenever enhance/改写/写作 actually ran (so both boxes show). A
+    // history failure must not break injection.
     let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| text_to_inject.clone());
-    record_history(app, "success", mode.as_str(), text, enhanced, duration_ms);
+    let raw_to_record = match rewrite_source.as_deref() {
+        Some(source) if !source.trim().is_empty() => rewrite_history_raw(text, source),
+        _ => text.to_string(),
+    };
+    record_history(
+        app,
+        "success",
+        mode.as_str(),
+        &raw_to_record,
+        enhanced,
+        duration_ms,
+    );
     Ok(matches!(outcome, EnhanceOutcome::Failed))
 }
 
@@ -1006,6 +1026,13 @@ fn rewrite_text(
             (fallback.text_to_inject, EnhanceOutcome::Failed)
         }
     }
+}
+
+/// 改写历史的「原文」展示文本：口述指令 + 被改写的引用内容，分两段带小标题。History 原文框
+/// 用 `whitespace-pre-wrap` 渲染、换行保留，这样历史里看得出「对哪段内容、下了什么指令」。
+/// 与喂给 LLM 的 input（`原文/指令` 格式）不同——那个迁就 rewrite prompt，这个给人看。
+fn rewrite_history_raw(instruction: &str, source: &str) -> String {
+    format!("指令：{instruction}\n\n引用：\n{source}")
 }
 
 fn emit_enhance_progress(app: &AppHandle, phase: &'static str, message: &str) {
@@ -1844,5 +1871,12 @@ mod tests {
         assert!(requested.is_empty());
         assert!(!config.enhance_enabled);
         assert_eq!(config.openai_compatible_api_key, None);
+    }
+
+    #[test]
+    fn rewrite_history_raw_pairs_instruction_with_quoted_source() {
+        // 改写历史的「原文」= 口述指令 + 引用的选中内容（两段带小标题，给人看）。
+        let raw = rewrite_history_raw("翻译成英文", "你好世界");
+        assert_eq!(raw, "指令：翻译成英文\n\n引用：\n你好世界");
     }
 }
