@@ -37,7 +37,7 @@ pub struct HistoryEntry {
 /// 时间/字数/速度 from `spoken_*`, plus an 「AI 产出」 card from `ai_output_words`.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct UsageStats {
-    /// 纯口述听写（mode = "polish"）：字数 / 时长 / 次数。
+    /// 纯口述听写（mode = "polish"）：字数（= ASR 转写原文 raw_text 字符数，非润色后）/ 时长 / 次数。
     pub spoken_words: i64,
     pub spoken_duration_ms: i64,
     pub spoken_count: i64,
@@ -278,10 +278,13 @@ fn fetch_list(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<HistoryEntr
 
 fn fetch_stats(conn: &Connection) -> rusqlite::Result<UsageStats> {
     // Split spoken (口述听写, mode='polish') from AI output (写作/改写) so the Home
-    // 口述 cards aren't inflated by generated text. Over successful rows only.
+    // 口述 cards aren't inflated by generated text. 口述字数/速度 count the ASR transcript
+    // itself —— LENGTH(raw_text) (SQLite returns char count for TEXT), NOT the polished
+    // word_count —— so 速度 reflects what was actually spoken. AI 产出 keeps word_count
+    // (the generated / rewritten text). Over successful rows only.
     conn.query_row(
         "SELECT
-           COALESCE(SUM(CASE WHEN mode = 'polish' THEN word_count ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN mode = 'polish' THEN LENGTH(raw_text) ELSE 0 END), 0),
            COALESCE(SUM(CASE WHEN mode = 'polish' THEN duration_ms ELSE 0 END), 0),
            COALESCE(SUM(CASE WHEN mode = 'polish' THEN 1 ELSE 0 END), 0),
            COALESCE(SUM(CASE WHEN mode IN ('compose', 'rewrite') THEN word_count ELSE 0 END), 0)
@@ -359,7 +362,7 @@ mod tests {
     #[test]
     fn stats_split_spoken_vs_ai_output() {
         let conn = setup();
-        insert(&conn, 100, "success", "polish", "口述听写", 10, 3000);
+        insert(&conn, 100, "success", "polish", "口述听写", 999, 3000); // word_count 故意≠raw 字数
         insert(
             &conn,
             200,
@@ -373,8 +376,8 @@ mod tests {
         insert(&conn, 300, "error", "polish", "cancelled", 4, 0); // 非 success，排除
 
         let stats = fetch_stats(&conn).expect("stats");
-        // 口述卡只算 polish —— 不被写作生成的 200 字虚高
-        assert_eq!(stats.spoken_words, 10);
+        // 口述字数 = ASR 转写原文(raw_text)字符数 = LENGTH("口述听写") = 4，不是 word_count(999)
+        assert_eq!(stats.spoken_words, 4);
         assert_eq!(stats.spoken_duration_ms, 3000);
         assert_eq!(stats.spoken_count, 1);
         // AI 产出 = compose + rewrite 的字数
