@@ -110,17 +110,11 @@ function RewriteRawBody({ raw }: { raw: string }) {
   const source = raw.slice(idx + MARKER.length);
   return (
     <div className="space-y-2">
-      <div>
-        <div className="mb-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-aubergine-900">指令</div>
-        <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">
-          {instruction}
-        </div>
+      <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">
+        {instruction}
       </div>
-      <div className="border-l-2 border-border-strong pl-2.5">
-        <div className="mb-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-text-tertiary">引用</div>
-        <div className="whitespace-pre-wrap text-[13px] leading-5 text-text-secondary [overflow-wrap:anywhere]">
-          {source}
-        </div>
+      <div className="whitespace-pre-wrap border-l-2 border-border-strong pl-2.5 text-[13px] leading-5 text-text-secondary [overflow-wrap:anywhere]">
+        {source}
       </div>
     </div>
   );
