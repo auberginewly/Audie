@@ -35,6 +35,7 @@ import {
 import { ModelConfigDialog } from "./ModelConfigDialog";
 import { LocalAsrCard } from "./LocalAsrCard";
 import { NativeAsrCard } from "./NativeAsrCard";
+import { LocalLlmCard } from "./LocalLlmCard";
 
 type Source = "all" | "cloud" | "local";
 
@@ -359,37 +360,38 @@ export function ModelSection({
                 </>
               ) : (
                 <>
-                  {localLlmCards.map((m) => (
-                    <CloudModelCard
-                      key={m.id}
-                      m={m}
-                      subtitle={
-                        picked.llm === m.id
-                          ? (settings?.openai_compatible_model ?? "")
-                          : (settings?.llm_models?.[m.id] ?? "")
-                      }
-                      usable={usableModel(m)}
-                      inUse={picked.llm === m.id}
-                      onPick={() => onPickCloud(m)}
-                      onConfigure={() => setConfigModel(m)}
-                    />
-                  ))}
-                  {discovered.length ? (
-                    <>
-                      <div className="pl-1 pt-1 text-[11px] text-text-tertiary">
-                        运行中（点模型直接选用）
-                      </div>
-                      {discovered.map((server) => (
-                        <DiscoveredLlmCard
-                          key={server.provider}
-                          server={server}
-                          activeBaseUrlHost={activeBaseUrlHost}
-                          activeModel={activeModel}
-                          onPick={(model) => onPickDiscoveredLlm(server, model)}
-                        />
-                      ))}
-                    </>
-                  ) : null}
+                  {localLlmCards.map((m) => {
+                    // Merge the matched running server INTO the provider card (its live
+                    // models list inline), instead of a separate 运行中 row.
+                    const server = discovered.find((d) => d.provider === m.id) ?? null;
+                    return (
+                      <LocalLlmCard
+                        key={m.id}
+                        name={m.name}
+                        isActive={picked.llm === m.id}
+                        activeModel={settings?.openai_compatible_model ?? ""}
+                        storedModel={settings?.llm_models?.[m.id] ?? ""}
+                        usable={usableModel(m)}
+                        server={server}
+                        onPickStored={() => onPickCloud(m)}
+                        onPickModel={(model) => server && onPickDiscoveredLlm(server, model)}
+                        onConfigure={() => setConfigModel(m)}
+                      />
+                    );
+                  })}
+                  {/* Discovered servers with no catalog card (e.g. llama.cpp) have
+                      nothing to merge into — keep them standalone. */}
+                  {discovered
+                    .filter((d) => !localLlmCards.some((c) => c.id === d.provider))
+                    .map((server) => (
+                      <DiscoveredLlmCard
+                        key={server.provider}
+                        server={server}
+                        activeBaseUrlHost={activeBaseUrlHost}
+                        activeModel={activeModel}
+                        onPick={(model) => onPickDiscoveredLlm(server, model)}
+                      />
+                    ))}
                 </>
               )}
             </div>
