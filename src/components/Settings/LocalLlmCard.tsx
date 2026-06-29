@@ -27,8 +27,8 @@ export function LocalLlmCard({
   onConfigure: () => void;
 }) {
   const subtitle = isActive ? activeModel : storedModel;
-  // When the server is running, 已运行 + the live list carry the state — don't also
-  // show 未配置/已配置 (that's what felt redundant). 使用中 always wins.
+  // When the server is running, the inline live-model list carries that state — don't
+  // also show 未配置/已配置 (felt redundant). 使用中 always wins.
   const statusBadge = isActive ? (
     <Badge tone="accent">使用中</Badge>
   ) : server ? null : usable ? (
@@ -50,13 +50,8 @@ export function LocalLlmCard({
             {statusBadge}
             <Badge tone="neutral">本地</Badge>
           </div>
-          {subtitle || server ? (
-            <div className="mt-[3px] flex items-center gap-2">
-              {subtitle ? (
-                <span className="font-mono text-[11px] text-text-tertiary">{subtitle}</span>
-              ) : null}
-              {server ? <Badge tone="success">已运行</Badge> : null}
-            </div>
+          {subtitle ? (
+            <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{subtitle}</div>
           ) : null}
         </div>
         {/* Re-activate the stored model only when the server isn't detected running;
