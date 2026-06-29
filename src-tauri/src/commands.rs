@@ -44,7 +44,6 @@ pub struct Settings {
     /// resource_id, not model — left blank for it, see normalize note).
     pub asr_model: String,
     pub llm_provider: String,
-    pub enhance_enabled: bool,
     pub enhance_prompt: String,
     pub openai_compatible_base_url: String,
     pub openai_compatible_model: String,
@@ -94,7 +93,6 @@ impl Default for Settings {
             asr_provider: DEFAULT_ASR_PROVIDER.to_string(),
             asr_model: String::new(),
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
-            enhance_enabled: false,
             enhance_prompt: include_str!("../prompts/enhance_default.md")
                 .trim_end()
                 .to_string(),
@@ -125,7 +123,6 @@ pub struct SettingsPatch {
     pub asr_provider: Option<String>,
     pub asr_model: Option<String>,
     pub llm_provider: Option<String>,
-    pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_compatible_model: Option<String>,
@@ -466,7 +463,6 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .unwrap_or(current.asr_model),
         llm_provider: patch.llm_provider.unwrap_or(current.llm_provider),
-        enhance_enabled: patch.enhance_enabled.unwrap_or(current.enhance_enabled),
         enhance_prompt: patch.enhance_prompt.unwrap_or(current.enhance_prompt),
         openai_compatible_base_url: patch
             .openai_compatible_base_url
@@ -885,7 +881,6 @@ mod tests {
         // Empty = each adapter uses its built-in default model (no behavior change).
         assert_eq!(settings.asr_model, "");
         assert_eq!(settings.llm_provider, "openai_compatible");
-        assert!(!settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
         assert_eq!(settings.history_retention, DEFAULT_HISTORY_RETENTION);
         assert!(!settings.enhance_prompt.trim().is_empty());
@@ -967,7 +962,6 @@ mod tests {
                 asr_provider: None,
                 asr_model: Some("whisper-large-v3".into()),
                 llm_provider: None,
-                enhance_enabled: None,
                 enhance_prompt: None,
                 openai_compatible_base_url: None,
                 openai_compatible_model: None,
@@ -994,7 +988,6 @@ mod tests {
                 asr_provider: None,
                 asr_model: Some(String::new()),
                 llm_provider: None,
-                enhance_enabled: None,
                 enhance_prompt: None,
                 openai_compatible_base_url: None,
                 openai_compatible_model: None,
@@ -1019,10 +1012,10 @@ mod tests {
     fn partial_toml_fills_missing_fields_from_default() {
         // A hand-edited file with only a few keys must not error — container
         // serde(default) backfills the rest.
-        let parsed: Settings = toml::from_str("hotkey = \"F13\"\nenhance_enabled = true\n")
+        let parsed: Settings = toml::from_str("hotkey = \"F13\"\nonboarding_completed = true\n")
             .expect("deserialize partial");
         assert_eq!(parsed.hotkey, "F13");
-        assert!(parsed.enhance_enabled);
+        assert!(parsed.onboarding_completed);
         assert_eq!(parsed.asr_provider, DEFAULT_ASR_PROVIDER);
     }
 

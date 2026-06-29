@@ -60,8 +60,8 @@ type LastTakeSlot = Arc<parking_lot::Mutex<Option<LastTake>>>;
 /// mid-Processing bumps the counter, superseding the worker without racing it.
 type TakeGen = Arc<AtomicU64>;
 
-/// What to do with the current take. `Polish` cleans the transcript (default fn key,
-/// 受 enhance_enabled 开关); `Compose` generates prose from spoken points (写作键).
+/// What to do with the current take. `Polish` cleans the transcript (default fn key;
+/// 配了 LLM 才润色，没配纯转写); `Compose` generates prose from spoken points (写作键).
 /// 片2 adds `Rewrite`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DictationMode {
@@ -835,9 +835,9 @@ fn finish_pipeline_tail(
         },
     );
 
-    // 润色 cleans the transcript (受 enhance_enabled 开关); 写作 generates prose from
-    // it (写作键按下即生成). Both inject the result; on LLM failure both fall back to
-    // the raw text + the amber "去设置" toast (Failed) so the user checks their config.
+    // 润色 cleans the transcript (配了 LLM 才润色，没配静默纯转写); 写作 generates from it
+    // (写作键按下即生成). On LLM failure both fall back to raw text + the amber "去设置"
+    // toast (Failed). 没配 LLM 的润色走 Disabled —— 静默注入原文、无 toast。
     let (text_to_inject, outcome) = match mode {
         DictationMode::Polish => maybe_enhance_text(app, enhance, text),
         DictationMode::Compose => compose_text(app, enhance, text),
@@ -930,9 +930,9 @@ fn maybe_enhance_text(
 }
 
 /// 写作 compose: generate prose from the spoken points via the compose prompt
-/// (生成立场, `enhance_enabled` forced true). Mirrors `maybe_enhance_text` but always
-/// runs the LLM (写作键按下即生成, not gated on the 润色 toggle). On failure, inject the
-/// raw points + Failed so the "去设置" toast surfaces (片1 reuses 润色's fallback text).
+/// (生成立场; compose_config sets force_enabled=true). Mirrors `maybe_enhance_text` but
+/// always runs the LLM (写作键按下即生成). On failure, inject the raw points + Failed so
+/// the "去设置" toast surfaces (片1 reuses 润色's fallback text).
 fn compose_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> (String, EnhanceOutcome) {
     let config = compose_config(app);
     emit_enhance_progress(app, "started", "写作中…");
@@ -1102,7 +1102,8 @@ fn enhance_config(app: &AppHandle) -> EnhanceConfig {
 
     enhance_config_from_settings(
         settings.llm_provider,
-        settings.enhance_enabled,
+        // polish：不强制；启用与否由「配没配 LLM」决定（见 enhance_config_from_settings）。
+        false,
         enhance_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
@@ -1111,9 +1112,9 @@ fn enhance_config(app: &AppHandle) -> EnhanceConfig {
     )
 }
 
-/// Enhance config for the History 重试 — same prompt/provider, but the LLM key is
-/// read regardless of the auto-enhance toggle (the user explicitly asked to polish
-/// this entry). `enhance_enabled` is forced true so the key is fetched.
+/// Enhance config for the History 重试 — same prompt/provider. `force_enabled` is true
+/// (the user explicitly asked to polish this entry), so it runs even when 润色 wouldn't
+/// auto-trigger; a missing key then surfaces as a failure rather than silence.
 fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
     let settings = commands::load_settings(app);
     let enhance_prompt = enhance_prompt_with_language(app, &settings);
@@ -1131,7 +1132,7 @@ fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
 }
 
 /// 写作 config: same LLM provider/key as 润色, but the compose prompt (生成立场) and
-/// `enhance_enabled` forced true (写作键按下即生成, regardless of the 润色 toggle).
+/// `force_enabled` true (写作键按下即生成；没配 key 则失败兜底，不静默).
 fn compose_config(app: &AppHandle) -> EnhanceConfig {
     let settings = commands::load_settings(app);
     let compose_prompt = prepend_language(app, &settings, &settings.compose_prompt);
@@ -1150,7 +1151,7 @@ fn compose_config(app: &AppHandle) -> EnhanceConfig {
 
 fn enhance_config_from_settings(
     llm_provider: String,
-    enhance_enabled: bool,
+    force_enabled: bool,
     enhance_prompt: String,
     openai_compatible_base_url: String,
     openai_compatible_model: String,
@@ -1161,11 +1162,20 @@ fn enhance_config_from_settings(
     // provider (Ollama / LM Studio) → no key; build_provider allows that for
     // localhost endpoints.
     let openai_compatible_api_key =
-        if enhance_enabled && llm_provider == "openai_compatible" && !llm_api_key_id.is_empty() {
+        if llm_provider == "openai_compatible" && !llm_api_key_id.is_empty() {
             read_secret(&llm_api_key_id)
         } else {
             None
         };
+
+    // 润色 enablement now mirrors 写作's "配了就用": on when the LLM is configured —
+    // a key present, or a local endpoint that needs none. There's no toggle anymore;
+    // unconfigured = silent passthrough (Disabled, no 去设置 toast on the hot path).
+    // `force_enabled` is set by compose / History 重试 (explicit triggers): they run
+    // even unconfigured so a missing key surfaces as a failure instead of silence.
+    let enhance_enabled = force_enabled
+        || openai_compatible_api_key.is_some()
+        || crate::llm::is_local_endpoint(&openai_compatible_base_url);
 
     EnhanceConfig {
         llm_provider,
@@ -1627,34 +1637,14 @@ mod tests {
     }
 
     #[test]
-    fn disabled_enhance_config_reads_no_llm_key() {
+    fn polish_enabled_when_cloud_key_present() {
         let mut requested = Vec::new();
 
+        // 润色 (force=false): reads the active provider's key to derive enablement;
+        // a present cloud key → enabled.
         let config = enhance_config_from_settings(
             "openai_compatible".into(),
             false,
-            "prompt".into(),
-            "https://api.example.com/v1".into(),
-            "model".into(),
-            "deepseek_api_key".into(),
-            |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            },
-        );
-
-        assert!(requested.is_empty());
-        assert_eq!(config.openai_compatible_api_key, None);
-    }
-
-    #[test]
-    fn enabled_openai_compatible_enhance_config_reads_active_provider_key() {
-        let mut requested = Vec::new();
-
-        // 4b: reads the per-provider key id from settings, not a hardcoded one.
-        let config = enhance_config_from_settings(
-            "openai_compatible".into(),
-            true,
             "prompt".into(),
             "https://api.deepseek.com/v1".into(),
             "model".into(),
@@ -1666,6 +1656,7 @@ mod tests {
         );
 
         assert_eq!(requested, vec!["deepseek_api_key"]);
+        assert!(config.enhance_enabled);
         assert_eq!(
             config.openai_compatible_api_key.as_deref(),
             Some("deepseek_api_key-value")
@@ -1673,13 +1664,31 @@ mod tests {
     }
 
     #[test]
-    fn empty_llm_key_id_reads_no_key_for_local_provider() {
-        let mut requested = Vec::new();
-
-        // Ollama / LM Studio: empty key id = key-optional local provider, no read.
+    fn polish_disabled_when_cloud_key_missing() {
+        // 润色 (force=false): no cloud key configured → disabled = 静默纯转写, no toast.
         let config = enhance_config_from_settings(
             "openai_compatible".into(),
-            true,
+            false,
+            "prompt".into(),
+            "https://api.deepseek.com/v1".into(),
+            "model".into(),
+            "deepseek_api_key".into(),
+            |_| None,
+        );
+
+        assert!(!config.enhance_enabled);
+        assert_eq!(config.openai_compatible_api_key, None);
+    }
+
+    #[test]
+    fn polish_enabled_for_local_endpoint_without_key() {
+        let mut requested = Vec::new();
+
+        // Ollama / LM Studio: a local endpoint needs no key, so 润色 is enabled even
+        // with force=false and an empty key id (no read happens).
+        let config = enhance_config_from_settings(
+            "openai_compatible".into(),
+            false,
             "prompt".into(),
             "http://localhost:11434/v1".into(),
             "qwen2.5".into(),
@@ -1691,6 +1700,25 @@ mod tests {
         );
 
         assert!(requested.is_empty());
+        assert!(config.enhance_enabled);
+        assert_eq!(config.openai_compatible_api_key, None);
+    }
+
+    #[test]
+    fn forced_enable_stays_on_without_key() {
+        // compose / History 重试 (force=true): enabled even unconfigured, so a missing
+        // key surfaces as a failure (fallback) instead of silent passthrough.
+        let config = enhance_config_from_settings(
+            "openai_compatible".into(),
+            true,
+            "prompt".into(),
+            "https://api.deepseek.com/v1".into(),
+            "model".into(),
+            "deepseek_api_key".into(),
+            |_| None,
+        );
+
+        assert!(config.enhance_enabled);
         assert_eq!(config.openai_compatible_api_key, None);
     }
 }
