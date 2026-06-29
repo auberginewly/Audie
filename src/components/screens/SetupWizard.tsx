@@ -22,7 +22,7 @@ import { Badge, Button, Icon, IconButton, InlineNotice, type IconName } from "..
 import { openExternal } from "../../lib/open";
 import { HotkeyRecorder } from "../Settings/HotkeyRecorder";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
-import { MODELS, asrModelReady, asrProviderForModelId, llmPickPatch, type ModelMeta } from "../Settings/models";
+import { MODELS, asrProviderForModelId, llmPickPatch, type ModelMeta } from "../Settings/models";
 
 type StepId = "welcome" | "permissions" | "hotkey" | "asr" | "llm" | "test";
 
@@ -319,22 +319,9 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
     perms.microphone.granted === true &&
     perms.accessibility.granted === true &&
     perms.inputMonitoring.granted === true;
-  // ASR readiness: cloud models need their key configured; keyless local ones are
-  // ready by their own signal (macOS native → Speech auth; Whisper → a model present),
-  // so onboarding can complete with a local ASR, not only a key-bearing cloud one.
-  const whisperModelPresent =
-    (data.settings?.whisper_cpp_model_path ?? "").trim() !== "" ||
-    (data.settings?.selected_local_asr_model ?? "").trim() !== "";
-  const asrReady = (mid: string) =>
-    asrModelReady(mid, {
-      configured: configuredModels.configured,
-      speechGranted: perms.speechRecognition.granted === true,
-      whisperModelPresent,
-    });
-  // macOS native is pickable before its OS auth (we prompt right after picking);
-  // everything else is pickable exactly when ready.
-  const asrPickable = (mid: string) => mid === "macos-native" || asrReady(mid);
-  const asrDone = !!pickedAsr && asrReady(pickedAsr);
+  // ASR step needs a picked model whose key is actually configured (real
+  // has_secret), so onboarding can't "complete" with an unusable transcriber.
+  const asrDone = !!pickedAsr && configuredModels.configured(pickedAsr);
   // A step is "done" when its own requirement is actually met (not merely passed),
   // so the sidebar checks each step the moment it's complete — current step included.
   const doneMap: Record<string, boolean> = {
@@ -438,21 +425,11 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         <StepHeader title="选择听写模型" desc="Audie 用这个模型把你的语音转写成文字。至少选用一个才能继续。" tag="必选" />
         <div className="flex flex-col gap-2">
           {asrModels.map((m) => (
-            <WizModelRow key={m.id} m={m} configured={asrPickable(m.id)} inUse={pickedAsr === m.id} onPick={() => pickAsr(m)} onConfigure={() => setConfigModel(m)} />
+            <WizModelRow key={m.id} m={m} configured={configuredModels.configured(m.id)} inUse={pickedAsr === m.id} onPick={() => pickAsr(m)} onConfigure={() => setConfigModel(m)} />
           ))}
         </div>
-        {pickedAsr === "macos-native" && perms.speechRecognition.granted !== true ? (
-          <div className="mt-3">
-            <PermItem
-              icon="audio-lines"
-              name="语音识别"
-              desc="macOS 本机听写需要语音识别权限（离线、本机处理）。"
-              state={perms.speechRecognition}
-            />
-          </div>
-        ) : null}
         {!asrDone ? (
-          <div className="mt-3 text-xs text-text-tertiary">选用一个听写模型后继续：云端模型先「配置」填 API key；macOS 本机听写点上方「授权」开启语音识别。</div>
+          <div className="mt-3 text-xs text-text-tertiary">选用一个已配置的听写模型后继续；未配置的先点「配置」填入 API key。</div>
         ) : null}
       </>
     );

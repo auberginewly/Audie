@@ -6,7 +6,7 @@ import { useSettings } from "./hooks/useSettings";
 import { usePermissions } from "./hooks/usePermissions";
 import { useConfiguredModels } from "./hooks/useConfiguredModels";
 import { useRecordingStore } from "./store/recording";
-import { asrModelReady, modelIdForAsrProvider } from "./components/Settings/models";
+import { modelIdForAsrProvider } from "./components/Settings/models";
 import type { Settings } from "./types/settings";
 import { AppShell, AppSidebar, UpdateButton, type UpdateLabels, type UpdateState } from "./components/shell";
 import { Button, Dialog } from "./components/ui";
@@ -39,14 +39,7 @@ function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; o
       perms.accessibility.granted === true &&
       perms.inputMonitoring.granted === true,
     !!settings?.hotkey,
-    !!settings &&
-      asrModelReady(modelIdForAsrProvider(settings.asr_provider), {
-        configured,
-        speechGranted: perms.speechRecognition.granted === true,
-        whisperModelPresent:
-          (settings.whisper_cpp_model_path ?? "").trim() !== "" ||
-          (settings.selected_local_asr_model ?? "").trim() !== "",
-      }),
+    !!settings && configured(modelIdForAsrProvider(settings.asr_provider)),
     configured("deepseek"), // 润色: the openai_compatible LLM slot's key
     everSucceeded, // 试一下: a dictation has succeeded this session
   ];

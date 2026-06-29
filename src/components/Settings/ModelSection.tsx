@@ -2,23 +2,18 @@
 // grouped 云端 / 本地. Cloud cards map to the real provider enum; configured-status
 // is real (keychain has_secret via useConfiguredModels).
 //
-// 本地 is install-state-driven (model system v2 · Phase 3):
-//  - ASR: the backend ModelManager catalog (useModelStore) renders one row per
-//    model with its on-disk state — 未下载(可下载/进度/取消) / 已下载(选用/删除) / 使用中.
-//    Selecting a row activates whisper_cpp + that model. No static placeholder.
-//  - LLM: provider cards (Ollama / LM Studio) with 配置 (endpoint/model + per-RAM
-//    recommendations) so it's always configurable, PLUS a zero-click probe
-//    (discover_local_llm) listing any running server's live models for one-click
-//    选用 below them — NO scan button.
+// 本地 is LLM-only: provider cards (Ollama / LM Studio) with 配置 (endpoint/model +
+// per-RAM recommendations), plus a zero-click probe (discover_local_llm) that merges
+// any running server's live models into its card for one-click 选用 — NO scan button.
+// Local ASR was removed (whisper.cpp / model downloader / macOS native): ASR is
+// cloud-only now, so the 本地 group never shows for the ASR tab.
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { UseSettings } from "../../hooks/useSettings";
 import { useConfiguredModels } from "../../hooks/useConfiguredModels";
-import { usePermissions } from "../../hooks/usePermissions";
-import { useModelStore } from "../../stores/modelStore";
-import { DiscoveredLocalLlmSchema, type DiscoveredLocalLlm, type ModelInfo } from "../../types/settings";
+import { DiscoveredLocalLlmSchema, type DiscoveredLocalLlm } from "../../types/settings";
 import { Badge, Button, Icon, Segmented } from "../ui";
 import {
   MODELS,
@@ -33,8 +28,6 @@ import {
   type ModelType,
 } from "./models";
 import { ModelConfigDialog } from "./ModelConfigDialog";
-import { LocalAsrCard } from "./LocalAsrCard";
-import { NativeAsrCard } from "./NativeAsrCard";
 import { LocalLlmCard } from "./LocalLlmCard";
 
 type Source = "all" | "cloud" | "local";
@@ -61,8 +54,7 @@ function CloudModelCard({
   onPick: () => void;
   onConfigure: () => void;
 }) {
-  // Status badge: 使用中 (picked) > 已配置 (usable: cloud key stored OR key-optional
-  // local — both are ready to pick) > 未配置.
+  // Status badge: 使用中 (picked) > 已配置 (usable: cloud key stored) > 未配置.
   const statusBadge = inUse ? (
     <Badge tone="accent">使用中</Badge>
   ) : usable ? (
@@ -99,9 +91,9 @@ function CloudModelCard({
   );
 }
 
-// A single auto-detected local-LLM server row: its live models with one-click 选用.
-// 使用中 = this server's base_url is the active openai_compatible endpoint AND the
-// active model is this one. No key, no config dialog (localhost, key-optional).
+// A discovered local-LLM server with no catalog card (e.g. llama.cpp): its live
+// models with one-click 选用. Card-backed servers (Ollama / LM Studio) merge into
+// their own card instead (LocalLlmCard).
 function DiscoveredLlmCard({
   server,
   activeBaseUrlHost,
@@ -162,24 +154,9 @@ export function ModelSection({
   // Real "已配置" state from keychain has_secret (no-read presence check), refreshed
   // on focus + after the config dialog saves a key.
   const { configured, refresh } = useConfiguredModels();
-  const perms = usePermissions();
 
-  // Local-ASR catalog + on-disk state, auto-refreshed from the P2 download events.
-  const models = useModelStore((s) => s.models);
-  const currentLocalAsr = useModelStore((s) => s.currentModel);
-  const downloadProgress = useModelStore((s) => s.downloadProgress);
-  const init = useModelStore((s) => s.init);
-  const selectModel = useModelStore((s) => s.selectModel);
-  const downloadModel = useModelStore((s) => s.downloadModel);
-  const cancelDownload = useModelStore((s) => s.cancelDownload);
-  const deleteModel = useModelStore((s) => s.deleteModel);
-
-  useEffect(() => {
-    init();
-  }, [init]);
-
-  // Zero-click local-LLM auto-detect (A2): probe known local servers on mount and
-  // re-probe when the LLM tab opens, so the 本地 LLM list fills itself — NO button.
+  // Zero-click local-LLM auto-detect (A2): probe known local servers when the LLM tab
+  // opens, so the 本地 LLM list fills itself — NO button.
   const [discovered, setDiscovered] = useState<DiscoveredLocalLlm[]>([]);
   useEffect(() => {
     if (type !== "llm") return;
@@ -214,57 +191,32 @@ export function ModelSection({
     }
   };
 
-  // Pick a downloaded local-ASR model: activate whisper_cpp + set the selection.
-  const onPickLocalAsr = async (modelId: string) => {
-    await selectModel(modelId);
-    if (settings?.asr_provider !== "whisper_cpp") update({ asr_provider: "whisper_cpp" });
-  };
-
-  // Pick the manual-path whisper card: activate whisper_cpp and clear any catalog
-  // selection so the backend resolves the manual whisper_cpp_model_path, not a model.
-  const onPickManualLocalAsr = async () => {
-    await selectModel("");
-    update({ asr_provider: "whisper_cpp", asr_model: "" });
-  };
-
   const onPickDiscoveredLlm = (server: DiscoveredLocalLlm, model: string) => {
     if (settings) update(discoveredLlmPickPatch(server.provider, server.base_url, model, settings));
   };
 
-  // Cloud cards only — 本地 is rendered by the install-state list / probe below.
   const cloudCards = useMemo(
     () => MODELS.filter((m) => m.type === type && m.source === "cloud"),
     [type],
   );
-  // The whisper-local card stays as the 本地 ASR manual-path escape hatch (config
-  // dialog → whisper_cpp_model_path) alongside the install-state catalog list, for
-  // a model file outside the managed models dir.
-  const manualLocalAsr = useMemo(
-    () => (type === "asr" ? (MODELS.find((m) => m.id === "whisper-local") ?? null) : null),
-    [type],
-  );
   // Local LLM provider cards (Ollama / LM Studio): always rendered so the user can
   // 配置 endpoint/model (and see the per-RAM recommendations) even when no server is
-  // running yet. The auto-detected DiscoveredLlmCard list shows below them.
+  // running yet. The auto-detected running models merge into each card.
   const localLlmCards = useMemo(
     () => (type === "llm" ? MODELS.filter((m) => m.type === "llm" && m.source === "local") : []),
     [type],
   );
 
   const usableModel = (m: ModelMeta) => {
-    if (m.type === "asr") return configured(m.id) || isKeyOptionalModel(m.id);
+    if (m.type === "asr") return configured(m.id);
     if (!settings) return false;
     return llmHasStoredModel(m.id, settings) && (isKeyOptionalModel(m.id) || configured(m.id));
   };
 
-  // Whether the 本地 group has anything to show for the current type.
-  const localAsrModels = type === "asr" ? models : [];
+  // 本地 is LLM-only now (local ASR removed).
   const showCloud = source === "all" || source === "cloud";
   const showLocal = source === "all" || source === "local";
-  const localHasContent =
-    type === "asr"
-      ? localAsrModels.length > 0 || manualLocalAsr !== null
-      : localLlmCards.length > 0 || discovered.length > 0;
+  const localHasContent = type === "llm" && (localLlmCards.length > 0 || discovered.length > 0);
   const anyContent = (showCloud && cloudCards.length > 0) || (showLocal && localHasContent);
 
   return (
@@ -323,77 +275,38 @@ export function ModelSection({
           {showLocal && localHasContent ? (
             <div className="flex flex-col gap-2">
               <GroupLabel>本地</GroupLabel>
-              {type === "asr" ? (
-                <>
-                  {localAsrModels.map((m: ModelInfo) => (
-                    <LocalAsrCard
-                      key={m.id}
-                      model={m}
-                      inUse={currentLocalAsr === m.id && settings?.asr_provider === "whisper_cpp"}
-                      progress={downloadProgress[m.id]?.percentage}
-                      onSelect={() => onPickLocalAsr(m.id)}
-                      onDownload={() => downloadModel(m.id)}
-                      onCancel={() => cancelDownload(m.id)}
-                      onDelete={() => deleteModel(m.id)}
-                    />
-                  ))}
-                  {/* Manual-path escape hatch: point whisper.cpp at a .bin outside the
-                      managed models dir. 使用中 when whisper_cpp is active with NO
-                      catalog selection (the install-state rows own that case). */}
-                  {manualLocalAsr ? (
-                    <CloudModelCard
-                      m={manualLocalAsr}
-                      subtitle={settings?.whisper_cpp_model_path ?? manualLocalAsr.model}
-                      usable={(settings?.whisper_cpp_model_path ?? "").trim() !== ""}
-                      inUse={settings?.asr_provider === "whisper_cpp" && currentLocalAsr === ""}
-                      onPick={onPickManualLocalAsr}
-                      onConfigure={() => setConfigModel(manualLocalAsr)}
-                    />
-                  ) : null}
-                  {/* macOS 本机听写: keyless built-in provider; selectable + Speech
-                      auth row. Re-wired here after P4 added the backend but not the card. */}
-                  <NativeAsrCard
-                    inUse={settings?.asr_provider === "macos_native"}
-                    speech={perms.speechRecognition}
-                    onPick={() => update({ asr_provider: "macos_native", asr_model: "" })}
+              {localLlmCards.map((m) => {
+                // Merge the matched running server INTO the provider card (its live
+                // models list inline), instead of a separate 运行中 row.
+                const server = discovered.find((d) => d.provider === m.id) ?? null;
+                return (
+                  <LocalLlmCard
+                    key={m.id}
+                    name={m.name}
+                    isActive={picked.llm === m.id}
+                    activeModel={settings?.openai_compatible_model ?? ""}
+                    storedModel={settings?.llm_models?.[m.id] ?? ""}
+                    usable={usableModel(m)}
+                    server={server}
+                    onPickStored={() => onPickCloud(m)}
+                    onPickModel={(model) => server && onPickDiscoveredLlm(server, model)}
+                    onConfigure={() => setConfigModel(m)}
                   />
-                </>
-              ) : (
-                <>
-                  {localLlmCards.map((m) => {
-                    // Merge the matched running server INTO the provider card (its live
-                    // models list inline), instead of a separate 运行中 row.
-                    const server = discovered.find((d) => d.provider === m.id) ?? null;
-                    return (
-                      <LocalLlmCard
-                        key={m.id}
-                        name={m.name}
-                        isActive={picked.llm === m.id}
-                        activeModel={settings?.openai_compatible_model ?? ""}
-                        storedModel={settings?.llm_models?.[m.id] ?? ""}
-                        usable={usableModel(m)}
-                        server={server}
-                        onPickStored={() => onPickCloud(m)}
-                        onPickModel={(model) => server && onPickDiscoveredLlm(server, model)}
-                        onConfigure={() => setConfigModel(m)}
-                      />
-                    );
-                  })}
-                  {/* Discovered servers with no catalog card (e.g. llama.cpp) have
-                      nothing to merge into — keep them standalone. */}
-                  {discovered
-                    .filter((d) => !localLlmCards.some((c) => c.id === d.provider))
-                    .map((server) => (
-                      <DiscoveredLlmCard
-                        key={server.provider}
-                        server={server}
-                        activeBaseUrlHost={activeBaseUrlHost}
-                        activeModel={activeModel}
-                        onPick={(model) => onPickDiscoveredLlm(server, model)}
-                      />
-                    ))}
-                </>
-              )}
+                );
+              })}
+              {/* Discovered servers with no catalog card (e.g. llama.cpp) have
+                  nothing to merge into — keep them standalone. */}
+              {discovered
+                .filter((d) => !localLlmCards.some((c) => c.id === d.provider))
+                .map((server) => (
+                  <DiscoveredLlmCard
+                    key={server.provider}
+                    server={server}
+                    activeBaseUrlHost={activeBaseUrlHost}
+                    activeModel={activeModel}
+                    onPick={(model) => onPickDiscoveredLlm(server, model)}
+                  />
+                ))}
             </div>
           ) : null}
         </div>
@@ -406,7 +319,7 @@ export function ModelSection({
           <span className="text-xs text-text-tertiary">
             {source === "local"
               ? type === "asr"
-                ? "下载一个 Whisper 模型，或把 .bin 放进模型目录。"
+                ? "本地 ASR 暂不支持，请使用云端 ASR。"
                 : "启动 Ollama / LM Studio 后会自动出现在这里。"
               : "试试切换类型或来源。"}
           </span>

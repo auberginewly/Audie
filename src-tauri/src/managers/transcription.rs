@@ -8,11 +8,8 @@ use crate::asr::aliyun::client::AliyunProvider;
 use crate::asr::doubao::client::{DoubaoAuth, DoubaoStreamConfig, DoubaoStreamingProvider};
 use crate::asr::glm::GlmProvider;
 use crate::asr::groq::GroqProvider;
-#[cfg(target_os = "macos")]
-use crate::asr::macos_native::MacosNativeProvider;
 use crate::asr::openai::OpenAiProvider;
 use crate::asr::stepfun::client::StepFunProvider;
-use crate::asr::whisper_cpp::WhisperCppProvider;
 use crate::asr::{AsrProvider, AudioChunkStream, AudioData, TranscriptStream};
 use crate::error::{AppError, AppResult};
 
@@ -25,7 +22,6 @@ pub struct TranscriptionConfig {
     pub asr_model: String,
     pub groq_api_key: Option<String>,
     pub openai_api_key: Option<String>,
-    pub whisper_cpp_model_path: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
     pub doubao_app_id: Option<String>,
@@ -90,15 +86,6 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
             )?,
             config.asr_model.clone(),
         ))),
-        "whisper_cpp" => match config
-            .whisper_cpp_model_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            Some(model_path) => Ok(Box::new(WhisperCppProvider::new(model_path.to_string()))),
-            None => Err(AppError::Device("未配置本地 Whisper 模型".into())),
-        },
         "doubao_stream" => Ok(Box::new(DoubaoStreamingProvider::new(
             doubao_stream_config(config)?,
         ))),
@@ -120,11 +107,6 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
             )?,
             config.asr_model.clone(),
         ))),
-        // macOS on-device dictation: keyless, OS-managed model. The authorization /
-        // on-device-availability guards live in the provider's transcribe (they need
-        // a live recognizer), so construction here is unconditional on macOS.
-        #[cfg(target_os = "macos")]
-        "macos_native" => Ok(Box::new(MacosNativeProvider::new())),
         other => Err(AppError::Internal(format!(
             "unsupported ASR provider: {other}"
         ))),
@@ -158,7 +140,6 @@ mod tests {
             asr_model: String::new(),
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
-            whisper_cpp_model_path: None,
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
@@ -184,7 +165,6 @@ mod tests {
             asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: Some("openai-key".into()),
-            whisper_cpp_model_path: None,
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
@@ -204,65 +184,6 @@ mod tests {
     }
 
     #[test]
-    fn whisper_cpp_without_model_path_is_device_error() {
-        let config = TranscriptionConfig {
-            asr_provider: "whisper_cpp".into(),
-            asr_model: String::new(),
-            groq_api_key: None,
-            openai_api_key: None,
-            whisper_cpp_model_path: None,
-            doubao_endpoint: None,
-            doubao_resource_id: None,
-            doubao_app_id: None,
-            doubao_api_key_or_access_token: None,
-            glm_api_key: None,
-            aliyun_api_key: None,
-            stepfun_api_key: None,
-        };
-
-        let err = match build_provider(&config) {
-            Ok(_) => panic!("expected WhisperCpp without model path to fail"),
-            Err(err) => err,
-        };
-
-        assert!(matches!(err, AppError::Device(_)));
-        assert_eq!(err.message(), "未配置本地 Whisper 模型");
-    }
-
-    #[test]
-    fn whisper_cpp_with_missing_model_path_is_device_error() {
-        // whisper_cpp now does real inference; a configured-but-missing model file
-        // is a recoverable user mistake (Device), not an engine fault. build_provider
-        // succeeds (path is non-empty); the missing file surfaces at transcribe time.
-        let config = TranscriptionConfig {
-            asr_provider: "whisper_cpp".into(),
-            asr_model: String::new(),
-            groq_api_key: None,
-            openai_api_key: None,
-            whisper_cpp_model_path: Some("/nonexistent/ggml-base.bin".into()),
-            doubao_endpoint: None,
-            doubao_resource_id: None,
-            doubao_app_id: None,
-            doubao_api_key_or_access_token: None,
-            glm_api_key: None,
-            aliyun_api_key: None,
-            stepfun_api_key: None,
-        };
-
-        let provider = build_provider(&config).expect("non-empty model path must build");
-        let err = provider
-            .transcribe(&AudioData {
-                samples: vec![0.0],
-                sample_rate: 16_000,
-                channels: 1,
-            })
-            .expect_err("missing model file must fail");
-
-        assert!(matches!(err, AppError::Device(_)));
-        assert!(err.message().contains("模型文件不存在"));
-    }
-
-    #[test]
     fn groq_with_selected_model_builds_provider() {
         // A non-empty asr_model must not break construction (model flows into the
         // adapter); with a key present, build_provider succeeds.
@@ -271,7 +192,6 @@ mod tests {
             asr_model: "whisper-large-v3".into(),
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
-            whisper_cpp_model_path: None,
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
@@ -297,7 +217,6 @@ mod tests {
             asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: None,
-            whisper_cpp_model_path: None,
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
@@ -332,7 +251,6 @@ mod tests {
             asr_model: String::new(),
             groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
-            whisper_cpp_model_path: None,
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
@@ -358,7 +276,6 @@ mod tests {
             asr_model: String::new(),
             groq_api_key: None,
             openai_api_key: None,
-            whisper_cpp_model_path: None,
             doubao_endpoint: Some("wss://example.test".into()),
             doubao_resource_id: Some("resource".into()),
             doubao_app_id: None,

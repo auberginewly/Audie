@@ -30,7 +30,6 @@ use crate::managers::audio::AudioManager;
 use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
 use crate::managers::history::HistoryManager;
 use crate::managers::inject::InjectManager;
-use crate::managers::model::ModelManager;
 use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
 use crate::platform::{current_platform, HotkeyCallback, Platform};
 use crate::state::{AppState, StateMachine};
@@ -156,12 +155,6 @@ pub fn run() {
             commands::import_config,
             commands::list_asr_providers,
             commands::list_llm_providers,
-            commands::get_available_models,
-            commands::get_current_local_asr_model,
-            commands::set_active_local_asr_model,
-            commands::download_model,
-            commands::cancel_download,
-            commands::delete_model,
             commands::list_microphones,
             commands::auto_input_device,
             commands::list_history,
@@ -186,8 +179,6 @@ pub fn run() {
             commands::request_microphone_permission,
             commands::get_accessibility_permission_status,
             commands::request_accessibility_permission,
-            commands::get_speech_recognition_permission_status,
-            commands::request_speech_recognition_permission,
             begin_trigger_capture,
             end_trigger_capture,
             provider_test::test_provider,
@@ -235,17 +226,6 @@ pub fn run() {
             let history = Arc::new(HistoryManager::new(&app_handle));
             let platform: Arc<dyn Platform> = Arc::from(current_platform());
             let inject = Arc::new(InjectManager::new(platform.clone()));
-            // ModelManager scans app_data_dir/models at construction so any GGML on
-            // disk is usable with zero clicks. A failure (e.g. unresolvable data dir)
-            // must not abort startup — degrade to an empty catalog, like history.
-            let model = match ModelManager::new(&app_handle) {
-                Ok(model) => model,
-                Err(err) => {
-                    log::error!("init ModelManager: {err:?}");
-                    ModelManager::empty(&app_handle)
-                }
-            };
-            let model = Arc::new(model);
 
             // This is the backend object graph for the P1 pipeline:
             // StateMachine owns legal UI states; Audio captures samples; ASR and
@@ -260,7 +240,6 @@ pub fn run() {
             app.manage(enhance);
             app.manage(history);
             app.manage(inject);
-            app.manage(model);
             app.manage(platform.clone());
             app.manage(Arc::new(parking_lot::Mutex::new(None::<TranscriptStream>)));
             // fe.8c: last-take store (undo / retry / insert-raw) + take generation
@@ -910,45 +889,14 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
 
-    // Resolve the local-ASR path: a selected catalog/custom model wins (its file in
-    // app_data_dir/models), else fall back to the manually-typed path. Both stay
-    // working — picking a downloaded model doesn't erase the manual escape hatch.
-    let whisper_cpp_model_path = resolve_whisper_cpp_path(
-        app,
-        &settings.selected_local_asr_model,
-        settings.whisper_cpp_model_path,
-    );
-
-    transcription_config_from_settings(
-        settings.asr_provider,
-        settings.asr_model,
-        whisper_cpp_model_path,
-        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
-    )
-}
-
-/// Resolve the whisper.cpp model path: a non-empty `selected_local_asr_model` that
-/// the ModelManager can map to a downloaded file takes priority; otherwise fall back
-/// to the manual `whisper_cpp_model_path` (a stale/un-downloaded selection silently
-/// degrades to the manual path rather than failing here).
-fn resolve_whisper_cpp_path(
-    app: &AppHandle,
-    selected_local_asr_model: &str,
-    manual_path: Option<String>,
-) -> Option<String> {
-    if !selected_local_asr_model.is_empty() {
-        let model = app.state::<Arc<ModelManager>>();
-        if let Some(path) = model.downloaded_model_path(selected_local_asr_model) {
-            return Some(path.to_string_lossy().to_string());
-        }
-    }
-    manual_path
+    transcription_config_from_settings(settings.asr_provider, settings.asr_model, |key_id| {
+        read_optional_secret(platform.inner().as_ref(), key_id)
+    })
 }
 
 fn transcription_config_from_settings(
     asr_provider: String,
     asr_model: String,
-    whisper_cpp_model_path: Option<String>,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> TranscriptionConfig {
     let (groq_api_key, openai_api_key) = match asr_provider.as_str() {
@@ -973,7 +921,6 @@ fn transcription_config_from_settings(
         asr_model,
         groq_api_key,
         openai_api_key,
-        whisper_cpp_model_path,
         doubao_endpoint: None,
         doubao_resource_id: None,
         doubao_app_id: None,
@@ -1017,7 +964,6 @@ fn doubao_streaming_config_from_settings(
         asr_model: String::new(),
         groq_api_key: None,
         openai_api_key: None,
-        whisper_cpp_model_path: None,
         doubao_endpoint: Some(endpoint),
         doubao_resource_id: Some(resource_id),
         doubao_app_id: app_id,
@@ -1403,11 +1349,10 @@ mod tests {
     fn groq_transcription_config_reads_only_groq_key() {
         let mut requested = Vec::new();
 
-        let config =
-            transcription_config_from_settings("groq".into(), String::new(), None, |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            });
+        let config = transcription_config_from_settings("groq".into(), String::new(), |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
 
         assert_eq!(requested, vec!["groq_api_key"]);
         assert_eq!(config.groq_api_key.as_deref(), Some("groq_api_key-value"));
@@ -1418,11 +1363,10 @@ mod tests {
     fn openai_transcription_config_reads_only_openai_key() {
         let mut requested = Vec::new();
 
-        let config =
-            transcription_config_from_settings("openai".into(), String::new(), None, |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            });
+        let config = transcription_config_from_settings("openai".into(), String::new(), |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
 
         assert_eq!(requested, vec!["openai_api_key"]);
         assert_eq!(config.groq_api_key, None);
@@ -1436,11 +1380,10 @@ mod tests {
     fn glm_transcription_config_reads_only_glm_key() {
         let mut requested = Vec::new();
 
-        let config =
-            transcription_config_from_settings("glm".into(), String::new(), None, |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            });
+        let config = transcription_config_from_settings("glm".into(), String::new(), |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
 
         assert_eq!(requested, vec![crate::asr::glm::SECRET_API_KEY]);
         assert_eq!(config.glm_api_key.as_deref(), Some("glm_api_key-value"));
@@ -1452,15 +1395,11 @@ mod tests {
     fn aliyun_transcription_config_reads_only_aliyun_key() {
         let mut requested = Vec::new();
 
-        let config = transcription_config_from_settings(
-            "aliyun_fun".into(),
-            String::new(),
-            None,
-            |key_id| {
+        let config =
+            transcription_config_from_settings("aliyun_fun".into(), String::new(), |key_id| {
                 requested.push(key_id.to_string());
                 Some(format!("{key_id}-value"))
-            },
-        );
+            });
 
         assert_eq!(requested, vec![crate::asr::aliyun::config::SECRET_API_KEY]);
         assert_eq!(
@@ -1475,7 +1414,7 @@ mod tests {
         let mut requested = Vec::new();
 
         let config =
-            transcription_config_from_settings("stepfun".into(), String::new(), None, |key_id| {
+            transcription_config_from_settings("stepfun".into(), String::new(), |key_id| {
                 requested.push(key_id.to_string());
                 Some(format!("{key_id}-value"))
             });
@@ -1486,29 +1425,6 @@ mod tests {
             Some("stepfun_api_key-value")
         );
         assert_eq!(config.glm_api_key, None);
-    }
-
-    #[test]
-    fn whisper_cpp_transcription_config_reads_no_api_keys() {
-        let mut requested = Vec::new();
-
-        let config = transcription_config_from_settings(
-            "whisper_cpp".into(),
-            String::new(),
-            Some("/tmp/ggml.bin".into()),
-            |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            },
-        );
-
-        assert!(requested.is_empty());
-        assert_eq!(config.groq_api_key, None);
-        assert_eq!(config.openai_api_key, None);
-        assert_eq!(
-            config.whisper_cpp_model_path.as_deref(),
-            Some("/tmp/ggml.bin")
-        );
     }
 
     #[test]

@@ -21,7 +21,7 @@ import { LOCAL_MODEL_RECOMMENDATIONS, type LocalModelRecommendation } from "./lo
 
 // Cloud ASR cards driven by the generic "模型 + API Key" body: model id written to
 // asr_model, key to each provider's own keychain id. doubao keeps its own body
-// (resource_id, dual fields); whisper-local is a file path.
+// (resource_id, dual fields).
 const GENERIC_ASR_MODEL_IDS = new Set([
   "groq",
   "openai-asr",
@@ -30,11 +30,10 @@ const GENERIC_ASR_MODEL_IDS = new Set([
   "stepfun-asr",
 ]);
 
-// ASR cards without a reachable test probe yet — no 测试 button (like whisper-local).
-// glm / aliyun_fun / stepfun probes land in a later slice (see types/settings.ts
-// TestProviderKeyIdSchema). doubao routes to its dedicated WS connectivity command.
+// ASR cards without a reachable test probe yet — no 测试 button. glm / aliyun_fun /
+// stepfun probes land in a later slice (see types/settings.ts TestProviderKeyIdSchema).
+// doubao routes to its dedicated WS connectivity command.
 const NO_TEST_BUTTON_IDS = new Set([
-  "whisper-local",
   "glm-asr",
   "aliyun-asr",
   "stepfun-asr",
@@ -567,19 +566,6 @@ function ModelBody({
           </Field>
         ) : null}
       </>
-    );
-  }
-
-  if (model.id === "whisper-local") {
-    return (
-      <Field label="模型文件路径">
-        <Input
-          mono
-          defaultValue={settings.whisper_cpp_model_path ?? ""}
-          onChange={(e) => setField({ whisper_cpp_model_path: e.target.value || null })}
-          placeholder="/path/to/ggml-large-v3.bin"
-        />
-      </Field>
     );
   }
 

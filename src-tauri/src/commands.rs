@@ -10,10 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
-use crate::managers::model::{ModelInfo, ModelManager};
 use crate::platform::Platform;
 
 /// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
@@ -66,17 +65,9 @@ pub struct Settings {
     /// files and untouched installs keep working. Doubao ignores it (豆包 uses
     /// resource_id, not model — left blank for it, see normalize note).
     pub asr_model: String,
-    /// Selected local-ASR (whisper.cpp) model id from the ModelManager catalog
-    /// (e.g. "small") or a discovered custom model. Empty = no catalog pick, fall
-    /// back to the manually-typed `whisper_cpp_model_path`. Only consulted when
-    /// `asr_provider == "whisper_cpp"`; keeps the manual path working alongside it.
-    pub selected_local_asr_model: String,
     pub llm_provider: String,
     pub enhance_enabled: bool,
     pub enhance_prompt: String,
-    // TOML has no null — omit when None, else serialization errors.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: String,
     pub openai_compatible_model: String,
     /// Keychain key id holding the active LLM provider's API key. All cloud LLM
@@ -118,13 +109,11 @@ impl Default for Settings {
             hotkey: DEFAULT_HOTKEY.to_string(),
             asr_provider: DEFAULT_ASR_PROVIDER.to_string(),
             asr_model: String::new(),
-            selected_local_asr_model: String::new(),
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
             enhance_enabled: false,
             enhance_prompt: include_str!("../prompts/enhance_default.md")
                 .trim_end()
                 .to_string(),
-            whisper_cpp_model_path: None,
             openai_compatible_base_url: DEFAULT_OPENAI_COMPATIBLE_BASE_URL.to_string(),
             openai_compatible_model: DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string(),
             llm_api_key_id: DEFAULT_LLM_API_KEY_ID.to_string(),
@@ -144,11 +133,9 @@ pub struct SettingsPatch {
     pub hotkey: Option<String>,
     pub asr_provider: Option<String>,
     pub asr_model: Option<String>,
-    pub selected_local_asr_model: Option<String>,
     pub llm_provider: Option<String>,
     pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
-    pub whisper_cpp_model_path: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_compatible_model: Option<String>,
     pub llm_api_key_id: Option<String>,
@@ -270,10 +257,6 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     // asr_model is free-form (each adapter validates / defaults at request time);
     // empty = built-in default. Only trim hand-edited whitespace, never reset.
     settings.asr_model = settings.asr_model.trim().to_string();
-    // selected_local_asr_model is an opaque catalog/custom id resolved by
-    // ModelManager at request time; empty = fall back to the manual path. Trim only,
-    // a stale id is harmless (resolution falls back). Never reset.
-    settings.selected_local_asr_model = settings.selected_local_asr_model.trim().to_string();
 
     if settings.hotkey.trim().is_empty() {
         settings.hotkey = DEFAULT_HOTKEY.to_string();
@@ -295,11 +278,6 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     if settings.doubao_resource_id.trim().is_empty() {
         settings.doubao_resource_id = crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string();
     }
-
-    settings.whisper_cpp_model_path = settings
-        .whisper_cpp_model_path
-        .map(|path| path.trim().to_string())
-        .filter(|path| !path.is_empty());
 
     if !HISTORY_RETENTION_IDS.contains(&settings.history_retention.as_str()) {
         settings.history_retention = DEFAULT_HISTORY_RETENTION.to_string();
@@ -355,8 +333,7 @@ fn provider_metadata(
 }
 
 pub fn available_asr_providers() -> Vec<ProviderMetadata> {
-    #[allow(unused_mut)] // macos_native is pushed only on macOS; other targets leave it as-is.
-    let mut providers = vec![
+    vec![
         provider_metadata(
             "groq",
             "Groq",
@@ -374,15 +351,6 @@ pub fn available_asr_providers() -> Vec<ProviderMetadata> {
             Some("whisper-1"),
             true,
             &["Remote", "Multilingual"],
-        ),
-        provider_metadata(
-            "whisper_cpp",
-            "Whisper.cpp",
-            "asr",
-            "Local ASR",
-            None,
-            false,
-            &["Local"],
         ),
         provider_metadata(
             "glm",
@@ -411,21 +379,7 @@ pub fn available_asr_providers() -> Vec<ProviderMetadata> {
             true,
             &["Remote", "中文"],
         ),
-    ];
-    // macOS native dictation is a keyless, built-in toggle provider — no model id,
-    // no API key, always present on macOS. Gated so non-macOS builds don't offer a
-    // provider their build_provider can't construct.
-    #[cfg(target_os = "macos")]
-    providers.push(provider_metadata(
-        "macos_native",
-        "macOS 本机听写",
-        "asr",
-        "Local ASR",
-        None,
-        false,
-        &["Local", "Built-in"],
-    ));
-    providers
+    ]
 }
 
 pub fn available_llm_providers() -> Vec<ProviderMetadata> {
@@ -471,12 +425,6 @@ fn apply_hotkey_if_changed(app: &AppHandle, next_hotkey: &str) -> Result<(), App
 }
 
 fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settings, AppError> {
-    let next_whisper_cpp_model_path = patch
-        .whisper_cpp_model_path
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or(current.whisper_cpp_model_path);
-
     let next = Settings {
         hotkey: patch.hotkey.unwrap_or(current.hotkey),
         asr_provider: patch.asr_provider.unwrap_or(current.asr_provider),
@@ -486,16 +434,9 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .asr_model
             .map(|value| value.trim().to_string())
             .unwrap_or(current.asr_model),
-        // Empty is meaningful (= no catalog pick → manual path), so keep an explicit
-        // empty patch value rather than filtering it back to current.
-        selected_local_asr_model: patch
-            .selected_local_asr_model
-            .map(|value| value.trim().to_string())
-            .unwrap_or(current.selected_local_asr_model),
         llm_provider: patch.llm_provider.unwrap_or(current.llm_provider),
         enhance_enabled: patch.enhance_enabled.unwrap_or(current.enhance_enabled),
         enhance_prompt: patch.enhance_prompt.unwrap_or(current.enhance_prompt),
-        whisper_cpp_model_path: next_whisper_cpp_model_path,
         openai_compatible_base_url: patch
             .openai_compatible_base_url
             .map(|value| value.trim().to_string())
@@ -749,86 +690,6 @@ pub fn list_llm_providers() -> Vec<ProviderMetadata> {
     available_llm_providers()
 }
 
-/// Local ASR model catalog with current on-disk state (downloaded / custom). Phase
-/// 1 read-only surface; the download path lands in Phase 2.
-#[tauri::command]
-pub fn get_available_models(app: AppHandle) -> Result<Vec<ModelInfo>, AppError> {
-    let manager = app.state::<Arc<ModelManager>>();
-    manager
-        .get_available_models()
-        .map_err(|err| AppError::Internal(format!("list models: {err}")))
-}
-
-/// Download a catalog model. The manager streams to a `.partial`, verifies, and
-/// renames into place, emitting `model-download-progress` / `-complete` along the
-/// way; on error we additionally emit `model-download-failed` (mirroring Handy) so
-/// the frontend store can clear its row regardless of how the call fails.
-#[tauri::command]
-pub async fn download_model(app: AppHandle, model_id: String) -> Result<(), AppError> {
-    let manager = app.state::<Arc<ModelManager>>();
-    let result = manager
-        .download_model(&model_id)
-        .await
-        .map_err(|err| AppError::Provider(format!("下载模型失败：{err}")));
-    if let Err(ref err) = result {
-        let _ = app.emit(
-            "model-download-failed",
-            serde_json::json!({ "model_id": model_id, "error": err.message() }),
-        );
-    }
-    result
-}
-
-/// Cancel an in-flight download. The `.partial` file is kept so a later download
-/// resumes from where it stopped.
-#[tauri::command]
-pub fn cancel_download(app: AppHandle, model_id: String) -> Result<(), AppError> {
-    let manager = app.state::<Arc<ModelManager>>();
-    manager
-        .cancel_download(&model_id)
-        .map_err(|err| AppError::Provider(format!("取消下载失败：{err}")))
-}
-
-/// Delete a model's on-disk files. If it's the currently selected local-ASR model,
-/// clear the selection so the whisper.cpp path doesn't point at a deleted file.
-#[tauri::command]
-pub fn delete_model(app: AppHandle, model_id: String) -> Result<(), AppError> {
-    if load_settings(&app).selected_local_asr_model == model_id {
-        let mut next = load_settings(&app);
-        next.selected_local_asr_model = String::new();
-        persist_settings(&app, normalize_settings(next))?;
-    }
-    let manager = app.state::<Arc<ModelManager>>();
-    manager
-        .delete_model(&model_id)
-        .map_err(|err| AppError::Provider(format!("删除模型失败：{err}")))
-}
-
-/// The currently selected local-ASR model id, or empty when none is chosen (the
-/// whisper.cpp path then falls back to the manual model path).
-#[tauri::command]
-pub fn get_current_local_asr_model(app: AppHandle) -> String {
-    load_settings(&app).selected_local_asr_model
-}
-
-/// Persist the selected local-ASR model id. The id must exist in the catalog or be
-/// a discovered custom model; an empty id clears the selection (back to the manual
-/// path). Reuses the settings patch path so normalization/validation stay in one place.
-#[tauri::command]
-pub fn set_active_local_asr_model(app: AppHandle, model_id: String) -> Result<Settings, AppError> {
-    let trimmed = model_id.trim().to_string();
-    if !trimmed.is_empty() {
-        let manager = app.state::<Arc<ModelManager>>();
-        if !manager.has_model(&trimmed) {
-            return Err(AppError::Provider(format!("未知的本地模型：{trimmed}")));
-        }
-    }
-    let mut next = load_settings(&app);
-    next.selected_local_asr_model = trimmed;
-    persist_settings(&app, normalize_settings(next))?;
-    Ok(load_settings(&app))
-}
-
 #[tauri::command]
 pub fn set_secret(app: AppHandle, key_id: String, value: String) -> Result<(), AppError> {
     validate_secret_key_id(&key_id)?;
@@ -1015,21 +876,6 @@ pub fn request_accessibility_permission(app: AppHandle) -> bool {
     platform.accessibility_status()
 }
 
-/// P4 — Speech Recognition permission (macOS). The macOS-native ASR provider needs
-/// it. `get` reads status without prompting; `request` shows the system prompt then
-/// returns the (possibly still-false) status.
-#[tauri::command]
-pub fn get_speech_recognition_permission_status(app: AppHandle) -> bool {
-    app.state::<Arc<dyn Platform>>().speech_recognition_status()
-}
-
-#[tauri::command]
-pub fn request_speech_recognition_permission(app: AppHandle) -> bool {
-    let platform = app.state::<Arc<dyn Platform>>();
-    platform.request_speech_recognition();
-    platform.speech_recognition_status()
-}
-
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
 #[cfg(debug_assertions)]
 fn read_wav_pcm16(path: &str) -> Result<Vec<u8>, AppError> {
@@ -1068,14 +914,11 @@ mod tests {
         assert_eq!(settings.asr_provider, "groq");
         // Empty = each adapter uses its built-in default model (no behavior change).
         assert_eq!(settings.asr_model, "");
-        // Empty = no local-ASR catalog pick → manual whisper path is used.
-        assert_eq!(settings.selected_local_asr_model, "");
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(!settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
         assert_eq!(settings.history_retention, DEFAULT_HISTORY_RETENTION);
         assert!(!settings.enhance_prompt.trim().is_empty());
-        assert_eq!(settings.whisper_cpp_model_path, None);
         assert_eq!(
             settings.openai_compatible_base_url,
             DEFAULT_OPENAI_COMPATIBLE_BASE_URL
@@ -1123,17 +966,6 @@ mod tests {
             toml::from_str::<Settings>(&text).expect("deserialize")
         );
 
-        // Some(path) survives too — skip_serializing_if only omits None.
-        let with_path = Settings {
-            whisper_cpp_model_path: Some("/models/ggml.bin".into()),
-            ..Settings::default()
-        };
-        let text = toml::to_string_pretty(&with_path).expect("serialize");
-        assert_eq!(
-            with_path,
-            toml::from_str::<Settings>(&text).expect("deserialize")
-        );
-
         // A non-empty asr_model is a plain string field (no skip_serializing_if) —
         // it survives the round trip just like asr_provider.
         let with_model = Settings {
@@ -1176,11 +1008,9 @@ mod tests {
                 hotkey: None,
                 asr_provider: None,
                 asr_model: Some("whisper-large-v3".into()),
-                selected_local_asr_model: None,
                 llm_provider: None,
                 enhance_enabled: None,
                 enhance_prompt: None,
-                whisper_cpp_model_path: None,
                 openai_compatible_base_url: None,
                 openai_compatible_model: None,
                 llm_api_key_id: None,
@@ -1202,11 +1032,9 @@ mod tests {
                 hotkey: None,
                 asr_provider: None,
                 asr_model: Some(String::new()),
-                selected_local_asr_model: None,
                 llm_provider: None,
                 enhance_enabled: None,
                 enhance_prompt: None,
-                whisper_cpp_model_path: None,
                 openai_compatible_base_url: None,
                 openai_compatible_model: None,
                 llm_api_key_id: None,
@@ -1224,59 +1052,6 @@ mod tests {
     }
 
     #[test]
-    fn patch_sets_selected_local_asr_model_and_empty_clears_it() {
-        // Picking a catalog model stores the id; clearing it (empty patch value, the
-        // "back to manual path" state) is meaningful and overrides current.
-        let current = Settings {
-            selected_local_asr_model: "small".into(),
-            ..Settings::default()
-        };
-        let patched = settings_from_patch(
-            current.clone(),
-            SettingsPatch {
-                selected_local_asr_model: Some("  large-v3  ".into()),
-                ..empty_patch()
-            },
-        )
-        .expect("patch with selected model");
-        assert_eq!(patched.selected_local_asr_model, "large-v3");
-
-        let cleared = settings_from_patch(
-            current,
-            SettingsPatch {
-                selected_local_asr_model: Some(String::new()),
-                ..empty_patch()
-            },
-        )
-        .expect("patch clearing selected model");
-        assert_eq!(cleared.selected_local_asr_model, "");
-    }
-
-    /// All-None patch so a test can set just the field it cares about with `..`.
-    fn empty_patch() -> SettingsPatch {
-        SettingsPatch {
-            hotkey: None,
-            asr_provider: None,
-            asr_model: None,
-            selected_local_asr_model: None,
-            llm_provider: None,
-            enhance_enabled: None,
-            enhance_prompt: None,
-            whisper_cpp_model_path: None,
-            openai_compatible_base_url: None,
-            openai_compatible_model: None,
-            llm_api_key_id: None,
-            doubao_endpoint: None,
-            doubao_resource_id: None,
-            input_device: None,
-            onboarding_completed: None,
-            primary_language: None,
-            history_retention: None,
-            llm_models: None,
-        }
-    }
-
-    #[test]
     fn partial_toml_fills_missing_fields_from_default() {
         // A hand-edited file with only a few keys must not error — container
         // serde(default) backfills the rest.
@@ -1285,7 +1060,6 @@ mod tests {
         assert_eq!(parsed.hotkey, "F13");
         assert!(parsed.enhance_enabled);
         assert_eq!(parsed.asr_provider, DEFAULT_ASR_PROVIDER);
-        assert_eq!(parsed.whisper_cpp_model_path, None);
     }
 
     #[test]
@@ -1341,7 +1115,6 @@ mod tests {
         assert_eq!(parsed.asr_provider, "doubao_stream");
         assert!(parsed.onboarding_completed);
         assert_eq!(parsed.llm_provider, DEFAULT_LLM_PROVIDER);
-        assert_eq!(parsed.whisper_cpp_model_path, None);
     }
 
     #[test]
@@ -1349,23 +1122,11 @@ mod tests {
         let asr = available_asr_providers();
         let llm = available_llm_providers();
 
-        // macos_native is appended only on macOS (keyless built-in toggle provider);
-        // mirror that gate so the list assertion holds on every target.
-        let mut expected_asr = vec![
-            "groq",
-            "openai",
-            "whisper_cpp",
-            "glm",
-            "aliyun_fun",
-            "stepfun",
-        ];
-        #[cfg(target_os = "macos")]
-        expected_asr.push("macos_native");
         assert_eq!(
             asr.iter()
                 .map(|provider| provider.id.as_str())
                 .collect::<Vec<_>>(),
-            expected_asr
+            ["groq", "openai", "glm", "aliyun_fun", "stepfun"]
         );
         assert_eq!(
             llm.iter()
@@ -1384,14 +1145,6 @@ mod tests {
         assert!(groq.requires_key);
         assert!(groq.tags.contains(&"Remote".to_string()));
         assert!(groq.tags.contains(&"Fast".to_string()));
-
-        let whisper_cpp = asr
-            .iter()
-            .find(|provider| provider.id == "whisper_cpp")
-            .unwrap();
-        assert_eq!(whisper_cpp.engine, "Local ASR");
-        assert!(!whisper_cpp.requires_key);
-        assert!(whisper_cpp.tags.contains(&"Local".to_string()));
 
         let openai_compatible = &llm[0];
         assert_eq!(openai_compatible.title, "OpenAI Compatible");

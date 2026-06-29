@@ -206,17 +206,6 @@ impl Platform for MacosPlatform {
         }
     }
 
-    fn speech_recognition_status(&self) -> bool {
-        speech_recognition_authorized()
-    }
-
-    fn request_speech_recognition(&self) {
-        // Shows the system prompt when status is NotDetermined; no-op once decided.
-        // requestAuthorization reports the decision via a completion block, so we
-        // block until it fires (status is re-read separately via speech_recognition_status).
-        request_speech_recognition_authorization();
-    }
-
     /// P3.10 — start a listen-only capture tap for the Settings recorder. Feeds the
     /// pure `capture_step` machine, which emits `trigger-captured` (the key the user
     /// formed) or `trigger-capture-rejected`. Needs Input Monitoring (same as the
@@ -1253,41 +1242,6 @@ fn sec_item_update(
 fn preflight_post_event_access() -> bool {
     // SAFETY: parameterless C function from ApplicationServices.
     unsafe { CGPreflightPostEventAccess() }
-}
-
-// ---- Speech Recognition authorization (P4, SFSpeechRecognizer) --------------
-//
-// The macOS-native ASR provider needs Speech authorization. `status` reads it
-// without prompting (onboarding/settings poll it); `request` shows the system
-// prompt (NSSpeechRecognitionUsageDescription) and resolves the user's choice
-// before returning, so a follow-up status read reflects the decision.
-
-/// True only when Speech recognition is explicitly Authorized (not NotDetermined /
-/// Denied / Restricted).
-fn speech_recognition_authorized() -> bool {
-    // SAFETY: parameterless Objective-C class method returning a plain enum.
-    let status = unsafe { objc2_speech::SFSpeechRecognizer::authorizationStatus() };
-    status == objc2_speech::SFSpeechRecognizerAuthorizationStatus::Authorized
-}
-
-/// Trigger the Speech authorization prompt (when undecided) and block until the
-/// completion block fires, so the caller can re-read the resolved status. A no-op
-/// once the user has already decided.
-fn request_speech_recognition_authorization() {
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    let handler = block2::RcBlock::new(
-        move |_status: objc2_speech::SFSpeechRecognizerAuthorizationStatus| {
-            let _ = tx.send(());
-        },
-    );
-    // SAFETY: class method taking a completion block; the block is retained for the
-    // duration of the async request via RcBlock.
-    unsafe {
-        objc2_speech::SFSpeechRecognizer::requestAuthorization(&handler);
-    }
-    // The block fires on a system queue. Bound the wait so a missing
-    // NSSpeechRecognitionUsageDescription (which suppresses the callback) can't hang.
-    let _ = rx.recv_timeout(Duration::from_secs(60));
 }
 
 extern "C" {

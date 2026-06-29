@@ -42,10 +42,6 @@ reqwest = { version = "0.12", default-features = false, features = [
 # Doubao streaming ASR (P2.3+) uses a custom binary frame protocol whose server
 # responses are gzip-compressed JSON. Pure-function codec only at P2.3.
 flate2 = "1"
-# SHA256 verification of downloaded ASR models (ModelManager::download_model).
-# Only used when a catalog entry carries an expected sha256; hashing runs in a
-# blocking thread so the async executor isn't stalled on multi-hundred-MB files.
-sha2 = "0.10"
 # Doubao streaming WebSocket client (P2.5). tokio-tungstenite pulls tokio-rustls
 # transitively via the rustls feature, so no separate tokio-rustls dep is needed.
 # tokio + futures-util are the mandatory async runtime/traits for the ws client.
@@ -66,10 +62,6 @@ hound = "3"
 # compiles the SQLite C lib in — consistent with our rustls choice of not relying
 # on a system library. Fresh schema, so no migration crate is needed.
 rusqlite = { version = "0.37", features = ["bundled"] }
-# Local whisper.cpp inference over GGML models. 0.16 matches Handy's lockfile.
-# `metal` is Apple-GPU-only so this stays macOS-first; Windows will split this into
-# its own target block with vulkan/CPU when it lands. Build needs cmake + libclang.
-whisper-rs = { version = "0.16", default-features = false, features = ["metal"] }
 
 # macOS-only: CGEvent to simulate the Cmd+V paste keystroke (clipboard inject).
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -88,12 +80,3 @@ objc2 = "0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 security-framework = "3.7.0"
 security-framework-sys = "2.17.0"
-# macOS native on-device dictation (decision B1: SFSpeechRecognizer). Default
-# features pull in the SF* recognizer/request/result/transcription types plus
-# objc2-avf-audio (the AVAudioPCMBuffer we feed it) and block2 (the result-handler
-# block). objc2-foundation / block2 already resolve to versions in the tree (objc2
-# 0.6), so these add no new transitive major versions.
-objc2-speech = "0.3.2"
-objc2-avf-audio = "0.3.2"
-objc2-foundation = "0.3.2"
-block2 = "0.6"

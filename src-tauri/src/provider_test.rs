@@ -243,9 +243,6 @@ fn provider_test_endpoint(
                 .ok_or_else(|| AppError::Provider("请填写 OpenAI-compatible base URL".into()))?;
             Ok(join_url(base, OPENAI_COMPATIBLE_MODELS_PATH))
         }
-        (ProviderKind::Asr, "whisper_cpp") => Err(AppError::Device(
-            "Whisper.cpp 本地模型测试放到 P1.4 ASR provider 切换".into(),
-        )),
         _ => Err(AppError::Internal(format!(
             "unsupported provider test target: {provider_id}"
         ))),

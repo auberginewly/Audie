@@ -29,10 +29,6 @@ export const MODELS: ModelMeta[] = [
   { id: "glm-asr", name: "智谱 GLM ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "glm-asr-1", tags: ["云端"] },
   { id: "aliyun-asr", name: "通义 Paraformer ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "fun-asr-realtime", tags: ["云端"] },
   { id: "stepfun-asr", name: "StepFun ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "stepaudio-2.5-asr", tags: ["云端"] },
-  { id: "whisper-local", name: "Whisper", type: "asr", source: "local", icon: "audio-lines", model: "whisper-large-v3", tags: ["本地", "离线"] },
-  // macOS 本机听写: keyless, OS-managed model — always "installed", nothing to download.
-  // model copy is a label only (no model id / variant); maps to the macos_native provider.
-  { id: "macos-native", name: "macOS 本机听写", type: "asr", source: "local", icon: "audio-lines", model: "系统内置（离线）", tags: ["本地", "内置", "离线"] },
   // LLM — all drive the single openai_compatible slot. No hardcoded model: the card
   // subtitle shows the real configured model (active card) or nothing; model field
   // is unused for LLM display, kept empty so the catalog carries no guessed ids.
@@ -51,8 +47,7 @@ export const MODELS: ModelMeta[] = [
 // "已配置" badges (see useConfiguredModels). LLM stays a single backend provider
 // (openai_compatible), so every cloud LLM card shares one key slot. Ollama / LM
 // Studio run locally with an optional key, so they require none (Voxt's
-// apiKeyIsOptional). whisper-local also has none: local inference can't satisfy
-// onboarding gating yet.
+// apiKeyIsOptional).
 export function requiredSecretsForModel(id: string): SecretKeyId[] {
   switch (id) {
     case "groq":
@@ -83,7 +78,7 @@ export function requiredSecretsForModel(id: string): SecretKeyId[] {
       return keyId ? [keyId] : [];
     }
     default:
-      // ollama / lmstudio (key optional) + whisper-local
+      // ollama / lmstudio (key optional)
       return [];
   }
 }
@@ -118,20 +113,6 @@ export function isKeyOptionalModel(id: string): boolean {
   return id === "ollama" || id === "lmstudio";
 }
 
-// Whether an ASR model is actually ready to use — drives onboarding gating (the ASR
-// step / setup-progress). Keyless local providers have no secret to check:
-//  - macos-native: ready once Speech recognition is authorized (transcribe gates on it)
-//  - whisper-local: ready once a model is available (a catalog pick or a manual .bin path)
-//  - else (cloud): its key is configured
-export function asrModelReady(
-  id: string,
-  deps: { configured: (id: string) => boolean; speechGranted: boolean; whisperModelPresent: boolean },
-): boolean {
-  if (id === "macos-native") return deps.speechGranted;
-  if (id === "whisper-local") return deps.whisperModelPresent;
-  return deps.configured(id);
-}
-
 // ── ASR ──────────────────────────────────────────────────────────────────────
 
 // Design model id → backend ASR provider enum (null = card with no real slot).
@@ -140,8 +121,6 @@ export function asrModelReady(
 export function asrProviderForModelId(id: string): AsrProviderId | null {
   if (id === "groq") return "groq";
   if (id === "openai-asr") return "openai";
-  if (id === "whisper-local") return "whisper_cpp";
-  if (id === "macos-native") return "macos_native";
   if (id === "doubao") return "doubao_stream";
   if (id === "glm-asr") return "glm";
   if (id === "aliyun-asr") return "aliyun_fun";
@@ -153,8 +132,6 @@ export function asrProviderForModelId(id: string): AsrProviderId | null {
 export function modelIdForAsrProvider(provider: AsrProviderId): string {
   if (provider === "groq") return "groq";
   if (provider === "openai") return "openai-asr";
-  if (provider === "whisper_cpp") return "whisper-local";
-  if (provider === "macos_native") return "macos-native";
   if (provider === "glm") return "glm-asr";
   if (provider === "aliyun_fun") return "aliyun-asr";
   if (provider === "stepfun") return "stepfun-asr";
@@ -163,7 +140,7 @@ export function modelIdForAsrProvider(provider: AsrProviderId): string {
 
 // Curated ASR model lists (front/back use the exact same id strings — see plan
 // contract). Empty = no model choice for that card (doubao uses resource_id, not
-// asr_model; whisper-local uses a file path). The first entry is the default.
+// asr_model). The first entry is the default.
 export function asrModelOptionsForModelId(id: string): ModelOption[] {
   if (id === "groq") {
     return [
