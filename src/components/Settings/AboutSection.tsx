@@ -1,9 +1,6 @@
-// 关于 — updates · project · author. Version is real; the check-update button and
-// beta toggle are mock (App owns the demo update flow).
+// 关于 — version · project · author.
 
-import { useState } from "react";
-
-import { Button, Icon, Switch } from "../ui";
+import { Button, Icon } from "../ui";
 import { openExternal } from "../../lib/open";
 import { SettingSection, SettingRow } from "./SettingSection";
 
@@ -29,25 +26,14 @@ function ExtLink({ href, children, mono }: { href: string; children: string; mon
 }
 
 export function AboutSection({ onRerunSetup }: { onRerunSetup: () => void }) {
-  const [beta, setBeta] = useState(false);
   return (
     <>
-      <SettingSection icon="info" title="更新检查">
+      <SettingSection icon="info" title="版本">
         <SettingRow
-          label="版本"
+          label="Audie"
           divider={false}
-          control={
-            <div className="flex items-center gap-3">
-              <span className="font-mono text-[13px] text-text-tertiary">0.0.0</span>
-              {/* mock: no real update channel — App owns the demo flow */}
-              <Button size="sm" variant="secondary">
-                检查更新
-              </Button>
-            </div>
-          }
+          control={<span className="font-mono text-[13px] text-text-tertiary">0.0.0</span>}
         />
-        {/* mock: beta channel isn't backed */}
-        <SettingRow label="Beta 更新" control={<Switch checked={beta} onChange={setBeta} />} />
       </SettingSection>
 
       <SettingSection icon="github" title="关于项目">
