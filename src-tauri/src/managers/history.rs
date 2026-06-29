@@ -25,19 +25,24 @@ pub struct HistoryEntry {
     pub id: i64,
     pub created_at: i64, // UTC unix seconds
     pub kind: String,    // "success" (has text) | "empty" (没有识别到内容)
+    pub mode: String,    // "polish" | "rewrite" | "compose"
     pub raw_text: String,
     pub enhanced_text: Option<String>,
     pub word_count: i64,
     pub duration_ms: i64,
 }
 
-/// All-time usage aggregate for the Home dashboard. The frontend derives the
-/// four cards (time / words / time-saved / speed) from these raw totals.
+/// All-time usage aggregate for the Home dashboard, split by dictation kind so
+/// 写作/改写 (AI output) don't inflate the 口述 (spoken) cards. Frontend: 口述
+/// 时间/字数/速度 from `spoken_*`, plus an 「AI 产出」 card from `ai_output_words`.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct UsageStats {
-    pub total_words: i64,
-    pub total_duration_ms: i64,
-    pub dictation_count: i64,
+    /// 纯口述听写（mode = "polish"）：字数 / 时长 / 次数。
+    pub spoken_words: i64,
+    pub spoken_duration_ms: i64,
+    pub spoken_count: i64,
+    /// 写作 + 改写（mode in compose/rewrite）产出的字数。
+    pub ai_output_words: i64,
 }
 
 pub struct HistoryManager {
@@ -66,7 +71,9 @@ impl HistoryManager {
 
     fn init(&self) -> AppResult<()> {
         let conn = self.open()?;
-        create_table(&conn).map_err(map_sqlite)
+        create_table(&conn).map_err(map_sqlite)?;
+        add_mode_column_if_missing(&conn);
+        Ok(())
     }
 
     fn open(&self) -> AppResult<Connection> {
@@ -87,6 +94,7 @@ impl HistoryManager {
         &self,
         app: &AppHandle,
         kind: &str,
+        mode: &str,
         raw_text: &str,
         enhanced_text: Option<String>,
         duration_ms: i64,
@@ -103,6 +111,7 @@ impl HistoryManager {
             &conn,
             now_unix(),
             kind,
+            mode,
             raw_text,
             enhanced_text.as_deref(),
             word_count,
@@ -198,6 +207,7 @@ fn create_table(conn: &Connection) -> rusqlite::Result<()> {
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at    INTEGER NOT NULL,
             kind          TEXT    NOT NULL,
+            mode          TEXT    NOT NULL DEFAULT 'polish',
             raw_text      TEXT    NOT NULL DEFAULT '',
             enhanced_text TEXT,
             word_count    INTEGER NOT NULL DEFAULT 0,
@@ -207,22 +217,34 @@ fn create_table(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+/// Older DBs predate the `mode` column. Add it idempotently — a fresh `create_table`
+/// already includes it, so this ALTER then fails "duplicate column name", which we
+/// swallow (no migration framework, mirroring this module's simple-init philosophy).
+fn add_mode_column_if_missing(conn: &Connection) {
+    let _ = conn.execute(
+        "ALTER TABLE history ADD COLUMN mode TEXT NOT NULL DEFAULT 'polish'",
+        [],
+    );
+}
+
 #[allow(clippy::too_many_arguments)] // flat column list; a struct here adds noise
 fn insert_entry(
     conn: &Connection,
     created_at: i64,
     kind: &str,
+    mode: &str,
     raw_text: &str,
     enhanced_text: Option<&str>,
     word_count: i64,
     duration_ms: i64,
 ) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO history (created_at, kind, raw_text, enhanced_text, word_count, duration_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO history (created_at, kind, mode, raw_text, enhanced_text, word_count, duration_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             created_at,
             kind,
+            mode,
             raw_text,
             enhanced_text,
             word_count,
@@ -234,7 +256,7 @@ fn insert_entry(
 
 fn fetch_list(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<HistoryEntry>> {
     let mut stmt = conn.prepare(
-        "SELECT id, created_at, kind, raw_text, enhanced_text, word_count, duration_ms
+        "SELECT id, created_at, kind, mode, raw_text, enhanced_text, word_count, duration_ms
          FROM history
          ORDER BY created_at DESC, id DESC
          LIMIT ?1",
@@ -244,26 +266,34 @@ fn fetch_list(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<HistoryEntr
             id: row.get(0)?,
             created_at: row.get(1)?,
             kind: row.get(2)?,
-            raw_text: row.get(3)?,
-            enhanced_text: row.get(4)?,
-            word_count: row.get(5)?,
-            duration_ms: row.get(6)?,
+            mode: row.get(3)?,
+            raw_text: row.get(4)?,
+            enhanced_text: row.get(5)?,
+            word_count: row.get(6)?,
+            duration_ms: row.get(7)?,
         })
     })?;
     rows.collect()
 }
 
 fn fetch_stats(conn: &Connection) -> rusqlite::Result<UsageStats> {
+    // Split spoken (口述听写, mode='polish') from AI output (写作/改写) so the Home
+    // 口述 cards aren't inflated by generated text. Over successful rows only.
     conn.query_row(
-        "SELECT COALESCE(SUM(word_count), 0), COALESCE(SUM(duration_ms), 0), COUNT(*)
+        "SELECT
+           COALESCE(SUM(CASE WHEN mode = 'polish' THEN word_count ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN mode = 'polish' THEN duration_ms ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN mode = 'polish' THEN 1 ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN mode IN ('compose', 'rewrite') THEN word_count ELSE 0 END), 0)
          FROM history
          WHERE kind = 'success'",
         [],
         |row| {
             Ok(UsageStats {
-                total_words: row.get(0)?,
-                total_duration_ms: row.get(1)?,
-                dictation_count: row.get(2)?,
+                spoken_words: row.get(0)?,
+                spoken_duration_ms: row.get(1)?,
+                spoken_count: row.get(2)?,
+                ai_output_words: row.get(3)?,
             })
         },
     )
@@ -302,15 +332,23 @@ mod tests {
         conn
     }
 
-    fn insert(conn: &Connection, created_at: i64, kind: &str, raw: &str, words: i64, dur: i64) {
-        insert_entry(conn, created_at, kind, raw, None, words, dur).expect("insert");
+    fn insert(
+        conn: &Connection,
+        created_at: i64,
+        kind: &str,
+        mode: &str,
+        raw: &str,
+        words: i64,
+        dur: i64,
+    ) {
+        insert_entry(conn, created_at, kind, mode, raw, None, words, dur).expect("insert");
     }
 
     #[test]
     fn list_returns_newest_first() {
         let conn = setup();
-        insert(&conn, 100, "success", "first", 5, 1000);
-        insert(&conn, 200, "success", "second", 6, 2000);
+        insert(&conn, 100, "success", "polish", "first", 5, 1000);
+        insert(&conn, 200, "success", "polish", "second", 6, 2000);
 
         let entries = fetch_list(&conn, 500).expect("list");
         assert_eq!(entries.len(), 2);
@@ -319,32 +357,82 @@ mod tests {
     }
 
     #[test]
-    fn stats_sum_all_success_excluding_other_kinds() {
+    fn stats_split_spoken_vs_ai_output() {
         let conn = setup();
-        insert(&conn, 100, "success", "recent", 10, 3000);
-        insert(&conn, 200, "error", "cancelled", 4, 0); // wrong kind, excluded
-        insert(&conn, 300, "success", "old", 99, 9000); // no time window — still counts
+        insert(&conn, 100, "success", "polish", "口述听写", 10, 3000);
+        insert(
+            &conn,
+            200,
+            "success",
+            "compose",
+            "AI 生成的一长段",
+            200,
+            1000,
+        );
+        insert(&conn, 250, "success", "rewrite", "改写结果", 50, 800);
+        insert(&conn, 300, "error", "polish", "cancelled", 4, 0); // 非 success，排除
 
         let stats = fetch_stats(&conn).expect("stats");
-        assert_eq!(stats.total_words, 109);
-        assert_eq!(stats.total_duration_ms, 12000);
-        assert_eq!(stats.dictation_count, 2);
+        // 口述卡只算 polish —— 不被写作生成的 200 字虚高
+        assert_eq!(stats.spoken_words, 10);
+        assert_eq!(stats.spoken_duration_ms, 3000);
+        assert_eq!(stats.spoken_count, 1);
+        // AI 产出 = compose + rewrite 的字数
+        assert_eq!(stats.ai_output_words, 250);
     }
 
     #[test]
     fn stats_are_zero_when_empty() {
         let conn = setup();
         let stats = fetch_stats(&conn).expect("stats");
-        assert_eq!(stats.total_words, 0);
-        assert_eq!(stats.total_duration_ms, 0);
-        assert_eq!(stats.dictation_count, 0);
+        assert_eq!(stats.spoken_words, 0);
+        assert_eq!(stats.spoken_duration_ms, 0);
+        assert_eq!(stats.spoken_count, 0);
+        assert_eq!(stats.ai_output_words, 0);
+    }
+
+    #[test]
+    fn mode_round_trips() {
+        let conn = setup();
+        insert(&conn, 100, "success", "compose", "raw", 5, 1000);
+        let entries = fetch_list(&conn, 500).expect("list");
+        assert_eq!(entries[0].mode, "compose");
+    }
+
+    #[test]
+    fn migration_adds_mode_to_legacy_table() {
+        // Simulate a pre-mode DB: old schema with no `mode` column.
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                raw_text TEXT NOT NULL DEFAULT '',
+                enhanced_text TEXT,
+                word_count INTEGER NOT NULL DEFAULT 0,
+                duration_ms INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .expect("legacy table");
+        add_mode_column_if_missing(&conn);
+        insert(&conn, 100, "success", "compose", "raw", 5, 1000);
+        assert_eq!(fetch_list(&conn, 500).expect("list")[0].mode, "compose");
+    }
+
+    #[test]
+    fn migration_is_idempotent_on_fresh_table() {
+        let conn = setup(); // create_table already added the column
+        add_mode_column_if_missing(&conn); // duplicate-column error swallowed, no panic
+        insert(&conn, 100, "success", "polish", "raw", 5, 1000);
+        assert_eq!(fetch_list(&conn, 500).expect("list").len(), 1);
     }
 
     #[test]
     fn cleanup_deletes_only_older_than_cutoff() {
         let conn = setup();
-        insert(&conn, 100, "success", "old", 1, 0);
-        insert(&conn, 300, "success", "new", 1, 0);
+        insert(&conn, 100, "success", "polish", "old", 1, 0);
+        insert(&conn, 300, "success", "polish", "new", 1, 0);
 
         let deleted = delete_older_than(&conn, 200).expect("cleanup");
         assert_eq!(deleted, 1);
@@ -356,7 +444,17 @@ mod tests {
     #[test]
     fn enhanced_text_round_trips() {
         let conn = setup();
-        insert_entry(&conn, 100, "success", "raw", Some("polished"), 8, 1500).expect("insert");
+        insert_entry(
+            &conn,
+            100,
+            "success",
+            "polish",
+            "raw",
+            Some("polished"),
+            8,
+            1500,
+        )
+        .expect("insert");
         let entries = fetch_list(&conn, 500).expect("list");
         assert_eq!(entries[0].enhanced_text.as_deref(), Some("polished"));
     }
@@ -364,7 +462,8 @@ mod tests {
     #[test]
     fn reenhance_updates_enhanced_text_and_word_count() {
         let conn = setup();
-        let id = insert_entry(&conn, 100, "success", "raw text", None, 8, 1000).expect("insert");
+        let id = insert_entry(&conn, 100, "success", "polish", "raw text", None, 8, 1000)
+            .expect("insert");
         assert_eq!(
             fetch_raw_text(&conn, id).expect("raw"),
             Some("raw text".to_string())

@@ -49,7 +49,12 @@ function groupByDay(entries: HistoryEntry[]): { label: string; items: HistoryEnt
   return groups;
 }
 
-// One labeled version of an entry (原文 / 润色 / …) with hover actions.
+// 处理模式的中文名 —— 决定历史条目第二个框的标签（润色 / 改写 / 写作）。
+function modeLabel(mode: HistoryEntry["mode"]): string {
+  return mode === "compose" ? "写作" : mode === "rewrite" ? "改写" : "润色";
+}
+
+// One labeled version of an entry (原文 / 润色 / 写作 / 改写) with hover actions.
 function VersionBox({ label, text, actions }: { label: string; text: string; actions: ReactNode }) {
   return (
     <div className="group/box rounded-md bg-surface-card px-3 py-2">
@@ -103,7 +108,7 @@ function HistoryRow({
               actions={
                 <>
                   <IconButton name="copy" label="复制原文" size="sm" onClick={() => onCopy(item.raw_text)} />
-                  {llmConfigured ? (
+                  {llmConfigured && item.mode === "polish" ? (
                     <IconButton
                       name="sparkles"
                       label="重试润色"
@@ -117,12 +122,12 @@ function HistoryRow({
             />
             {item.enhanced_text ? (
               <VersionBox
-                label="润色"
+                label={modeLabel(item.mode)}
                 text={item.enhanced_text}
                 actions={
                   <IconButton
                     name="copy"
-                    label="复制润色"
+                    label={`复制${modeLabel(item.mode)}`}
                     size="sm"
                     onClick={() => onCopy(item.enhanced_text ?? "")}
                   />

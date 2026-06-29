@@ -9,10 +9,15 @@ import { z } from "zod";
 export const HistoryKindSchema = z.enum(["success", "empty"]);
 export type HistoryKind = z.infer<typeof HistoryKindSchema>;
 
+// 处理模式：润色（口述听写）/ 改写（改选中文字）/ 写作（按要点生成）。老库行默认 polish。
+export const HistoryModeSchema = z.enum(["polish", "rewrite", "compose"]);
+export type HistoryMode = z.infer<typeof HistoryModeSchema>;
+
 export const HistoryEntrySchema = z.object({
   id: z.number(),
   created_at: z.number(), // UTC unix seconds
   kind: HistoryKindSchema,
+  mode: HistoryModeSchema,
   raw_text: z.string(),
   // Option<String> from Rust → null when absent; nullish tolerates null + missing.
   enhanced_text: z.string().nullish(),
@@ -21,10 +26,13 @@ export const HistoryEntrySchema = z.object({
 });
 export type HistoryEntry = z.infer<typeof HistoryEntrySchema>;
 
+// 口述类（mode=polish）：时长/字数/次数；AI 产出类（compose+rewrite）：产出字数。
+// 拆开是为了 Home 的「口述」卡不被写作生成的字数虚高（见 history.rs fetch_stats）。
 export const UsageStatsSchema = z.object({
-  total_words: z.number(),
-  total_duration_ms: z.number(),
-  dictation_count: z.number(),
+  spoken_words: z.number(),
+  spoken_duration_ms: z.number(),
+  spoken_count: z.number(),
+  ai_output_words: z.number(),
 });
 export type UsageStats = z.infer<typeof UsageStatsSchema>;
 

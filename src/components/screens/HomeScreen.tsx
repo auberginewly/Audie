@@ -5,10 +5,6 @@
 import { Icon, Keycap, type IconName } from "../ui";
 import { useUsageStats } from "../../hooks/useUsageStats";
 
-// Typing-speed baseline for the "time saved" card (字/分). A fixed assumption,
-// Typeless-style — there's no per-user measurement.
-const TYPING_WPM = 40;
-
 function StatCard({ icon, value, unit, label }: { icon: IconName; value: string; unit: string; label: string }) {
   return (
     <div className="rounded-md bg-surface-card p-3.5">
@@ -33,16 +29,17 @@ function formatCount(n: number): string {
 
 export function HomeScreen() {
   const stats = useUsageStats();
-  const words = stats?.total_words ?? 0;
-  const durationMin = (stats?.total_duration_ms ?? 0) / 60000;
+  // 「口述」三卡只算纯口述听写（mode=polish），不被写作/改写产出虚高（见 history.rs）。
+  const words = stats?.spoken_words ?? 0;
+  const durationMin = (stats?.spoken_duration_ms ?? 0) / 60000;
   const spokenMin = Math.round(durationMin);
-  const savedMin = Math.max(0, Math.round(words / TYPING_WPM - durationMin));
   const wpm = durationMin > 0 ? Math.round(words / durationMin) : 0;
+  const aiWords = stats?.ai_output_words ?? 0;
 
   const cards: { icon: IconName; value: string; unit: string; label: string }[] = [
     { icon: "clock", value: String(spokenMin), unit: "分钟", label: "口述时间" },
     { icon: "mic", value: formatCount(words), unit: "字", label: "口述字数" },
-    { icon: "zap", value: String(savedMin), unit: "分钟", label: "节省时间" },
+    { icon: "sparkles", value: formatCount(aiWords), unit: "字", label: "AI 产出" },
     { icon: "audio-lines", value: String(wpm), unit: "字/分", label: "平均口述速度" },
   ];
 

@@ -69,6 +69,16 @@ enum DictationMode {
     Compose,
 }
 
+impl DictationMode {
+    /// History `mode` column value (片2 adds `Rewrite => "rewrite"`).
+    fn as_str(self) -> &'static str {
+        match self {
+            DictationMode::Polish => "polish",
+            DictationMode::Compose => "compose",
+        }
+    }
+}
+
 /// Which trigger fired — set on the press that starts a take. `start_recording`
 /// resolves it to a `DictationMode`; 片2 will branch Primary on the selection state
 /// (有选中 → 改写). `pub(crate)` so `commands::update_settings` can rebuild callbacks.
@@ -640,7 +650,8 @@ fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
                 return;
             }
             let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| to_inject.clone());
-            record_history(&app, "success", &text, enhanced, take.duration_ms);
+            // resume (撤销/重试) re-runs the polish pipeline, so it records as polish.
+            record_history(&app, "success", "polish", &text, enhanced, take.duration_ms);
             state.transition(&app, AppState::Success, Some("resumed"));
             let hold = if matches!(outcome, EnhanceOutcome::Failed) {
                 TERMINAL_HOLD_MS
@@ -851,7 +862,7 @@ fn finish_pipeline_tail(
     // whenever polishing actually ran (so both versions show). A history failure
     // must not break injection.
     let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| text_to_inject.clone());
-    record_history(app, "success", text, enhanced, duration_ms);
+    record_history(app, "success", mode.as_str(), text, enhanced, duration_ms);
     Ok(matches!(outcome, EnhanceOutcome::Failed))
 }
 
@@ -860,13 +871,14 @@ fn finish_pipeline_tail(
 fn record_history(
     app: &AppHandle,
     kind: &str,
+    mode: &str,
     raw_text: &str,
     enhanced_text: Option<String>,
     duration_ms: u64,
 ) {
     let history = app.state::<Arc<HistoryManager>>();
-    if let Err(err) = history.record(app, kind, raw_text, enhanced_text, duration_ms as i64) {
-        log::warn!("record history ({kind}): {err:?}");
+    if let Err(err) = history.record(app, kind, mode, raw_text, enhanced_text, duration_ms as i64) {
+        log::warn!("record history ({kind}/{mode}): {err:?}");
     }
 }
 
@@ -882,7 +894,7 @@ fn record_cancelled_transcript(app: &AppHandle, last_take: &LastTakeSlot) {
         },
         None => return,
     };
-    record_history(app, "success", &take.0, None, take.1);
+    record_history(app, "success", "polish", &take.0, None, take.1);
 }
 
 /// "No content recognized" outcome: record a `kind=empty` history entry and surface
@@ -890,7 +902,7 @@ fn record_cancelled_transcript(app: &AppHandle, last_take: &LastTakeSlot) {
 /// action buttons for this category — not the scary red device-error treatment), so
 /// the user gets immediate feedback plus a history row.
 fn enter_no_content(app: AppHandle, state: Arc<StateMachine>, duration_ms: u64) {
-    record_history(&app, "empty", "", None, duration_ms);
+    record_history(&app, "empty", "polish", "", None, duration_ms);
     enter_error(app, state, AppError::Device("没有识别到内容".into()));
 }
 
