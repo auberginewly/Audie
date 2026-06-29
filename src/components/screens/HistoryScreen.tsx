@@ -63,8 +63,20 @@ function modeLabel(mode: HistoryEntry["mode"]): string {
   return mode === "compose" ? "写作" : mode === "rewrite" ? "改写" : "润色";
 }
 
-// One labeled version of an entry (原文 / 润色 / 写作 / 改写) with hover actions.
-function VersionBox({ label, text, actions }: { label: string; text: string; actions: ReactNode }) {
+// One labeled version of an entry (原文 / 润色 / 写作 / 改写) with hover actions. Body is
+// `text` by default; pass `children` to render a structured body instead (改写 原文 does
+// this to split 指令 / 引用 —— see RewriteRawBody).
+function VersionBox({
+  label,
+  text,
+  actions,
+  children,
+}: {
+  label: string;
+  text?: string;
+  actions: ReactNode;
+  children?: ReactNode;
+}) {
   return (
     <div className="group/box rounded-md bg-surface-card px-3 py-2">
       <div className="mb-0.5 flex items-center justify-between gap-2">
@@ -73,8 +85,42 @@ function VersionBox({ label, text, actions }: { label: string; text: string; act
           {actions}
         </div>
       </div>
-      <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">
-        {text}
+      {children ?? (
+        <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 改写的「原文」由后端 rewrite_history_raw 拼成 "指令：…\n\n引用：\n…"。拆成两段渲染出层级：
+// 指令是你说的命令（正文），引用是被改写的选中内容（缩进引用块、置灰、左竖线）。格式对不上
+// （老数据 / 后端改了格式）就退回平铺，不会显示坏。
+function RewriteRawBody({ raw }: { raw: string }) {
+  const PREFIX = "指令：";
+  const MARKER = "\n\n引用：\n";
+  const idx = raw.indexOf(MARKER);
+  if (!raw.startsWith(PREFIX) || idx === -1) {
+    return (
+      <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">{raw}</div>
+    );
+  }
+  const instruction = raw.slice(PREFIX.length, idx);
+  const source = raw.slice(idx + MARKER.length);
+  return (
+    <div className="space-y-2">
+      <div>
+        <div className="mb-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-aubergine-900">指令</div>
+        <div className="whitespace-pre-wrap text-sm leading-5 text-text-primary [overflow-wrap:anywhere]">
+          {instruction}
+        </div>
+      </div>
+      <div className="border-l-2 border-border-strong pl-2.5">
+        <div className="mb-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-text-tertiary">引用</div>
+        <div className="whitespace-pre-wrap text-[13px] leading-5 text-text-secondary [overflow-wrap:anywhere]">
+          {source}
+        </div>
       </div>
     </div>
   );
@@ -128,7 +174,9 @@ function HistoryRow({
                   ) : null}
                 </>
               }
-            />
+            >
+              {item.mode === "rewrite" ? <RewriteRawBody raw={item.raw_text} /> : null}
+            </VersionBox>
             {item.enhanced_text ? (
               <VersionBox
                 label={modeLabel(item.mode)}
