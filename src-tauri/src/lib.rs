@@ -66,6 +66,7 @@ type TakeGen = Arc<AtomicU64>;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DictationMode {
     Polish,
+    Rewrite,
     Compose,
 }
 
@@ -74,6 +75,7 @@ impl DictationMode {
     fn as_str(self) -> &'static str {
         match self {
             DictationMode::Polish => "polish",
+            DictationMode::Rewrite => "rewrite",
             DictationMode::Compose => "compose",
         }
     }
@@ -91,6 +93,9 @@ pub(crate) enum HotkeyRole {
 /// The in-flight take's mode, set when recording starts (which trigger fired) and
 /// read by the pipeline tail. A toggle keeps it across the start→finish gap.
 type ActiveModeSlot = Arc<parking_lot::Mutex<DictationMode>>;
+
+/// 改写模式抓到的选中文字：start_recording 探选中时存，finish 拼进 LLM 输入后用。
+type RewriteSourceSlot = Arc<parking_lot::Mutex<Option<String>>>;
 
 #[derive(Serialize, Clone)]
 struct FinalTranscript {
@@ -279,6 +284,7 @@ pub fn run() {
             app.manage(Arc::new(AtomicU64::new(0)));
             // 写作/润色 mode of the in-flight take (set on the press that starts it).
             app.manage::<ActiveModeSlot>(Arc::new(parking_lot::Mutex::new(DictationMode::Polish)));
+            app.manage::<RewriteSourceSlot>(Arc::new(parking_lot::Mutex::new(None)));
 
             let hotkey = commands::load_hotkey(&app_handle);
             if let Err(err) = platform.register_hotkey(
@@ -402,23 +408,32 @@ fn handle_hotkey(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
 /// Recording state → overlay. No ASR happens until finish, because P1 uses
 /// batch transcription.
 fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
-    // Which trigger fired decides the take's mode. 片1: Primary → 润色, 写作键 → 写作.
-    // 片2 will branch Primary on the selection state (有选中 → 改写).
+    let platform = ctx.app.state::<Arc<dyn Platform>>();
+    // Snapshot the frontmost app NOW — before probing the selection (read_selection's
+    // synthetic Cmd+C targets it), before the permission gate (whose first-run TCC
+    // prompt changes frontmost), and before the overlay. inject restores focus here.
+    platform.capture_focus_target();
+
+    // Which trigger fired + the selection state decide the mode. 写作键 → 写作; fn with a
+    // selection → 改写 (grab the selected text now, replace it on finish); fn with no
+    // selection → 润色. read_selection probes via the clipboard (片2).
     let mode = match role {
-        HotkeyRole::Primary => DictationMode::Polish,
         HotkeyRole::Compose => DictationMode::Compose,
+        HotkeyRole::Primary => match platform.read_selection(ctx.app) {
+            Some(sel) if !sel.trim().is_empty() => {
+                *ctx.app.state::<RewriteSourceSlot>().lock() = Some(sel);
+                DictationMode::Rewrite
+            }
+            _ => DictationMode::Polish,
+        },
     };
+    if !matches!(mode, DictationMode::Rewrite) {
+        *ctx.app.state::<RewriteSourceSlot>().lock() = None;
+    }
     *ctx.active_mode.lock() = mode;
 
-    // Gate on mic permission before recording: a denial otherwise captures
-    // silence and the user only sees a Whisper hallucination. Flash red
-    // instead (§3.7 Permission).
-    let platform = ctx.app.state::<Arc<dyn Platform>>();
-    // Snapshot the frontmost app NOW — before the permission gate (whose first-run
-    // TCC prompt changes frontmost) and before the overlay shows. The ✓ / 撤销 /
-    // 重试 button paths later make Audie frontmost, so inject needs this
-    // pre-recording target to restore focus and paste at the user's caret.
-    platform.capture_focus_target();
+    // Gate on mic permission before recording: a denial otherwise captures silence
+    // and the user only sees a Whisper hallucination. Flash red instead (§3.7).
 
     if !platform.ensure_microphone_permission() {
         let _ = show_overlay(ctx.app);
@@ -851,6 +866,7 @@ fn finish_pipeline_tail(
     // toast (Failed). 没配 LLM 的润色走 Disabled —— 静默注入原文、无 toast。
     let (text_to_inject, outcome) = match mode {
         DictationMode::Polish => maybe_enhance_text(app, enhance, text),
+        DictationMode::Rewrite => rewrite_text(app, enhance, text),
         DictationMode::Compose => compose_text(app, enhance, text),
     };
 
@@ -956,6 +972,36 @@ fn compose_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> (Strin
         Err(err) => {
             log::warn!("compose failed, injecting raw points: {err:?}");
             let fallback = fallback_after_enhance_failure(text, &err);
+            emit_enhance_progress(app, "failed", &fallback.message);
+            (fallback.text_to_inject, EnhanceOutcome::Failed)
+        }
+    }
+}
+
+/// 改写 rewrite: 把 start 探到的选中文字（RewriteSource）+ 口述指令拼成一段喂 rewrite
+/// prompt，结果替换选中（inject 的 Cmd+V 落在仍选中的文本上）。失败兜底注入选中原文本身
+/// （替换成它自己、无变化），而不是把指令插进去。
+fn rewrite_text(
+    app: &AppHandle,
+    enhance: &EnhanceManager,
+    instruction: &str,
+) -> (String, EnhanceOutcome) {
+    let source = app
+        .state::<RewriteSourceSlot>()
+        .lock()
+        .take()
+        .unwrap_or_default();
+    let input = format!("原文：\n{source}\n\n指令：\n{instruction}");
+    let config = rewrite_config(app);
+    emit_enhance_progress(app, "started", "改写中…");
+    match enhance.enhance(&input, &config) {
+        Ok(result) => {
+            emit_enhance_progress(app, "completed", "改写完成");
+            (result, EnhanceOutcome::Enhanced)
+        }
+        Err(err) => {
+            log::warn!("rewrite failed, re-injecting the original selection: {err:?}");
+            let fallback = fallback_after_enhance_failure(&source, &err);
             emit_enhance_progress(app, "failed", &fallback.message);
             (fallback.text_to_inject, EnhanceOutcome::Failed)
         }
@@ -1154,6 +1200,24 @@ fn compose_config(app: &AppHandle) -> EnhanceConfig {
         settings.llm_provider,
         true,
         compose_prompt,
+        settings.openai_compatible_base_url,
+        settings.openai_compatible_model,
+        settings.llm_api_key_id,
+        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
+    )
+}
+
+/// 改写 config: 同 LLM provider/key，用 rewrite prompt（改写立场）+ force_enabled true
+/// （改写键触发即执行；没配 key 则失败兜底，不静默）。
+fn rewrite_config(app: &AppHandle) -> EnhanceConfig {
+    let settings = commands::load_settings(app);
+    let rewrite_prompt = prepend_language(app, &settings, &settings.rewrite_prompt);
+    let platform = app.state::<Arc<dyn Platform>>();
+
+    enhance_config_from_settings(
+        settings.llm_provider,
+        true,
+        rewrite_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
         settings.llm_api_key_id,

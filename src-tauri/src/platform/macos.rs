@@ -136,6 +136,31 @@ impl Platform for MacosPlatform {
         Ok(())
     }
 
+    fn read_selection(&self, app: &AppHandle) -> Option<String> {
+        // 片2 改写：探测当前选中文字。写一个独特 sentinel 到剪贴板 → 合成 Cmd+C → 若剪贴板
+        // 变了 = 有选中（拿到选中文字）；没变 = 无选中（恢复原剪贴板，不污染）。复用剪贴板法
+        // （和 inject 同套），不引 NSPasteboard/objc 依赖。缺辅助功能时 Cmd+C 静默失败 → 剪贴板
+        // 不变 → 当作无选中（退化润色），可接受。有选中时剪贴板留选中内容，finish 注入会覆盖它。
+        const SENTINEL: &str = "\u{2063}AUDIE_SEL_PROBE\u{2063}";
+        let original = app.clipboard().read_text().ok();
+        if app.clipboard().write_text(SENTINEL.to_string()).is_err() {
+            return None;
+        }
+        if simulate_cmd_c().is_err() {
+            restore_clipboard(app, original);
+            return None;
+        }
+        // Cmd+C 是异步的：等目标 App 把选中写进剪贴板再读。
+        std::thread::sleep(Duration::from_millis(120));
+        match app.clipboard().read_text() {
+            Ok(text) if text != SENTINEL => Some(text),
+            _ => {
+                restore_clipboard(app, original);
+                None
+            }
+        }
+    }
+
     fn capture_focus_target(&self) {
         let pid = current_frontmost_pid();
         *self.focus_target_pid.lock() = pid;
@@ -1548,6 +1573,35 @@ fn simulate_cmd_v() -> AppResult<()> {
     key_up.post(CGEventTapLocation::HID);
 
     Ok(())
+}
+
+/// Synthesize Cmd+C to copy the current selection — 片2 改写 reads the selection via the
+/// clipboard (see `read_selection`). Mirrors `simulate_cmd_v` (KEY_C = kVK_ANSI_C).
+fn simulate_cmd_c() -> AppResult<()> {
+    const KEY_C: CGKeyCode = 8; // kVK_ANSI_C
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .map_err(|()| AppError::Inject("CGEventSource creation failed".into()))?;
+
+    let key_down = CGEvent::new_keyboard_event(source.clone(), KEY_C, true)
+        .map_err(|()| AppError::Inject("CGEvent key-down failed".into()))?;
+    key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    key_down.post(CGEventTapLocation::HID);
+
+    let key_up = CGEvent::new_keyboard_event(source, KEY_C, false)
+        .map_err(|()| AppError::Inject("CGEvent key-up failed".into()))?;
+    key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+    key_up.post(CGEventTapLocation::HID);
+
+    Ok(())
+}
+
+/// Restore the clipboard to a saved value — used by `read_selection` when no selection
+/// was found, so probing doesn't clobber the user's clipboard.
+fn restore_clipboard(app: &AppHandle, original: Option<String>) {
+    if let Some(text) = original {
+        let _ = app.clipboard().write_text(text);
+    }
 }
 
 /// PID of the frontmost application right now, via NSWorkspace. Captured at record

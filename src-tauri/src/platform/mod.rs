@@ -50,6 +50,12 @@ pub trait Platform: Send + Sync {
     /// clipboard plugin. Per §6.3 the OS-specific keystroke stays in this layer.
     fn inject_text(&self, app: &AppHandle, text: &str) -> AppResult<()>;
 
+    /// 片2 改写：读当前选中文字（macOS 走剪贴板探测：写 sentinel → 合成 Cmd+C → 比较）。
+    /// `None` = 没有选中 / 读不到。默认 `None`（非 macOS 暂不支持），所以改写自动退化为润色。
+    fn read_selection(&self, _app: &AppHandle) -> Option<String> {
+        None
+    }
+
     /// Ensure microphone (TCC) access before recording, returning whether it's
     /// granted. On first run this shows the system prompt; if already denied it
     /// returns false without a dialog (macOS only asks once). Gating here means a

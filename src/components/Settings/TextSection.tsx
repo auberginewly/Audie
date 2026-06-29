@@ -5,7 +5,7 @@
 import { useState } from "react";
 
 import type { Settings } from "../../types/settings";
-import { Badge, Icon, Segmented, Select, Textarea } from "../ui";
+import { Icon, Segmented, Select, Textarea } from "../ui";
 import { SettingRow } from "./SettingSection";
 
 type Mode = "polish" | "rewrite" | "compose";
@@ -19,7 +19,7 @@ const POLISH_NOTE =
 const COMPOSE_NOTE =
   "写作不插入逐字稿，而是把你的口述要点交给上面的模型生成成稿 —— 比如说「写一封请假邮件」「列个周报提纲」，光标处就会出现写好的文本。先到「通用 → 触发键」设一个写作触发键，按它说要点即可；生成失败会退回插入你的原话。";
 const REWRITE_NOTE =
-  "改写是选中已有文字后、按主触发键说出指令（比如「翻译成英文」「改得更正式」「精简一下」），AI 按指令改写选中内容并替换。功能即将支持。";
+  "改写是先选中已有文字，再按「润色 / 改写触发键」说出指令（比如「翻译成英文」「改得更正式」「精简一下」），AI 按指令改写选中内容并替换。没选中文字时按该键则走润色。";
 
 type TextSectionProps = {
   settings: Settings;
@@ -47,11 +47,6 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
             { id: "compose", label: "写作" },
           ]}
         />
-        {mode === "rewrite" ? (
-          <Badge tone="neutral" dot>
-            即将支持
-          </Badge>
-        ) : null}
       </div>
 
       {mode === "polish" ? (
