@@ -6,7 +6,7 @@
 
 use tauri::AppHandle;
 
-use super::{HotkeyCallback, Platform};
+use super::{HotkeyCallback, HotkeySlot, Platform};
 use crate::error::AppResult;
 
 pub struct WindowsPlatform;
@@ -21,10 +21,15 @@ impl Platform for WindowsPlatform {
     fn register_hotkey(
         &self,
         _app: &AppHandle,
+        _slot: HotkeySlot,
         _combo: &str,
         _callback: HotkeyCallback,
     ) -> AppResult<()> {
         unimplemented!("Windows hotkey — P4")
+    }
+
+    fn unregister_hotkey(&self, _app: &AppHandle, _slot: HotkeySlot) {
+        unimplemented!("Windows unregister — P4")
     }
 
     fn unregister_all_hotkeys(&self, _app: &AppHandle) -> AppResult<()> {

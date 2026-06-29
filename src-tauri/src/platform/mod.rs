@@ -16,6 +16,17 @@ use crate::error::AppResult;
 /// is no separate release event since the control model is press-to-toggle.
 pub type HotkeyCallback = Box<dyn Fn() + Send + Sync + 'static>;
 
+/// Which trigger slot a hotkey occupies. P3.9 had exactly one (the fn toggle);
+/// 写作 compose adds a second, independent key. Each slot is its own CGEventTap on
+/// macOS, so re-binding / clearing one never disturbs the other.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HotkeySlot {
+    /// The main trigger (fn by default): 润色 / 改写 dictation.
+    Primary,
+    /// 写作 compose 的独立触发键。
+    Compose,
+}
+
 #[allow(dead_code)] // Trait surface defined whole per SPEC §3.4; later slices fill in callers.
 pub trait Platform: Send + Sync {
     /// Register the trigger key (e.g. "Fn", "F13", "Ctrl+Shift+Space"). The
@@ -23,9 +34,14 @@ pub trait Platform: Send + Sync {
     fn register_hotkey(
         &self,
         app: &AppHandle,
+        slot: HotkeySlot,
         combo: &str,
         callback: HotkeyCallback,
     ) -> AppResult<()>;
+
+    /// Stop a single slot's trigger — used when one key is re-bound or cleared
+    /// (e.g. toggling 写作键 off). `unregister_all_hotkeys` clears every slot.
+    fn unregister_hotkey(&self, app: &AppHandle, slot: HotkeySlot);
 
     fn unregister_all_hotkeys(&self, app: &AppHandle) -> AppResult<()>;
 

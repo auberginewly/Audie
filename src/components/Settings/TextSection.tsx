@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import type { Settings } from "../../types/settings";
 import { Badge, Icon, InlineNotice, Segmented, Select, Switch, Textarea } from "../ui";
+import { HotkeyRecorder } from "./HotkeyRecorder";
 import { SettingRow } from "./SettingSection";
 
 type Mode = "polish" | "rewrite" | "compose";
@@ -26,9 +27,9 @@ type TextSectionProps = {
 export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionProps) {
   const [mode, setMode] = useState<Mode>("polish");
   const [rewriteOn, setRewriteOn] = useState(false);
-  const [composeOn, setComposeOn] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
+  const [composePromptOpen, setComposePromptOpen] = useState(false);
 
   return (
     <section className="mb-7">
@@ -47,7 +48,7 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
             { id: "compose", label: "写作" },
           ]}
         />
-        {mode !== "polish" ? (
+        {mode === "rewrite" ? (
           <Badge tone="neutral" dot>
             探索中
           </Badge>
@@ -155,13 +156,79 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
       ) : null}
 
       {mode === "compose" ? (
-        <MockModeCard
-          enabled={composeOn}
-          onToggle={setComposeOn}
-          body="不再插入逐字稿，而是按你的口述简述生成内容。"
-          examples={COMPOSE_EX}
-          note="在光标处插入生成的文本"
-        />
+        <div className="overflow-hidden rounded-md bg-surface-card">
+          <SettingRow
+            label="启用写作"
+            divider={false}
+            control={
+              <Switch
+                checked={settings.compose_enabled}
+                onChange={(v) => update({ compose_enabled: v })}
+              />
+            }
+          />
+          <SettingRow
+            label="写作触发键"
+            description="独立于主触发键；按它说出要点，生成的文本插入光标处"
+            control={
+              <HotkeyRecorder
+                value={settings.compose_hotkey}
+                onChange={(h) => update({ compose_hotkey: h })}
+              />
+            }
+          />
+          <div className="relative">
+            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
+            <button
+              onClick={() => setComposePromptOpen((o) => !o)}
+              className="flex w-full items-center gap-2 border-0 bg-transparent px-3.5 py-3 text-left cursor-pointer"
+            >
+              <span className="shrink-0 text-[13px] text-text-secondary">写作提示词</span>
+              {composePromptOpen ? (
+                <span className="flex-1" />
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-[13px] text-text-tertiary">{settings.compose_prompt}</span>
+              )}
+              <Icon
+                name="chevron-down"
+                size={15}
+                className={["shrink-0 text-text-tertiary transition-transform duration-150", composePromptOpen ? "rotate-180" : ""].join(" ")}
+              />
+            </button>
+            {composePromptOpen ? (
+              <div className="px-3.5 pb-3.5">
+                <Textarea
+                  value={settings.compose_prompt}
+                  onChange={(e) => update({ compose_prompt: e.target.value })}
+                  className="min-h-[120px]"
+                />
+              </div>
+            ) : null}
+          </div>
+          <div className="relative p-3.5">
+            <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" />
+            <div className="mb-2 text-xs text-text-tertiary">可以这样说</div>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {COMPOSE_EX.map((x) => (
+                <span
+                  key={x}
+                  className="inline-flex h-[26px] items-center rounded-full bg-gray-200 px-3 text-[13px] text-text-secondary"
+                >
+                  {x}
+                </span>
+              ))}
+            </div>
+            {settings.compose_enabled && !settings.compose_hotkey ? (
+              <InlineNotice tone="info" icon="info">
+                已启用写作，但还没设置写作触发键
+              </InlineNotice>
+            ) : (
+              <InlineNotice tone="info" icon="info">
+                按写作触发键说要点 · 在光标处插入生成的文本
+              </InlineNotice>
+            )}
+          </div>
+        </div>
       ) : null}
     </section>
   );

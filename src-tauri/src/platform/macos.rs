@@ -36,7 +36,7 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_macos_permissions::{check_microphone_permission, request_microphone_permission};
 
-use super::{HotkeyCallback, Platform};
+use super::{HotkeyCallback, HotkeySlot, Platform};
 use crate::error::{AppError, AppResult};
 
 #[derive(Default)]
@@ -48,9 +48,12 @@ pub struct MacosPlatform {
     // P3.8 dev-only trigger-key probe: holds the run loop (to stop it cross-thread)
     // and the thread the CGEventTap runs on. None when not probing.
     probe: Mutex<Option<EventTapHandle>>,
-    // P3.9 production trigger: fn / single / combo, all via one CGEventTap that
-    // drives the real toggle callback. None when no trigger is registered.
+    // P3.9 production trigger (HotkeySlot::Primary): fn / single / combo, via one
+    // CGEventTap that drives the real toggle callback. None when not registered.
     trigger: Mutex<Option<EventTapHandle>>,
+    // 写作 compose 的第二个独立触发键（HotkeySlot::Compose），自己的 CGEventTap。
+    // None = 写作未配置 / 未启用。
+    compose_trigger: Mutex<Option<EventTapHandle>>,
     // P3.10 recorder: a listen-only capture tap, live only while the Settings
     // recorder is open. Emits trigger-captured / -rejected. None otherwise.
     capture: Mutex<Option<EventTapHandle>>,
@@ -66,16 +69,22 @@ impl Platform for MacosPlatform {
     fn register_hotkey(
         &self,
         _app: &AppHandle,
+        slot: HotkeySlot,
         combo: &str,
         callback: HotkeyCallback,
     ) -> AppResult<()> {
-        // P3.9: one CGEventTap handles every trigger shape (fn / single / combo).
+        // P3.9: one CGEventTap per slot handles every trigger shape (fn / single / combo).
         let spec = parse_trigger(combo)?;
-        self.start_trigger(spec, callback)
+        self.start_trigger(slot, spec, callback)
+    }
+
+    fn unregister_hotkey(&self, _app: &AppHandle, slot: HotkeySlot) {
+        self.stop_trigger(slot);
     }
 
     fn unregister_all_hotkeys(&self, _app: &AppHandle) -> AppResult<()> {
-        self.stop_trigger();
+        self.stop_trigger(HotkeySlot::Primary);
+        self.stop_trigger(HotkeySlot::Compose);
         Ok(())
     }
 
@@ -781,10 +790,23 @@ fn classify_capture_event(event_type: CGEventType, event: &CGEvent) -> CaptureEv
 }
 
 impl MacosPlatform {
-    /// Start the production trigger tap for `spec`. Idempotent; needs Input
-    /// Monitoring (a denial returns Permission so startup can keep going).
-    fn start_trigger(&self, spec: TriggerSpec, callback: HotkeyCallback) -> AppResult<()> {
-        if self.trigger.lock().is_some() {
+    /// The tap slot backing a `HotkeySlot` (each is an independent CGEventTap).
+    fn trigger_slot(&self, slot: HotkeySlot) -> &Mutex<Option<EventTapHandle>> {
+        match slot {
+            HotkeySlot::Primary => &self.trigger,
+            HotkeySlot::Compose => &self.compose_trigger,
+        }
+    }
+
+    /// Start the production trigger tap for `spec` in `slot`. Idempotent per slot;
+    /// needs Input Monitoring (a denial returns Permission so startup can keep going).
+    fn start_trigger(
+        &self,
+        slot: HotkeySlot,
+        spec: TriggerSpec,
+        callback: HotkeyCallback,
+    ) -> AppResult<()> {
+        if self.trigger_slot(slot).lock().is_some() {
             return Ok(());
         }
 
@@ -805,8 +827,12 @@ impl MacosPlatform {
         // Same tap-on-a-runloop-thread pattern as the dev probe; hand the run loop
         // back so stop_trigger can stop it cross-thread.
         let (tx, rx) = std::sync::mpsc::channel::<Option<CFRunLoop>>();
+        let thread_name = match slot {
+            HotkeySlot::Primary => "trigger",
+            HotkeySlot::Compose => "trigger-compose",
+        };
         let thread = std::thread::Builder::new()
-            .name("trigger".into())
+            .name(thread_name.into())
             .spawn(move || {
                 let state = Mutex::new(FnTapState::default());
                 let tap = CGEventTap::new(
@@ -859,11 +885,11 @@ impl MacosPlatform {
 
         match rx.recv() {
             Ok(Some(runloop)) => {
-                *self.trigger.lock() = Some(EventTapHandle {
+                *self.trigger_slot(slot).lock() = Some(EventTapHandle {
                     runloop,
                     thread: Some(thread),
                 });
-                log::info!("trigger started");
+                log::info!("trigger started ({thread_name})");
                 Ok(())
             }
             _ => {
@@ -875,8 +901,8 @@ impl MacosPlatform {
         }
     }
 
-    fn stop_trigger(&self) {
-        if let Some(mut handle) = self.trigger.lock().take() {
+    fn stop_trigger(&self, slot: HotkeySlot) {
+        if let Some(mut handle) = self.trigger_slot(slot).lock().take() {
             handle.runloop.stop();
             if let Some(thread) = handle.thread.take() {
                 let _ = thread.join();

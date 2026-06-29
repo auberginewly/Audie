@@ -31,7 +31,7 @@ use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, En
 use crate::managers::history::HistoryManager;
 use crate::managers::inject::InjectManager;
 use crate::managers::transcription::{TranscriptionConfig, TranscriptionManager};
-use crate::platform::{current_platform, HotkeyCallback, Platform};
+use crate::platform::{current_platform, HotkeyCallback, HotkeySlot, Platform};
 use crate::state::{AppState, StateMachine};
 
 const SUCCESS_HOLD_MS: u64 = 150;
@@ -59,6 +59,28 @@ type LastTakeSlot = Arc<parking_lot::Mutex<Option<LastTake>>>;
 /// it spawns and only injects while the shared counter still equals it; tapping ✕
 /// mid-Processing bumps the counter, superseding the worker without racing it.
 type TakeGen = Arc<AtomicU64>;
+
+/// What to do with the current take. `Polish` cleans the transcript (default fn key,
+/// 受 enhance_enabled 开关); `Compose` generates prose from spoken points (写作键).
+/// 片2 adds `Rewrite`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DictationMode {
+    Polish,
+    Compose,
+}
+
+/// Which trigger fired — set on the press that starts a take. `start_recording`
+/// resolves it to a `DictationMode`; 片2 will branch Primary on the selection state
+/// (有选中 → 改写). `pub(crate)` so `commands::update_settings` can rebuild callbacks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HotkeyRole {
+    Primary,
+    Compose,
+}
+
+/// The in-flight take's mode, set when recording starts (which trigger fired) and
+/// read by the pipeline tail. A toggle keeps it across the start→finish gap.
+type ActiveModeSlot = Arc<parking_lot::Mutex<DictationMode>>;
 
 #[derive(Serialize, Clone)]
 struct FinalTranscript {
@@ -99,6 +121,7 @@ struct HotkeyContext<'a> {
     streaming: &'a ActiveStreamingSession,
     last_take: &'a LastTakeSlot,
     take_gen: &'a TakeGen,
+    active_mode: &'a ActiveModeSlot,
 }
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
@@ -244,11 +267,16 @@ pub fn run() {
             // counter (mid-Processing cancel supersedes the in-flight worker).
             app.manage(Arc::new(parking_lot::Mutex::new(None::<LastTake>)));
             app.manage(Arc::new(AtomicU64::new(0)));
+            // 写作/润色 mode of the in-flight take (set on the press that starts it).
+            app.manage::<ActiveModeSlot>(Arc::new(parking_lot::Mutex::new(DictationMode::Polish)));
 
             let hotkey = commands::load_hotkey(&app_handle);
-            if let Err(err) =
-                platform.register_hotkey(&app_handle, &hotkey, build_hotkey_callback(&app_handle))
-            {
+            if let Err(err) = platform.register_hotkey(
+                &app_handle,
+                HotkeySlot::Primary,
+                &hotkey,
+                build_hotkey_callback(&app_handle, HotkeyRole::Primary),
+            ) {
                 // Don't abort startup: the default trigger is fn, which needs Input
                 // Monitoring. A missing grant must still let the app launch so the
                 // user can grant it in Settings and relaunch (P3.9 known caveat).
@@ -258,6 +286,8 @@ pub fn run() {
             } else {
                 log::info!("registered trigger {hotkey}");
             }
+            // 写作键（HotkeySlot::Compose）— only registered when enabled + configured.
+            register_compose_hotkey(&app_handle);
 
             Ok(())
         })
@@ -268,7 +298,7 @@ pub fn run() {
 /// Build the trigger-tap callback. Resolves managers off the app state instead of
 /// capturing clones, so it can be rebuilt verbatim when the trigger changes —
 /// see `commands::update_settings`.
-pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
+pub(crate) fn build_hotkey_callback(app: &AppHandle, role: HotkeyRole) -> HotkeyCallback {
     let app = app.clone();
     Box::new(move || {
         let state = app.state::<Arc<StateMachine>>();
@@ -279,6 +309,7 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
         let streaming = app.state::<ActiveStreamingSession>();
         let last_take = app.state::<LastTakeSlot>();
         let take_gen = app.state::<TakeGen>();
+        let active_mode = app.state::<ActiveModeSlot>();
         let ctx = HotkeyContext {
             app: &app,
             state: state.inner(),
@@ -289,8 +320,9 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle) -> HotkeyCallback {
             streaming: streaming.inner(),
             last_take: last_take.inner(),
             take_gen: take_gen.inner(),
+            active_mode: active_mode.inner(),
         };
-        handle_hotkey(&ctx);
+        handle_hotkey(&ctx, role);
     })
 }
 
@@ -311,15 +343,46 @@ fn end_trigger_capture(app: AppHandle) -> AppResult<()> {
     let platform = app.state::<Arc<dyn Platform>>();
     platform.stop_trigger_capture();
     let hotkey = commands::load_hotkey(&app);
-    platform.register_hotkey(&app, &hotkey, build_hotkey_callback(&app))
+    platform.register_hotkey(
+        &app,
+        HotkeySlot::Primary,
+        &hotkey,
+        build_hotkey_callback(&app, HotkeyRole::Primary),
+    )?;
+    register_compose_hotkey(&app);
+    Ok(())
 }
 
-fn handle_hotkey(ctx: &HotkeyContext<'_>) {
+/// Register the 写作 (compose) trigger when enabled + configured. A missing Input
+/// Monitoring grant only logs (like the primary trigger) so startup / capture-restore
+/// never abort. Reads the persisted settings, so callers must persist before calling
+/// (startup + capture-restore both do).
+fn register_compose_hotkey(app: &AppHandle) {
+    let settings = commands::load_settings(app);
+    if !settings.compose_enabled || settings.compose_hotkey.trim().is_empty() {
+        return;
+    }
+    let platform = app.state::<Arc<dyn Platform>>();
+    match platform.register_hotkey(
+        app,
+        HotkeySlot::Compose,
+        &settings.compose_hotkey,
+        build_hotkey_callback(app, HotkeyRole::Compose),
+    ) {
+        Ok(()) => log::info!("registered 写作键 {}", settings.compose_hotkey),
+        Err(err) => log::warn!(
+            "register 写作键 {} failed (grant Input Monitoring then relaunch): {err:?}",
+            settings.compose_hotkey
+        ),
+    }
+}
+
+fn handle_hotkey(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
     // Toggle control model: each trigger tap starts a take (from Idle) or finishes
     // it (from Recording). A tap mid-pipeline (Processing/Success/Error/Cancel) is
-    // a no-op.
+    // a no-op. `role` (which key fired) only matters when starting — it picks the mode.
     match ctx.state.current() {
-        AppState::Idle => start_recording(ctx),
+        AppState::Idle => start_recording(ctx, role),
         AppState::Recording => finish_recording(ctx),
         _ => {}
     }
@@ -328,7 +391,15 @@ fn handle_hotkey(ctx: &HotkeyContext<'_>) {
 /// Enter the front half of the pipeline: permission gate → open cpal stream →
 /// Recording state → overlay. No ASR happens until finish, because P1 uses
 /// batch transcription.
-fn start_recording(ctx: &HotkeyContext<'_>) {
+fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
+    // Which trigger fired decides the take's mode. 片1: Primary → 润色, 写作键 → 写作.
+    // 片2 will branch Primary on the selection state (有选中 → 改写).
+    let mode = match role {
+        HotkeyRole::Primary => DictationMode::Polish,
+        HotkeyRole::Compose => DictationMode::Compose,
+    };
+    *ctx.active_mode.lock() = mode;
+
     // Gate on mic permission before recording: a denial otherwise captures
     // silence and the user only sees a Whisper hallucination. Flash red
     // instead (§3.7 Permission).
@@ -397,6 +468,7 @@ fn finish_recording(ctx: &HotkeyContext<'_>) {
     // Claim a fresh take id: this worker injects only while the counter still
     // equals it, so a mid-Processing ✕ (which bumps the counter) supersedes it.
     let my_gen = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let mode = *ctx.active_mode.lock();
     match ctx.audio.stop_capture() {
         Ok(recorded) => {
             spawn_transcription(
@@ -410,6 +482,7 @@ fn finish_recording(ctx: &HotkeyContext<'_>) {
                 my_gen,
                 recorded,
                 streaming_result,
+                mode,
             );
         }
         Err(err) => {
@@ -430,6 +503,7 @@ fn with_hotkey_ctx<R>(app: &AppHandle, f: impl FnOnce(&HotkeyContext<'_>) -> R) 
     let streaming = app.state::<ActiveStreamingSession>();
     let last_take = app.state::<LastTakeSlot>();
     let take_gen = app.state::<TakeGen>();
+    let active_mode = app.state::<ActiveModeSlot>();
     let ctx = HotkeyContext {
         app,
         state: state.inner(),
@@ -440,6 +514,7 @@ fn with_hotkey_ctx<R>(app: &AppHandle, f: impl FnOnce(&HotkeyContext<'_>) -> R) 
         streaming: streaming.inner(),
         last_take: last_take.inner(),
         take_gen: take_gen.inner(),
+        active_mode: active_mode.inner(),
     };
     f(&ctx)
 }
@@ -643,6 +718,7 @@ fn spawn_transcription(
     my_gen: u64,
     audio: AudioData,
     streaming_result: Option<TranscriptStream>,
+    mode: DictationMode,
 ) {
     thread::spawn(move || {
         let duration_ms = duration_ms(&audio);
@@ -694,7 +770,7 @@ fn spawn_transcription(
         }
 
         let polish_unavailable =
-            match finish_pipeline_tail(&app, &enhance, &inject, &text, duration_ms) {
+            match finish_pipeline_tail(&app, &enhance, &inject, &text, duration_ms, mode) {
                 Ok(failed) => failed,
                 Err(err) => {
                     log::error!("inject failed: {err:?}");
@@ -746,6 +822,7 @@ fn finish_pipeline_tail(
     inject: &InjectManager,
     text: &str,
     duration_ms: u64,
+    mode: DictationMode,
 ) -> AppResult<bool> {
     // P0.3 acceptance: the transcript shows up in the console.
     println!("[transcript] {text}");
@@ -758,7 +835,13 @@ fn finish_pipeline_tail(
         },
     );
 
-    let (text_to_inject, outcome) = maybe_enhance_text(app, enhance, text);
+    // 润色 cleans the transcript (受 enhance_enabled 开关); 写作 generates prose from
+    // it (写作键按下即生成). Both inject the result; on LLM failure both fall back to
+    // the raw text + the amber "去设置" toast (Failed) so the user checks their config.
+    let (text_to_inject, outcome) = match mode {
+        DictationMode::Polish => maybe_enhance_text(app, enhance, text),
+        DictationMode::Compose => compose_text(app, enhance, text),
+    };
 
     // P0.4: inject at the caret. On failure the text is still on the
     // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
@@ -839,6 +922,27 @@ fn maybe_enhance_text(
         }
         Err(err) => {
             log::warn!("enhance failed, injecting original transcript: {err:?}");
+            let fallback = fallback_after_enhance_failure(text, &err);
+            emit_enhance_progress(app, "failed", &fallback.message);
+            (fallback.text_to_inject, EnhanceOutcome::Failed)
+        }
+    }
+}
+
+/// 写作 compose: generate prose from the spoken points via the compose prompt
+/// (生成立场, `enhance_enabled` forced true). Mirrors `maybe_enhance_text` but always
+/// runs the LLM (写作键按下即生成, not gated on the 润色 toggle). On failure, inject the
+/// raw points + Failed so the "去设置" toast surfaces (片1 reuses 润色's fallback text).
+fn compose_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> (String, EnhanceOutcome) {
+    let config = compose_config(app);
+    emit_enhance_progress(app, "started", "写作中…");
+    match enhance.enhance(text, &config) {
+        Ok(generated) => {
+            emit_enhance_progress(app, "completed", "写作完成");
+            (generated, EnhanceOutcome::Enhanced)
+        }
+        Err(err) => {
+            log::warn!("compose failed, injecting raw points: {err:?}");
             let fallback = fallback_after_enhance_failure(text, &err);
             emit_enhance_progress(app, "failed", &fallback.message);
             (fallback.text_to_inject, EnhanceOutcome::Failed)
@@ -974,8 +1078,8 @@ fn doubao_streaming_config_from_settings(
 
 /// Prepend the main language as one line so the LLM knows it, without exposing a
 /// {{placeholder}} in the editable prompt. The dropdown wins; empty = follow the
-/// system locale; 中文 as a last resort.
-fn enhance_prompt_with_language(app: &AppHandle, settings: &commands::Settings) -> String {
+/// system locale; 中文 as a last resort. Shared by 润色 and 写作.
+fn prepend_language(app: &AppHandle, settings: &commands::Settings, prompt: &str) -> String {
     let language = if settings.primary_language.trim().is_empty() {
         app.state::<Arc<dyn Platform>>()
             .inner()
@@ -984,7 +1088,11 @@ fn enhance_prompt_with_language(app: &AppHandle, settings: &commands::Settings) 
     } else {
         settings.primary_language.clone()
     };
-    format!("用户主要语言：{language}\n\n{}", settings.enhance_prompt)
+    format!("用户主要语言：{language}\n\n{prompt}")
+}
+
+fn enhance_prompt_with_language(app: &AppHandle, settings: &commands::Settings) -> String {
+    prepend_language(app, settings, &settings.enhance_prompt)
 }
 
 fn enhance_config(app: &AppHandle) -> EnhanceConfig {
@@ -1015,6 +1123,24 @@ fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
         settings.llm_provider,
         true,
         enhance_prompt,
+        settings.openai_compatible_base_url,
+        settings.openai_compatible_model,
+        settings.llm_api_key_id,
+        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
+    )
+}
+
+/// 写作 config: same LLM provider/key as 润色, but the compose prompt (生成立场) and
+/// `enhance_enabled` forced true (写作键按下即生成, regardless of the 润色 toggle).
+fn compose_config(app: &AppHandle) -> EnhanceConfig {
+    let settings = commands::load_settings(app);
+    let compose_prompt = prepend_language(app, &settings, &settings.compose_prompt);
+    let platform = app.state::<Arc<dyn Platform>>();
+
+    enhance_config_from_settings(
+        settings.llm_provider,
+        true,
+        compose_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
         settings.llm_api_key_id,

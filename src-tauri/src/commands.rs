@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::error::AppError;
-use crate::platform::Platform;
+use crate::platform::{HotkeySlot, Platform};
 
 /// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
 const LEGACY_SETTINGS_JSON: &str = "settings.json";
@@ -72,6 +72,12 @@ pub struct Settings {
     /// `never | day | week | month | forever`; `never` skips recording entirely,
     /// the rest prune older rows. `normalize_settings` clamps anything else.
     pub history_retention: String,
+    /// 写作模式（compose）独立触发键。空串 = 未配置（写作键不注册）。文法同主 hotkey。
+    pub compose_hotkey: String,
+    /// 写作模式总开关。默认 false；开 + compose_hotkey 非空才注册写作键、走写作分支。
+    pub compose_enabled: bool,
+    /// 写作模式提示词的出厂默认（数据文件，源码零 prompt，同 enhance_prompt 经 include_str! 读）。
+    pub compose_prompt: String,
     /// Per-provider LLM model the user chose, keyed by the front-end card id
     /// (deepseek / lmstudio / …). All LLM cards share one backend slot, so this
     /// lets 选用 restore each provider's own model instead of clearing it. Backend
@@ -101,6 +107,11 @@ impl Default for Settings {
             onboarding_completed: false,
             primary_language: String::new(),
             history_retention: DEFAULT_HISTORY_RETENTION.to_string(),
+            compose_hotkey: String::new(),
+            compose_enabled: false,
+            compose_prompt: include_str!("../prompts/compose_default.md")
+                .trim_end()
+                .to_string(),
             llm_models: HashMap::new(),
         }
     }
@@ -123,6 +134,9 @@ pub struct SettingsPatch {
     pub onboarding_completed: Option<bool>,
     pub primary_language: Option<String>,
     pub history_retention: Option<String>,
+    pub compose_hotkey: Option<String>,
+    pub compose_enabled: Option<bool>,
+    pub compose_prompt: Option<String>,
     pub llm_models: Option<HashMap<String, String>>,
 }
 
@@ -240,6 +254,9 @@ fn normalize_settings(mut settings: Settings) -> Settings {
 
     if !HISTORY_RETENTION_IDS.contains(&settings.history_retention.as_str()) {
         settings.history_retention = DEFAULT_HISTORY_RETENTION.to_string();
+    }
+    if settings.compose_prompt.trim().is_empty() {
+        settings.compose_prompt = Settings::default().compose_prompt;
     }
 
     settings
@@ -365,22 +382,73 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, AppError> {
 #[tauri::command]
 pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings, AppError> {
     let current = load_settings(&app);
-    let next = settings_from_patch(current, patch)?;
+    let next = settings_from_patch(current.clone(), patch)?;
 
-    apply_hotkey_if_changed(&app, &next.hotkey)?;
+    apply_hotkeys_if_changed(&app, &current, &next)?;
     persist_settings(&app, next)?;
 
     Ok(load_settings(&app))
 }
 
-fn apply_hotkey_if_changed(app: &AppHandle, next_hotkey: &str) -> Result<(), AppError> {
-    if next_hotkey == load_hotkey(app) {
-        return Ok(());
+/// Re-register triggers whose binding changed — the primary (fn) key and the 写作键
+/// independently. Re-register before persist so a failure leaves the store untouched
+/// (no "saved but not active" mismatch). 写作键 also re-registers when its enable
+/// toggle flips; disabled / empty leaves the Compose slot unregistered.
+fn apply_hotkeys_if_changed(
+    app: &AppHandle,
+    current: &Settings,
+    next: &Settings,
+) -> Result<(), AppError> {
+    let platform = app.state::<Arc<dyn Platform>>();
+
+    // Primary (fn). On change: re-register and surface failures. Unchanged: just
+    // ensure it's live — the Settings recorder's begin_trigger_capture stops ALL
+    // triggers, and recording a NEW key returns here via update_settings, so the
+    // OTHER slot must be revived. register_hotkey is idempotent when already
+    // registered (the common no-op case); a revive failure is ignored so a normal
+    // settings save never fails just because Input Monitoring lapsed.
+    if next.hotkey != current.hotkey {
+        platform.unregister_hotkey(app, HotkeySlot::Primary);
+        platform.register_hotkey(
+            app,
+            HotkeySlot::Primary,
+            &next.hotkey,
+            crate::build_hotkey_callback(app, crate::HotkeyRole::Primary),
+        )?;
+    } else {
+        let _ = platform.register_hotkey(
+            app,
+            HotkeySlot::Primary,
+            &next.hotkey,
+            crate::build_hotkey_callback(app, crate::HotkeyRole::Primary),
+        );
     }
 
-    let platform = app.state::<Arc<dyn Platform>>();
-    platform.unregister_all_hotkeys(app)?;
-    platform.register_hotkey(app, next_hotkey, crate::build_hotkey_callback(app))
+    // 写作键 (compose). Live only when enabled + non-empty; same revive logic.
+    let compose_changed = next.compose_hotkey != current.compose_hotkey
+        || next.compose_enabled != current.compose_enabled;
+    let compose_on = next.compose_enabled && !next.compose_hotkey.trim().is_empty();
+    if compose_changed {
+        platform.unregister_hotkey(app, HotkeySlot::Compose);
+        if compose_on {
+            platform.register_hotkey(
+                app,
+                HotkeySlot::Compose,
+                &next.compose_hotkey,
+                crate::build_hotkey_callback(app, crate::HotkeyRole::Compose),
+            )?;
+        }
+    } else if compose_on {
+        let _ = platform.register_hotkey(
+            app,
+            HotkeySlot::Compose,
+            &next.compose_hotkey,
+            crate::build_hotkey_callback(app, crate::HotkeyRole::Compose),
+        );
+    } else {
+        platform.unregister_hotkey(app, HotkeySlot::Compose);
+    }
+    Ok(())
 }
 
 fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settings, AppError> {
@@ -443,6 +511,13 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.history_retention),
+        // 空串有意义（= 写作键未配置），故保留空 patch 值，不 filter 回 current（同 input_device）。
+        compose_hotkey: patch
+            .compose_hotkey
+            .map(|value| value.trim().to_string())
+            .unwrap_or(current.compose_hotkey),
+        compose_enabled: patch.compose_enabled.unwrap_or(current.compose_enabled),
+        compose_prompt: patch.compose_prompt.unwrap_or(current.compose_prompt),
         // Whole-map replace when provided (the front-end sends the merged map).
         llm_models: patch.llm_models.unwrap_or(current.llm_models),
     };
@@ -563,12 +638,12 @@ pub fn clear_history(app: AppHandle) -> Result<(), AppError> {
     history.clear(&app)
 }
 
-/// Rolling 7-day usage totals for the Home dashboard (§5.4 / release-v1 #6). The
+/// All-time usage totals for the Home dashboard (§5.4 / release-v1 #6). The
 /// frontend derives the four cards (time / words / time-saved / speed) from these.
 #[tauri::command]
 pub fn get_usage_stats(app: AppHandle) -> Result<crate::managers::history::UsageStats, AppError> {
     app.state::<Arc<crate::managers::history::HistoryManager>>()
-        .weekly_stats()
+        .usage_stats()
 }
 
 #[tauri::command]
@@ -899,6 +974,9 @@ mod tests {
                 onboarding_completed: None,
                 primary_language: None,
                 history_retention: None,
+                compose_hotkey: None,
+                compose_enabled: None,
+                compose_prompt: None,
                 llm_models: None,
             },
         )
@@ -923,6 +1001,9 @@ mod tests {
                 onboarding_completed: None,
                 primary_language: None,
                 history_retention: None,
+                compose_hotkey: None,
+                compose_enabled: None,
+                compose_prompt: None,
                 llm_models: None,
             },
         )
@@ -1050,9 +1131,14 @@ mod tests {
             fn register_hotkey(
                 &self,
                 _app: &AppHandle,
+                _slot: crate::platform::HotkeySlot,
                 _combo: &str,
                 _callback: crate::platform::HotkeyCallback,
             ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_hotkey(&self, _app: &AppHandle, _slot: crate::platform::HotkeySlot) {
                 unreachable!()
             }
 
@@ -1096,9 +1182,14 @@ mod tests {
             fn register_hotkey(
                 &self,
                 _app: &AppHandle,
+                _slot: crate::platform::HotkeySlot,
                 _combo: &str,
                 _callback: crate::platform::HotkeyCallback,
             ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_hotkey(&self, _app: &AppHandle, _slot: crate::platform::HotkeySlot) {
                 unreachable!()
             }
 
@@ -1142,9 +1233,14 @@ mod tests {
             fn register_hotkey(
                 &self,
                 _app: &AppHandle,
+                _slot: crate::platform::HotkeySlot,
                 _combo: &str,
                 _callback: crate::platform::HotkeyCallback,
             ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_hotkey(&self, _app: &AppHandle, _slot: crate::platform::HotkeySlot) {
                 unreachable!()
             }
 
@@ -1190,9 +1286,14 @@ mod tests {
             fn register_hotkey(
                 &self,
                 _app: &AppHandle,
+                _slot: crate::platform::HotkeySlot,
                 _combo: &str,
                 _callback: crate::platform::HotkeyCallback,
             ) -> crate::error::AppResult<()> {
+                unreachable!()
+            }
+
+            fn unregister_hotkey(&self, _app: &AppHandle, _slot: crate::platform::HotkeySlot) {
                 unreachable!()
             }
 
