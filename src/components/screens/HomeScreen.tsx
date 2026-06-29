@@ -1,5 +1,5 @@
 // Home — the landing, mirroring the design's Typeless-style rhythm: slogan +
-// fn hint over a usage stat grid. Stats are real (rolling 7-day, from the
+// fn hint over a usage stat grid. Stats are real (all-time, from the
 // HistoryManager); state lives in the capsule overlay, not here.
 
 import { Icon, Keycap, type IconName } from "../ui";
@@ -59,7 +59,6 @@ export function HomeScreen() {
         </div>
       </div>
 
-      <div className="mb-3 pl-1 font-mono text-xs uppercase tracking-[0.04em] text-text-tertiary">近 7 天</div>
       <div className="grid grid-cols-4 gap-3">
         {cards.map((s) => (
           <StatCard key={s.label} icon={s.icon} value={s.value} unit={s.unit} label={s.label} />

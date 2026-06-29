@@ -17,7 +17,6 @@ use crate::error::{AppError, AppResult};
 
 const HISTORY_UPDATED_EVENT: &str = "history-updated";
 const LIST_LIMIT: i64 = 500;
-const WEEK_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// One dictation outcome. Field names are snake_case so the frontend Zod schema
 /// (src/types/history.ts) mirrors them verbatim, like Settings does.
@@ -32,7 +31,7 @@ pub struct HistoryEntry {
     pub duration_ms: i64,
 }
 
-/// Rolling-window usage aggregate for the Home dashboard. The frontend derives the
+/// All-time usage aggregate for the Home dashboard. The frontend derives the
 /// four cards (time / words / time-saved / speed) from these raw totals.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct UsageStats {
@@ -140,10 +139,10 @@ impl HistoryManager {
         Ok(())
     }
 
-    /// Rolling 7-day totals over successful dictations only (errors don't count).
-    pub fn weekly_stats(&self) -> AppResult<UsageStats> {
+    /// All-time totals over successful dictations only (errors don't count).
+    pub fn usage_stats(&self) -> AppResult<UsageStats> {
         let conn = self.open()?;
-        fetch_stats(&conn, now_unix() - WEEK_SECS).map_err(map_sqlite)
+        fetch_stats(&conn).map_err(map_sqlite)
     }
 
     /// The stored transcript for an entry — drives the History 重试 (re-enhance).
@@ -254,12 +253,12 @@ fn fetch_list(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<HistoryEntr
     rows.collect()
 }
 
-fn fetch_stats(conn: &Connection, cutoff: i64) -> rusqlite::Result<UsageStats> {
+fn fetch_stats(conn: &Connection) -> rusqlite::Result<UsageStats> {
     conn.query_row(
         "SELECT COALESCE(SUM(word_count), 0), COALESCE(SUM(duration_ms), 0), COUNT(*)
          FROM history
-         WHERE kind = 'success' AND created_at >= ?1",
-        [cutoff],
+         WHERE kind = 'success'",
+        [],
         |row| {
             Ok(UsageStats {
                 total_words: row.get(0)?,
@@ -320,23 +319,22 @@ mod tests {
     }
 
     #[test]
-    fn stats_count_only_success_within_window() {
+    fn stats_sum_all_success_excluding_other_kinds() {
         let conn = setup();
-        let now = 1_000_000;
-        insert(&conn, now - 100, "success", "in", 10, 3000);
-        insert(&conn, now - 100, "error", "cancelled", 4, 0); // wrong kind
-        insert(&conn, now - WEEK_SECS - 10, "success", "old", 99, 9000); // outside window
+        insert(&conn, 100, "success", "recent", 10, 3000);
+        insert(&conn, 200, "error", "cancelled", 4, 0); // wrong kind, excluded
+        insert(&conn, 300, "success", "old", 99, 9000); // no time window — still counts
 
-        let stats = fetch_stats(&conn, now - WEEK_SECS).expect("stats");
-        assert_eq!(stats.total_words, 10);
-        assert_eq!(stats.total_duration_ms, 3000);
-        assert_eq!(stats.dictation_count, 1);
+        let stats = fetch_stats(&conn).expect("stats");
+        assert_eq!(stats.total_words, 109);
+        assert_eq!(stats.total_duration_ms, 12000);
+        assert_eq!(stats.dictation_count, 2);
     }
 
     #[test]
     fn stats_are_zero_when_empty() {
         let conn = setup();
-        let stats = fetch_stats(&conn, 0).expect("stats");
+        let stats = fetch_stats(&conn).expect("stats");
         assert_eq!(stats.total_words, 0);
         assert_eq!(stats.total_duration_ms, 0);
         assert_eq!(stats.dictation_count, 0);

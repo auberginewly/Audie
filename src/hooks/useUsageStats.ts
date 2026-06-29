@@ -1,4 +1,4 @@
-// Rolling 7-day usage totals for the Home dashboard. Loads get_usage_stats and
+// All-time usage totals for the Home dashboard. Loads get_usage_stats and
 // re-fetches on the history-updated event. Logic-free screens (CLAUDE.md §6.2).
 
 import { useEffect, useState } from "react";
