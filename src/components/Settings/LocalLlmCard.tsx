@@ -26,21 +26,19 @@ export function LocalLlmCard({
   onPickModel: (model: string) => void; // pick a specific live model
   onConfigure: () => void;
 }) {
+  // The model the header represents (active model when 使用中, else the stored one).
+  // The card reads like any other: name + status + this model + 选用/配置.
   const subtitle = isActive ? activeModel : storedModel;
-  // When the server is running, the inline live-model list carries that state — don't
-  // also show 未配置/已配置 (felt redundant). 使用中 always wins.
   const statusBadge = isActive ? (
     <Badge tone="accent">使用中</Badge>
-  ) : server ? null : usable ? (
+  ) : usable ? (
     <Badge tone="success">已配置</Badge>
   ) : (
     <Badge tone="neutral">未配置</Badge>
   );
-  // Live models to offer for switching — exclude the already-active one (the header
-  // already shows it + 使用中), so a single-model running server adds no redundant row.
-  const otherModels = server
-    ? server.models.filter((model) => !(isActive && model === activeModel))
-    : [];
+  // Inline list = OTHER running models to switch to. The header already represents
+  // `subtitle`, so exclude it — a single-model server then adds no redundant row.
+  const otherModels = server ? server.models.filter((model) => model !== subtitle) : [];
   return (
     <div className="flex flex-col gap-2 rounded-md bg-surface-card px-3.5 py-[13px]">
       <div className="flex items-center gap-3">
@@ -54,9 +52,9 @@ export function LocalLlmCard({
             <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{subtitle}</div>
           ) : null}
         </div>
-        {/* Re-activate the stored model only when the server isn't detected running;
-            when it is, pick from the live list below. */}
-        {!isActive && usable && !server ? (
+        {/* Header 选用 picks the stored model, like any other card. Other running
+            models (if any) are listed below to switch to. */}
+        {!isActive && usable ? (
           <Button size="sm" variant="secondary" onClick={onPickStored}>
             选用
           </Button>
