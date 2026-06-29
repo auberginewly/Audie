@@ -5,7 +5,7 @@
 import { useState } from "react";
 
 import type { Settings } from "../../types/settings";
-import { Icon, Segmented, Select, Textarea } from "../ui";
+import { Icon, Segmented, Select, Switch, Textarea } from "../ui";
 import { SettingRow } from "./SettingSection";
 
 type Mode = "polish" | "rewrite" | "compose";
@@ -15,7 +15,7 @@ type Mode = "polish" | "rewrite" | "compose";
 const LANGUAGES = ["中文", "English"];
 
 const POLISH_NOTE =
-  "Audie 会在插入前用上面的模型把口述整理干净 —— 去掉「嗯、那个」这类口水话、修正口误、补好标点和分段，可以用上面的提示词调教风格。配好 LLM 模型后自动生效；没配模型就原样插入转写文字（更快、不消耗额度）。万一润色失败，也会自动退回插入原文、不丢内容。";
+  "打开「AI 润色」后，Audie 会在插入前用上面的模型把口述整理干净 —— 去掉「嗯、那个」这类口水话、修正口误、补好标点和分段，可以用上面的提示词调教风格（需先配好 LLM 模型）。关掉开关、或没配模型，就原样插入转写文字（更快、不消耗额度）。万一润色失败，也会自动退回插入原文、不丢内容。";
 const COMPOSE_NOTE =
   "写作不插入逐字稿，而是把你的口述要点交给上面的模型生成成稿 —— 比如说「写一封请假邮件」「列个周报提纲」，光标处就会出现写好的文本。先到「通用 → 触发键」设一个写作触发键，按它说要点即可；生成失败会退回插入你的原话。";
 const REWRITE_NOTE =
@@ -51,7 +51,13 @@ export function TextSection({ settings, update, onJumpToModelLlm }: TextSectionP
 
       {mode === "polish" ? (
         <div className="overflow-hidden rounded-md bg-surface-card">
-          <ModelRow label="润色模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} divider={false} />
+          <SettingRow
+            label="AI 润色"
+            description="关掉只插入语音转写原文，不经 AI 整理"
+            divider={false}
+            control={<Switch checked={settings.enhance_enabled} onChange={(v) => update({ enhance_enabled: v })} />}
+          />
+          <ModelRow label="润色模型" model={settings.openai_compatible_model} onJump={onJumpToModelLlm} />
           <SettingRow
             label="主语言"
             description="润色按此语言整理，并保留口述里的混合语言"

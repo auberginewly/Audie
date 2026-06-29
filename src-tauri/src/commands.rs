@@ -44,6 +44,9 @@ pub struct Settings {
     /// resource_id, not model — left blank for it, see normalize note).
     pub asr_model: String,
     pub llm_provider: String,
+    /// 「AI 润色」总开关。默认 true（配了 LLM 即自动润色）；关掉 = 即使配了 key 也只插入
+    /// 语音转写原文（纯转写），给只想要原始文字的人选择权。compose / rewrite 不受它管。
+    pub enhance_enabled: bool,
     pub enhance_prompt: String,
     pub openai_compatible_base_url: String,
     pub openai_compatible_model: String,
@@ -93,6 +96,8 @@ impl Default for Settings {
             asr_provider: DEFAULT_ASR_PROVIDER.to_string(),
             asr_model: String::new(),
             llm_provider: DEFAULT_LLM_PROVIDER.to_string(),
+            // 默认开：配了 LLM 就自动润色（沿用 f87b551 后的行为）；用户可关掉只要纯转写。
+            enhance_enabled: true,
             enhance_prompt: include_str!("../prompts/enhance_default.md")
                 .trim_end()
                 .to_string(),
@@ -123,6 +128,7 @@ pub struct SettingsPatch {
     pub asr_provider: Option<String>,
     pub asr_model: Option<String>,
     pub llm_provider: Option<String>,
+    pub enhance_enabled: Option<bool>,
     pub enhance_prompt: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_compatible_model: Option<String>,
@@ -463,6 +469,7 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .unwrap_or(current.asr_model),
         llm_provider: patch.llm_provider.unwrap_or(current.llm_provider),
+        enhance_enabled: patch.enhance_enabled.unwrap_or(current.enhance_enabled),
         enhance_prompt: patch.enhance_prompt.unwrap_or(current.enhance_prompt),
         openai_compatible_base_url: patch
             .openai_compatible_base_url
@@ -888,6 +895,7 @@ mod tests {
         // Empty = each adapter uses its built-in default model (no behavior change).
         assert_eq!(settings.asr_model, "");
         assert_eq!(settings.llm_provider, "openai_compatible");
+        assert!(settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
         assert_eq!(settings.history_retention, DEFAULT_HISTORY_RETENTION);
         assert!(!settings.enhance_prompt.trim().is_empty());
@@ -969,6 +977,7 @@ mod tests {
                 asr_provider: None,
                 asr_model: Some("whisper-large-v3".into()),
                 llm_provider: None,
+                enhance_enabled: None,
                 enhance_prompt: None,
                 openai_compatible_base_url: None,
                 openai_compatible_model: None,
@@ -995,6 +1004,7 @@ mod tests {
                 asr_provider: None,
                 asr_model: Some(String::new()),
                 llm_provider: None,
+                enhance_enabled: None,
                 enhance_prompt: None,
                 openai_compatible_base_url: None,
                 openai_compatible_model: None,

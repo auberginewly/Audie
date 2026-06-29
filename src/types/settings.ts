@@ -21,6 +21,8 @@ export const SettingsSchema = z.object({
   // while the backend struct ships in parallel.
   asr_model: z.string().default(""),
   llm_provider: z.enum(["openai_compatible"]),
+  // 「AI 润色」总开关。true（默认）= 配了 LLM 即自动润色；false = 纯转写（只插转写原文）。
+  enhance_enabled: z.boolean(),
   enhance_prompt: z.string().min(1),
   openai_compatible_base_url: z.string().min(1),
   // Empty allowed: picking a provider seeds no model (hardcoded ids go stale) — the
