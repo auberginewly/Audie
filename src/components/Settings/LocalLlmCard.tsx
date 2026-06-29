@@ -49,10 +49,14 @@ export function LocalLlmCard({
             <span className="text-sm font-medium text-text-primary">{name}</span>
             {statusBadge}
             <Badge tone="neutral">本地</Badge>
-            {server ? <Badge tone="success">已运行</Badge> : null}
           </div>
-          {subtitle ? (
-            <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{subtitle}</div>
+          {subtitle || server ? (
+            <div className="mt-[3px] flex items-center gap-2">
+              {subtitle ? (
+                <span className="font-mono text-[11px] text-text-tertiary">{subtitle}</span>
+              ) : null}
+              {server ? <Badge tone="success">已运行</Badge> : null}
+            </div>
           ) : null}
         </div>
         {/* Re-activate the stored model only when the server isn't detected running;
