@@ -4,14 +4,7 @@
 
 import { z } from "zod";
 
-export const AppStateSchema = z.enum([
-  "IDLE",
-  "RECORDING",
-  "PROCESSING",
-  "SUCCESS",
-  "ERROR",
-  "CANCEL",
-]);
+export const AppStateSchema = z.enum(["IDLE", "RECORDING", "PROCESSING", "SUCCESS", "ERROR", "CANCEL"]);
 export type AppState = z.infer<typeof AppStateSchema>;
 
 export const StateChangeSchema = z.object({
@@ -39,14 +32,7 @@ export const EVENT_MIC_MONITOR_LEVEL = "mic-monitor-level";
 
 // `error`: emitted on any pipeline failure. Mirrors src-tauri ErrorPayload /
 // AppError categories (PROJECT_SPEC.md §3.6 / §3.7).
-export const ErrorCodeSchema = z.enum([
-  "permission",
-  "device",
-  "network",
-  "provider",
-  "inject",
-  "internal",
-]);
+export const ErrorCodeSchema = z.enum(["permission", "device", "network", "provider", "inject", "internal"]);
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 
 export const AppErrorSchema = z.object({

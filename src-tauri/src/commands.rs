@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
 use crate::platform::{HotkeySlot, Platform};
@@ -27,7 +27,9 @@ pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
 // until the user re-picks a provider (which writes a per-provider key id).
 pub const DEFAULT_LLM_API_KEY_ID: &str = "openai_compatible_api_key";
 pub const DEFAULT_HISTORY_RETENTION: &str = "forever";
+pub const DEFAULT_UI_LANGUAGE: &str = "zh-Hans";
 const HISTORY_RETENTION_IDS: &[&str] = &["never", "day", "week", "month", "forever"];
+const UI_LANGUAGE_IDS: &[&str] = &["zh-Hans", "zh-Hant", "en"];
 // The factory-default enhance prompt is data, not source: it lives in
 // prompts/enhance_default.md and is pulled into Settings::default() via include_str!
 // (no prompt string in .rs). Edit that file to change the default; the user owns the
@@ -74,6 +76,8 @@ pub struct Settings {
     /// `never | day | week | month | forever`; `never` skips recording entirely,
     /// the rest prune older rows. `normalize_settings` clamps anything else.
     pub history_retention: String,
+    pub ui_language: String,
+    pub show_in_dock: bool,
     /// 写作模式（compose）独立触发键。空串 = 未配置 = 写作不启用（配了键即启用）。文法同主 hotkey。
     pub compose_hotkey: String,
     /// 写作模式提示词出厂默认（数据文件，源码零 prompt，同 enhance_prompt 经 include_str! 读）。
@@ -110,6 +114,8 @@ impl Default for Settings {
             onboarding_completed: false,
             primary_language: String::new(),
             history_retention: DEFAULT_HISTORY_RETENTION.to_string(),
+            ui_language: DEFAULT_UI_LANGUAGE.to_string(),
+            show_in_dock: true,
             compose_hotkey: String::new(),
             compose_prompt: include_str!("../prompts/compose_default.md")
                 .trim_end()
@@ -139,6 +145,8 @@ pub struct SettingsPatch {
     pub onboarding_completed: Option<bool>,
     pub primary_language: Option<String>,
     pub history_retention: Option<String>,
+    pub ui_language: Option<String>,
+    pub show_in_dock: Option<bool>,
     pub compose_hotkey: Option<String>,
     pub compose_prompt: Option<String>,
     pub rewrite_prompt: Option<String>,
@@ -259,6 +267,9 @@ fn normalize_settings(mut settings: Settings) -> Settings {
 
     if !HISTORY_RETENTION_IDS.contains(&settings.history_retention.as_str()) {
         settings.history_retention = DEFAULT_HISTORY_RETENTION.to_string();
+    }
+    if !UI_LANGUAGE_IDS.contains(&settings.ui_language.as_str()) {
+        settings.ui_language = DEFAULT_UI_LANGUAGE.to_string();
     }
     if settings.compose_prompt.trim().is_empty() {
         settings.compose_prompt = Settings::default().compose_prompt;
@@ -393,9 +404,14 @@ pub fn update_settings(app: AppHandle, patch: SettingsPatch) -> Result<Settings,
     let next = settings_from_patch(current.clone(), patch)?;
 
     apply_hotkeys_if_changed(&app, &current, &next)?;
+    apply_dock_visibility_if_changed(&app, &current, &next)?;
     persist_settings(&app, next)?;
 
-    Ok(load_settings(&app))
+    let updated = load_settings(&app);
+    if let Err(err) = app.emit("settings-updated", &updated) {
+        log::warn!("emit settings-updated failed: {err}");
+    }
+    Ok(updated)
 }
 
 /// Re-register triggers whose binding changed — the primary (fn) key and the 写作键
@@ -458,6 +474,18 @@ fn apply_hotkeys_if_changed(
     Ok(())
 }
 
+fn apply_dock_visibility_if_changed(
+    app: &AppHandle,
+    current: &Settings,
+    next: &Settings,
+) -> Result<(), AppError> {
+    if next.show_in_dock == current.show_in_dock {
+        return Ok(());
+    }
+    let platform = app.state::<Arc<dyn Platform>>();
+    platform.set_dock_visible(app, next.show_in_dock)
+}
+
 fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settings, AppError> {
     let next = Settings {
         hotkey: patch.hotkey.unwrap_or(current.hotkey),
@@ -518,6 +546,12 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.history_retention),
+        ui_language: patch
+            .ui_language
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.ui_language),
+        show_in_dock: patch.show_in_dock.unwrap_or(current.show_in_dock),
         // 空串有意义（= 写作键未配置），故保留空 patch 值，不 filter 回 current（同 input_device）。
         compose_hotkey: patch
             .compose_hotkey
@@ -988,6 +1022,8 @@ mod tests {
                 onboarding_completed: None,
                 primary_language: None,
                 history_retention: None,
+                ui_language: None,
+                show_in_dock: None,
                 compose_hotkey: None,
                 compose_prompt: None,
                 rewrite_prompt: None,
@@ -1015,6 +1051,8 @@ mod tests {
                 onboarding_completed: None,
                 primary_language: None,
                 history_retention: None,
+                ui_language: None,
+                show_in_dock: None,
                 compose_hotkey: None,
                 compose_prompt: None,
                 rewrite_prompt: None,

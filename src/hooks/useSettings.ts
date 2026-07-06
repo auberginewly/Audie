@@ -19,14 +19,14 @@ import {
 const ProviderListSchema = ProviderMetadataSchema.array();
 const MicrophoneListSchema = AudioDeviceSchema.array();
 
-export type UseSettings = {
+export interface UseSettings {
   settings: Settings | null;
   asrProviders: ProviderMetadata[];
   llmProviders: ProviderMetadata[];
   microphones: AudioDevice[];
   autoDevice: string | null;
   update: (patch: Partial<Settings>) => Promise<void>;
-};
+}
 
 export function useSettings(): UseSettings {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -56,7 +56,9 @@ export function useSettings(): UseSettings {
         if (mics.success) setMicrophones(mics.data);
         if (auto.success) setAutoDevice(auto.data);
       })
-      .catch((err) => console.error("load settings failed:", err));
+      .catch((err) => {
+        console.error("load settings failed:", err);
+      });
   }, []);
 
   const update = async (patch: Partial<Settings>) => {

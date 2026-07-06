@@ -1,10 +1,13 @@
-export type SegmentedOption<T extends string> = { id: T; label: string };
+export interface SegmentedOption<T extends string> {
+  id: T;
+  label: string;
+}
 
-type SegmentedProps<T extends string> = {
+interface SegmentedProps<T extends string> {
   value: T;
   options: SegmentedOption<T>[];
   onChange: (id: T) => void;
-};
+}
 
 /** A pill-track segmented control. Active segment lifts a tonal step. */
 export function Segmented<T extends string>({ value, options, onChange }: SegmentedProps<T>) {
@@ -15,7 +18,9 @@ export function Segmented<T extends string>({ value, options, onChange }: Segmen
         return (
           <button
             key={o.id}
-            onClick={() => onChange(o.id)}
+            onClick={() => {
+              onChange(o.id);
+            }}
             className={[
               "h-[26px] rounded-full border-0 px-3.5 font-sans text-[13px] cursor-pointer",
               "transition-colors duration-150 ease-[var(--ease-out)]",

@@ -26,11 +26,13 @@ export function useMicMonitor(device: string, active: boolean): number {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => console.error("subscribe mic-monitor-level failed:", err));
+      .catch((err) => {
+        console.error("subscribe mic-monitor-level failed:", err);
+      });
 
-    invoke("start_mic_monitor", { device: device || null }).catch((err) =>
-      console.error("start_mic_monitor failed:", err),
-    );
+    invoke("start_mic_monitor", { device: device || null }).catch((err) => {
+      console.error("start_mic_monitor failed:", err);
+    });
 
     return () => {
       cancelled = true;

@@ -2,16 +2,26 @@ import type { HTMLAttributes, ReactNode } from "react";
 
 // Keycap labels — show the symbol the user sees printed on the keyboard.
 const GLYPHS: Record<string, string> = {
-  cmd: "⌘", command: "⌘", meta: "⌘",
-  ctrl: "⌃", control: "⌃",
-  opt: "⌥", option: "⌥", alt: "⌥",
+  cmd: "⌘",
+  command: "⌘",
+  meta: "⌘",
+  ctrl: "⌃",
+  control: "⌃",
+  opt: "⌥",
+  option: "⌥",
+  alt: "⌥",
   shift: "⇧",
-  enter: "↵", return: "↵",
-  esc: "esc", escape: "esc",
+  enter: "↵",
+  return: "↵",
+  esc: "esc",
+  escape: "esc",
   tab: "⇥",
   space: "Space",
   fn: "fn",
-  up: "↑", down: "↓", left: "←", right: "→",
+  up: "↑",
+  down: "↓",
+  left: "←",
+  right: "→",
 };
 
 export type KeycapSize = "sm" | "md";
@@ -46,11 +56,11 @@ export function Keycap({ children, size = "md", className = "", ...rest }: Keyca
   );
 }
 
-type KeyComboProps = {
+interface KeyComboProps {
   keys: string[];
   size?: KeycapSize;
   className?: string;
-};
+}
 
 /** A hotkey combo: an array of keys joined by a thin gap. */
 export function KeyCombo({ keys, size = "md", className = "" }: KeyComboProps) {

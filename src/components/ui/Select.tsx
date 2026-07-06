@@ -1,12 +1,4 @@
-import {
-  Children,
-  isValidElement,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { Children, isValidElement, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
@@ -14,26 +6,33 @@ export type SelectSize = "sm" | "md" | "lg";
 
 const HEIGHT: Record<SelectSize, string> = { sm: "h-7", md: "h-8", lg: "h-10" };
 
-type Opt = { value: string; label: string };
+interface Opt {
+  value: string;
+  label: string;
+}
 
 function readOptions(children: ReactNode): Opt[] {
   const out: Opt[] = [];
   Children.forEach(children, (child) => {
     if (!isValidElement(child) || child.type !== "option") return;
     const props = child.props as { value?: string; children?: ReactNode };
-    out.push({ value: String(props.value ?? ""), label: Children.toArray(props.children).join("") });
+    let label = "";
+    Children.forEach(props.children, (child) => {
+      if (typeof child === "string") label += child;
+    });
+    out.push({ value: props.value ?? "", label });
   });
   return out;
 }
 
-type SelectProps = {
+interface SelectProps {
   size?: SelectSize;
   value?: string;
   defaultValue?: string;
   onChange?: (e: { target: { value: string } }) => void;
   children: ReactNode;
   className?: string;
-};
+}
 
 /**
  * Audie-styled dropdown. Reads `<option>` children but renders a custom trigger +
@@ -47,7 +46,8 @@ type SelectProps = {
 export function Select({ size = "md", value, defaultValue, onChange, children, className = "" }: SelectProps) {
   const options = readOptions(children);
   const controlled = value !== undefined;
-  const [internal, setInternal] = useState<string>(defaultValue ?? options[0]?.value ?? "");
+  const fallback = options[0]?.value ?? "";
+  const [internal, setInternal] = useState<string>(defaultValue ?? fallback);
   const current = controlled ? value : internal;
 
   const [open, setOpen] = useState(false);
@@ -74,7 +74,9 @@ export function Select({ size = "md", value, defaultValue, onChange, children, c
       if (e.key === "Escape") setOpen(false);
     };
     // Fixed coords go stale on scroll/resize — just close instead of tracking.
-    const onReflow = () => setOpen(false);
+    const onReflow = () => {
+      setOpen(false);
+    };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     window.addEventListener("resize", onReflow);
@@ -98,7 +100,9 @@ export function Select({ size = "md", value, defaultValue, onChange, children, c
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpen((o) => !o);
+        }}
         className={[
           "flex w-full items-center gap-2.5 px-2.5 text-left outline-none",
           "rounded-sm border border-transparent bg-gray-200 text-text-primary",
@@ -107,7 +111,7 @@ export function Select({ size = "md", value, defaultValue, onChange, children, c
           HEIGHT[size],
         ].join(" ")}
       >
-        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{selected?.label}</span>
+        <span className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{selected.label}</span>
         <span
           className={[
             "text-text-tertiary transition-transform duration-150 ease-[var(--ease-out)]",
@@ -136,7 +140,9 @@ export function Select({ size = "md", value, defaultValue, onChange, children, c
                     key={o.value}
                     role="option"
                     aria-selected={active}
-                    onClick={() => pick(o.value)}
+                    onClick={() => {
+                      pick(o.value);
+                    }}
                     className={[
                       "flex h-9 w-full items-center gap-[9px] px-2.5 text-left",
                       "rounded-sm border-0 font-sans text-[13px] cursor-pointer",

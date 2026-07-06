@@ -8,14 +8,7 @@ export const SettingsSchema = z.object({
   // Trigger key: "Fn", a function key ("F13"), or a combo ("Ctrl+Shift+Space").
   // Backend parse_trigger is the real gate (SPEC §5.8 P3.9), so keep it permissive.
   hotkey: z.string().min(1),
-  asr_provider: z.enum([
-    "groq",
-    "openai",
-    "doubao_stream",
-    "glm",
-    "aliyun_fun",
-    "stepfun",
-  ]),
+  asr_provider: z.enum(["groq", "openai", "doubao_stream", "glm", "aliyun_fun", "stepfun"]),
   // Selected ASR model id (front/back share the exact string). "" = use each
   // adapter's built-in default. default("") tolerates the field being absent
   // while the backend struct ships in parallel.
@@ -42,6 +35,8 @@ export const SettingsSchema = z.object({
   // How long dictation history is kept (History screen). Backend normalize clamps
   // anything unknown to "forever", so the enum is safe.
   history_retention: z.enum(["never", "day", "week", "month", "forever"]),
+  ui_language: z.enum(["zh-Hans", "zh-Hant", "en"]),
+  show_in_dock: z.boolean().default(true),
   // 写作模式（compose）：独立触发键（"" = 未配置）、总开关、提示词。后端 normalize 保证
   // prompt 非空，故沿用 enhance_prompt 的 min(1)。
   compose_hotkey: z.string(),
@@ -127,11 +122,7 @@ export type SecretKeyId = z.infer<typeof SecretKeyIdSchema>;
 
 // Only these providers have a reachable `test_provider` probe (P1.3). Doubao
 // streaming connectivity is exercised by a dev command in P2.5, not here.
-export const TestProviderKeyIdSchema = z.enum([
-  "groq_api_key",
-  "openai_api_key",
-  "openai_compatible_api_key",
-]);
+export const TestProviderKeyIdSchema = z.enum(["groq_api_key", "openai_api_key", "openai_compatible_api_key"]);
 export type TestProviderKeyId = z.infer<typeof TestProviderKeyIdSchema>;
 
 export const ProviderTestRequestSchema = z.object({

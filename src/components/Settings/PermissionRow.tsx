@@ -1,14 +1,15 @@
 import { Badge, Button, Icon, type BadgeTone, type IconName } from "../ui";
+import { useI18n, type I18nKey } from "../../i18n";
 
 export type PermissionStatus = "granted" | "denied" | "pending";
 
-const STATUS: Record<PermissionStatus, { tone: BadgeTone; label: string; icon: IconName; color: string }> = {
-  granted: { tone: "success", label: "已授权", icon: "check-circle", color: "text-success-text" },
-  denied: { tone: "danger", label: "已拒绝", icon: "x-circle", color: "text-danger-text" },
-  pending: { tone: "warning", label: "未授权", icon: "alert", color: "text-warning-text" },
+const STATUS: Record<PermissionStatus, { tone: BadgeTone; labelKey: I18nKey; icon?: IconName; color: string }> = {
+  granted: { tone: "success", labelKey: "settings.permission.granted", color: "text-success-text" },
+  denied: { tone: "danger", labelKey: "settings.permission.denied", icon: "x-circle", color: "text-danger-text" },
+  pending: { tone: "warning", labelKey: "settings.permission.pending", icon: "alert", color: "text-warning-text" },
 };
 
-type PermissionRowProps = {
+interface PermissionRowProps {
   icon?: IconName;
   name: string;
   description?: string;
@@ -16,7 +17,7 @@ type PermissionRowProps = {
   onGrant?: () => void;
   grantLabel?: string;
   divider?: boolean;
-};
+}
 
 /**
  * A macOS permission row — Microphone, Accessibility. Shows status and, when not
@@ -31,12 +32,13 @@ export function PermissionRow({
   grantLabel,
   divider = true,
 }: PermissionRowProps) {
+  const { t } = useI18n();
   const st = STATUS[status];
   const needsAction = status !== "granted";
   return (
     <div className="relative flex items-center gap-3 px-3.5 py-3">
       {divider ? <div className="absolute inset-x-3.5 top-0 h-px bg-border-subtle" /> : null}
-      <span className={["inline-flex", st.color].join(" ")}>
+      <span className="inline-flex text-text-tertiary">
         <Icon name={icon} size={18} />
       </span>
       <div className="min-w-0 flex-1">
@@ -44,11 +46,11 @@ export function PermissionRow({
         {description ? <div className="mt-px text-xs text-text-tertiary">{description}</div> : null}
       </div>
       <Badge tone={st.tone} icon={st.icon}>
-        {st.label}
+        {t(st.labelKey)}
       </Badge>
       {needsAction && onGrant ? (
         <Button size="sm" variant={status === "denied" ? "secondary" : "accent"} onClick={onGrant}>
-          {grantLabel ?? (status === "denied" ? "打开设置" : "授权")}
+          {grantLabel ?? (status === "denied" ? t("settings.permission.openSettings") : t("settings.permission.grant"))}
         </Button>
       ) : null}
     </div>

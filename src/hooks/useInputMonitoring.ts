@@ -8,10 +8,10 @@ import { z } from "zod";
 
 const StatusSchema = z.boolean();
 
-export type UseInputMonitoring = {
+export interface UseInputMonitoring {
   granted: boolean | null; // null while loading
   request: () => Promise<void>;
-};
+}
 
 export function useInputMonitoring(): UseInputMonitoring {
   const [granted, setGranted] = useState<boolean | null>(null);
@@ -24,7 +24,9 @@ export function useInputMonitoring(): UseInputMonitoring {
   useEffect(() => {
     invoke("get_input_monitoring_status")
       .then(read)
-      .catch((err) => console.error("input monitoring status failed:", err));
+      .catch((err) => {
+        console.error("input monitoring status failed:", err);
+      });
   }, [read]);
 
   const request = useCallback(async () => {

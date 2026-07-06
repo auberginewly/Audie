@@ -182,6 +182,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             // Frontend → Rust goes through commands. The hot path itself is not
@@ -287,6 +291,11 @@ pub fn run() {
             app.manage::<RewriteSourceSlot>(Arc::new(parking_lot::Mutex::new(None)));
 
             let hotkey = commands::load_hotkey(&app_handle);
+            if let Err(err) =
+                platform.set_dock_visible(&app_handle, commands::load_settings(&app_handle).show_in_dock)
+            {
+                log::error!("apply Dock visibility failed: {err:?}");
+            }
             if let Err(err) = platform.register_hotkey(
                 &app_handle,
                 HotkeySlot::Primary,

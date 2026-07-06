@@ -1,16 +1,19 @@
 import { useState } from "react";
 import { Select } from "./Select";
 
-export type AudioDevice = { id: string; label: string };
+export interface AudioDevice {
+  id: string;
+  label: string;
+}
 
-type DevicePickerProps = {
+interface DevicePickerProps {
   devices?: AudioDevice[];
   value?: string;
   onChange?: (id: string) => void;
   level?: number;
   showMeter?: boolean;
   autoLabel?: string;
-};
+}
 
 /**
  * Microphone picker — an Audie-styled Select plus an optional live input-level
@@ -39,7 +42,12 @@ export function DevicePicker({
   return (
     <div className="flex w-full items-center gap-3.5">
       <div className="min-w-0 flex-1">
-        <Select value={val} onChange={(e) => setVal(e.target.value)}>
+        <Select
+          value={val}
+          onChange={(e) => {
+            setVal(e.target.value);
+          }}
+        >
           <option value="auto">{autoLabel}</option>
           {devices.map((d) => (
             <option key={d.id} value={d.id}>

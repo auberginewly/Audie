@@ -287,7 +287,7 @@ fn fetch_stats(conn: &Connection) -> rusqlite::Result<UsageStats> {
            COALESCE(SUM(CASE WHEN mode = 'polish' THEN LENGTH(raw_text) ELSE 0 END), 0),
            COALESCE(SUM(CASE WHEN mode = 'polish' THEN duration_ms ELSE 0 END), 0),
            COALESCE(SUM(CASE WHEN mode = 'polish' THEN 1 ELSE 0 END), 0),
-           COALESCE(SUM(CASE WHEN mode IN ('compose', 'rewrite') THEN word_count ELSE 0 END), 0)
+           COALESCE(SUM(CASE WHEN mode IN ('compose', 'rewrite') AND enhanced_text IS NOT NULL THEN word_count ELSE 0 END), 0)
          FROM history
          WHERE kind = 'success'",
         [],
@@ -347,6 +347,29 @@ mod tests {
         insert_entry(conn, created_at, kind, mode, raw, None, words, dur).expect("insert");
     }
 
+    fn insert_enhanced(
+        conn: &Connection,
+        created_at: i64,
+        kind: &str,
+        mode: &str,
+        raw: &str,
+        enhanced: &str,
+        words: i64,
+        dur: i64,
+    ) {
+        insert_entry(
+            conn,
+            created_at,
+            kind,
+            mode,
+            raw,
+            Some(enhanced),
+            words,
+            dur,
+        )
+        .expect("insert");
+    }
+
     #[test]
     fn list_returns_newest_first() {
         let conn = setup();
@@ -363,16 +386,26 @@ mod tests {
     fn stats_split_spoken_vs_ai_output() {
         let conn = setup();
         insert(&conn, 100, "success", "polish", "口述听写", 999, 3000); // word_count 故意≠raw 字数
-        insert(
+        insert_enhanced(
             &conn,
             200,
             "success",
             "compose",
+            "写作指令",
             "AI 生成的一长段",
             200,
             1000,
         );
-        insert(&conn, 250, "success", "rewrite", "改写结果", 50, 800);
+        insert_enhanced(
+            &conn,
+            250,
+            "success",
+            "rewrite",
+            "改写指令和引用",
+            "改写结果",
+            50,
+            800,
+        );
         insert(&conn, 300, "error", "polish", "cancelled", 4, 0); // 非 success，排除
 
         let stats = fetch_stats(&conn).expect("stats");
@@ -382,6 +415,23 @@ mod tests {
         assert_eq!(stats.spoken_count, 1);
         // AI 产出 = compose + rewrite 的字数
         assert_eq!(stats.ai_output_words, 250);
+    }
+
+    #[test]
+    fn stats_ai_output_excludes_rewrite_without_enhanced_text() {
+        let conn = setup();
+        insert(
+            &conn,
+            100,
+            "success",
+            "rewrite",
+            "指令：改短\n\n引用：一大段被选中的原文",
+            18,
+            1000,
+        );
+
+        let stats = fetch_stats(&conn).expect("stats");
+        assert_eq!(stats.ai_output_words, 0);
     }
 
     #[test]

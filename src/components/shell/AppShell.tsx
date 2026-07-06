@@ -1,13 +1,13 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 
-type AppShellProps = {
+interface AppShellProps {
   sidebar?: ReactNode;
   header?: ReactNode;
   children: ReactNode;
   maxContentWidth?: string;
   bleed?: boolean;
   panel?: boolean;
-};
+}
 
 /**
  * The desktop window shell: a left rail (`sidebar`) beside the content area.
@@ -40,10 +40,7 @@ export function AppShell({
             children
           ) : (
             <div className="flex-1 overflow-y-auto">
-              <div
-                className="mx-auto px-6 pt-7 pb-12"
-                style={{ maxWidth: maxContentWidth } as CSSProperties}
-              >
+              <div className="mx-auto px-6 pt-7 pb-12" style={{ maxWidth: maxContentWidth }}>
                 {children}
               </div>
             </div>
@@ -54,11 +51,11 @@ export function AppShell({
   );
 }
 
-type ShellHeaderProps = {
+interface ShellHeaderProps {
   title: ReactNode;
   subtitle?: ReactNode;
   actions?: ReactNode;
-};
+}
 
 /** Standard content header: a title with optional subtitle and trailing actions. */
 export function ShellHeader({ title, subtitle, actions }: ShellHeaderProps) {

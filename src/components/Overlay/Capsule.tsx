@@ -11,12 +11,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAudioLevels, type LevelRing } from "../../hooks/useAudioLevels";
 import { useRecordingStore } from "../../store/recording";
 import type { AppState, ErrorCode } from "../../types/events";
+import { useI18n, type I18nContextValue } from "../../i18n";
 import { Icon, type IconName } from "../ui";
 
 // Overlay → Rust. The overlay is a non-activating NSPanel, so these clicks never
 // steal focus from the user's app (injection still targets it). Best-effort.
 function call(cmd: string) {
-  void invoke(cmd).catch((err) => console.error(`${cmd} failed:`, err));
+  void invoke(cmd).catch((err) => {
+    console.error(`${cmd} failed:`, err);
+  });
 }
 
 // Small round control inside the pill — color block, no outline.
@@ -40,7 +43,9 @@ function CapsuleButton({
       // Don't take focus on click: a focused web control makes the overlay panel
       // key, stealing keyboard focus from the user's app so the synthesized Cmd+V
       // would paste into nothing. preventDefault keeps their app key; onClick still fires.
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(e) => {
+        e.preventDefault();
+      }}
       onClick={onClick}
       className={[
         "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 cursor-pointer",
@@ -56,22 +61,16 @@ function CapsuleButton({
 }
 
 // Filled / ghost text button inside a terminal toast card.
-function CardButton({
-  label,
-  tone,
-  onClick,
-}: {
-  label: string;
-  tone: "ghost" | "accent";
-  onClick: () => void;
-}) {
+function CardButton({ label, tone, onClick }: { label: string; tone: "ghost" | "accent"; onClick: () => void }) {
   const accent = tone === "accent";
   return (
     <button
       type="button"
       // Keep the user's app key so 撤销 / 重试 / 插入原文 inject lands at the caret
       // (see CapsuleButton).
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(e) => {
+        e.preventDefault();
+      }}
       onClick={onClick}
       className={[
         "inline-flex h-[34px] shrink-0 items-center justify-center rounded-[10px] border-0 px-4 cursor-pointer",
@@ -88,14 +87,7 @@ function CardButton({
 }
 
 type CapsuleView =
-  | "recording"
-  | "transcribing"
-  | "polishing"
-  | "success"
-  | "polish-unavailable"
-  | "error"
-  | "cancelled"
-  | null;
+  "recording" | "transcribing" | "polishing" | "success" | "polish-unavailable" | "error" | "cancelled" | null;
 
 // ── Waveform tuning (tweak these to taste) ──────────────────────────────────
 // Resting/peak bar heights in px — center tallest, mirrored to the edges.
@@ -178,15 +170,7 @@ function DrawCheck() {
 const LABEL = "text-[13px] text-text-secondary whitespace-nowrap";
 
 // Terminal-state card: centered title (+ subtitle) over a row of action buttons.
-function ToastCard({
-  title,
-  subtitle,
-  buttons,
-}: {
-  title: string;
-  subtitle?: string;
-  buttons: ReactNode;
-}) {
+function ToastCard({ title, subtitle, buttons }: { title: string; subtitle?: string; buttons: ReactNode }) {
   return (
     <div
       role="status"
@@ -207,17 +191,37 @@ function ToastCard({
 
 // Error toast actions by category: inject failed → 插入原文 (re-paste) + 重试;
 // network / provider failed → 重试; permission / device / internal → message only.
-function errorActions(code: ErrorCode | undefined): ReactNode {
+function errorActions(code: ErrorCode | undefined, t: I18nContextValue["t"]): ReactNode {
   if (code === "inject") {
     return (
       <>
-        <CardButton label="插入原文" tone="ghost" onClick={() => call("insert_raw_last")} />
-        <CardButton label="重试" tone="accent" onClick={() => call("retry_last")} />
+        <CardButton
+          label={t("overlay.insertRaw")}
+          tone="ghost"
+          onClick={() => {
+            call("insert_raw_last");
+          }}
+        />
+        <CardButton
+          label={t("overlay.retry")}
+          tone="accent"
+          onClick={() => {
+            call("retry_last");
+          }}
+        />
       </>
     );
   }
   if (code === "network" || code === "provider") {
-    return <CardButton label="重试" tone="accent" onClick={() => call("retry_last")} />;
+    return (
+      <CardButton
+        label={t("overlay.retry")}
+        tone="accent"
+        onClick={() => {
+          call("retry_last");
+        }}
+      />
+    );
   }
   return null;
 }
@@ -229,6 +233,7 @@ function formatElapsed(sec: number): string {
 }
 
 export function Capsule() {
+  const { t } = useI18n();
   const state = useRecordingStore((s) => s.state);
   const error = useRecordingStore((s) => s.error);
   const enhanceProgress = useRecordingStore((s) => s.enhanceProgress);
@@ -251,7 +256,9 @@ export function Capsule() {
       n += 1;
       setElapsed(n);
     }, 1000);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearInterval(id);
+    };
   }, [state]);
 
   if (view === null) return null;
@@ -261,8 +268,16 @@ export function Capsule() {
     return (
       <ToastCard
         key="toast"
-        title="转录已取消"
-        buttons={<CardButton label="撤销操作" tone="accent" onClick={() => call("undo_last")} />}
+        title={t("overlay.cancelled")}
+        buttons={
+          <CardButton
+            label={t("overlay.undo")}
+            tone="accent"
+            onClick={() => {
+              call("undo_last");
+            }}
+          />
+        }
       />
     );
   }
@@ -270,14 +285,24 @@ export function Capsule() {
     return (
       <ToastCard
         key="toast"
-        title={enhanceProgress?.message ?? "已插入原文"}
-        subtitle="未配置润色模型"
-        buttons={<CardButton label="去设置" tone="ghost" onClick={() => call("open_main_window")} />}
+        title={enhanceProgress?.message ?? t("overlay.rawInserted")}
+        subtitle={t("overlay.polishMissing")}
+        buttons={
+          <CardButton
+            label={t("overlay.openSettings")}
+            tone="ghost"
+            onClick={() => {
+              call("open_main_window");
+            }}
+          />
+        }
       />
     );
   }
   if (view === "error") {
-    return <ToastCard key="toast" title={error?.message ?? "模型出错了"} buttons={errorActions(error?.code)} />;
+    return (
+      <ToastCard key="toast" title={error?.message ?? t("overlay.modelError")} buttons={errorActions(error?.code, t)} />
+    );
   }
 
   // ── Live pill (recording / transcribing / polishing / success) ──
@@ -299,23 +324,47 @@ export function Capsule() {
     >
       {view === "recording" ? (
         <>
-          <CapsuleButton name="x" label="取消" tone="danger" onClick={() => call("cancel_recording")} />
+          <CapsuleButton
+            name="x"
+            label={t("overlay.cancel")}
+            tone="danger"
+            onClick={() => {
+              call("cancel_recording");
+            }}
+          />
           <div className="flex items-center gap-2.5 px-0.5">
             <Waveform levels={levels} />
             <span className="min-w-[34px] text-center font-mono text-xs text-text-tertiary">
               {formatElapsed(elapsed)}
             </span>
           </div>
-          <CapsuleButton name="check" label="完成并润色" tone="accent" onClick={() => call("confirm_recording")} />
+          <CapsuleButton
+            name="check"
+            label={t("overlay.finishPolish")}
+            tone="accent"
+            onClick={() => {
+              call("confirm_recording");
+            }}
+          />
         </>
       ) : null}
 
       {view === "transcribing" || view === "polishing" ? (
         <>
-          <CapsuleButton name="x" label="取消" tone="danger" onClick={() => call("cancel_recording")} />
+          <CapsuleButton
+            name="x"
+            label={t("overlay.cancel")}
+            tone="danger"
+            onClick={() => {
+              call("cancel_recording");
+            }}
+          />
           <div className="inline-flex items-center gap-2 px-1.5">
             {view === "polishing" ? (
-              <span className="inline-flex text-aubergine-900" style={{ animation: "audie-twinkle 1.3s var(--ease-out) infinite" }}>
+              <span
+                className="inline-flex text-aubergine-900"
+                style={{ animation: "audie-twinkle 1.3s var(--ease-out) infinite" }}
+              >
                 <Icon name="sparkles" size={15} strokeWidth={2} />
               </span>
             ) : (
@@ -323,7 +372,7 @@ export function Capsule() {
                 <Icon name="loader" size={15} strokeWidth={2} />
               </span>
             )}
-            <span className={LABEL}>{view === "polishing" ? "润色中…" : "转写中…"}</span>
+            <span className={LABEL}>{view === "polishing" ? t("overlay.polishing") : t("overlay.transcribing")}</span>
           </div>
           {/* 32px spacer mirrors the ✕ so the spinner+label stays centered. */}
           <span className="w-8 shrink-0" aria-hidden="true" />
@@ -333,7 +382,7 @@ export function Capsule() {
       {view === "success" ? (
         <div className="inline-flex items-center gap-2 px-2.5">
           <DrawCheck />
-          <span className={LABEL}>已插入</span>
+          <span className={LABEL}>{t("overlay.inserted")}</span>
         </div>
       ) : null}
     </div>

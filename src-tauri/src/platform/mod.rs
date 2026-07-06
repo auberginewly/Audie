@@ -130,6 +130,10 @@ pub trait Platform: Send + Sync {
         None
     }
 
+    fn set_dock_visible(&self, _app: &AppHandle, _visible: bool) -> AppResult<()> {
+        Ok(())
+    }
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;

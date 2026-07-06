@@ -4,6 +4,7 @@
 
 import { Badge, Button } from "../ui";
 import type { DiscoveredLocalLlm } from "../../types/settings";
+import { useI18n } from "../../i18n";
 
 export function LocalLlmCard({
   name,
@@ -26,15 +27,16 @@ export function LocalLlmCard({
   onPickModel: (model: string) => void; // pick a specific live model
   onConfigure: () => void;
 }) {
+  const { t } = useI18n();
   // The model the header represents (active model when 使用中, else the stored one).
   // The card reads like any other: name + status + this model + 选用/配置.
   const subtitle = isActive ? activeModel : storedModel;
   const statusBadge = isActive ? (
-    <Badge tone="accent">使用中</Badge>
+    <Badge tone="accent">{t("settings.model.inUse")}</Badge>
   ) : usable ? (
-    <Badge tone="success">已配置</Badge>
+    <Badge tone="success">{t("settings.model.configured")}</Badge>
   ) : (
-    <Badge tone="neutral">未配置</Badge>
+    <Badge tone="neutral">{t("settings.model.unconfigured")}</Badge>
   );
   // Inline list = OTHER running models to switch to. The header already represents
   // `subtitle`, so exclude it — a single-model server then adds no redundant row.
@@ -46,32 +48,34 @@ export function LocalLlmCard({
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-text-primary">{name}</span>
             {statusBadge}
-            <Badge tone="neutral">本地</Badge>
+            <Badge tone="neutral">{t("settings.model.local")}</Badge>
           </div>
-          {subtitle ? (
-            <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{subtitle}</div>
-          ) : null}
+          {subtitle ? <div className="mt-[3px] font-mono text-[11px] text-text-tertiary">{subtitle}</div> : null}
         </div>
         {/* Header 选用 picks the stored model, like any other card. Other running
             models (if any) are listed below to switch to. */}
         {!isActive && usable ? (
           <Button size="sm" variant="secondary" onClick={onPickStored}>
-            选用
+            {t("settings.model.pick")}
           </Button>
         ) : null}
         <Button size="sm" variant="secondary" onClick={onConfigure}>
-          配置
+          {t("settings.model.configure")}
         </Button>
       </div>
       {otherModels.length ? (
         <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2">
           {otherModels.map((model) => (
             <div key={model} className="flex items-center gap-3">
-              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-secondary">
-                {model}
-              </span>
-              <Button size="sm" variant="ghost" onClick={() => onPickModel(model)}>
-                选用
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-secondary">{model}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  onPickModel(model);
+                }}
+              >
+                {t("settings.model.pick")}
               </Button>
             </div>
           ))}

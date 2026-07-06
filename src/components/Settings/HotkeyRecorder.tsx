@@ -10,18 +10,20 @@ import { listen } from "@tauri-apps/api/event";
 
 import type { Hotkey } from "../../types/settings";
 import { KeyCombo } from "../ui";
+import { useI18n } from "../../i18n";
 
 const BOX =
   "inline-flex min-h-8 min-w-[92px] items-center justify-center rounded-sm border px-2.5 py-1 cursor-pointer transition-colors duration-150 ease-[var(--ease-out)]";
 
-type HotkeyRecorderProps = {
+interface HotkeyRecorderProps {
   value: Hotkey;
   onChange: (next: Hotkey) => void;
   // 另一个触发键 —— 录到相同的键时拒绝（润色/改写键与写作键不能相同）。
   conflictWith?: string;
-};
+}
 
 export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorderProps) {
+  const { t } = useI18n();
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const ref = useRef<HTMLButtonElement>(null);
@@ -40,9 +42,11 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
       active.current = false;
       setRecording(false);
       if (next && next !== value) {
-        onChange(next as Hotkey);
+        onChange(next);
       } else {
-        void invoke("end_trigger_capture").catch((err) => console.error("end capture failed:", err));
+        void invoke("end_trigger_capture").catch((err) => {
+          console.error("end capture failed:", err);
+        });
       }
     },
     [onChange, value],
@@ -59,7 +63,7 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
       // Reject a key already used by the other trigger — keep recording so the user
       // can try another (same UX as a rejected system combo).
       if (conflictWithRef.current && e.payload === conflictWithRef.current) {
-        setHint("不能和另一个触发键相同");
+        setHint(t("settings.hotkey.conflict"));
         return;
       }
       setHint(null);
@@ -69,8 +73,12 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
       setHint(e.payload); // keep recording — user tries another key
     });
     return () => {
-      void captured.then((f) => f());
-      void rejected.then((f) => f());
+      void captured.then((f) => {
+        f();
+      });
+      void rejected.then((f) => {
+        f();
+      });
     };
   }, [recording]);
 
@@ -81,7 +89,7 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
       active.current = true;
       setRecording(true);
     } catch {
-      setHint("需要输入监控权限才能录制");
+      setHint(t("settings.hotkey.permissionNeeded"));
     }
   };
 
@@ -93,19 +101,17 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
         ref={ref}
         type="button"
         onClick={() => {
-          if (recording) stop(); // click again = cancel
+          if (recording)
+            stop(); // click again = cancel
           else void start();
         }}
         onBlur={() => {
           if (recording) stop();
         }}
-        className={[
-          BOX,
-          recording ? "border-accent-fill bg-accent-bg" : "border-transparent bg-gray-200",
-        ].join(" ")}
+        className={[BOX, recording ? "border-accent-fill bg-accent-bg" : "border-transparent bg-gray-200"].join(" ")}
       >
         {recording ? (
-          <span className="text-[13px] text-accent-text">按下快捷键…</span>
+          <span className="text-[13px] text-accent-text">{t("settings.hotkey.recording")}</span>
         ) : (
           <KeyCombo keys={keys} size="sm" />
         )}

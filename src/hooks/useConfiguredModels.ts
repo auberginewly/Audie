@@ -11,14 +11,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MODELS, requiredSecretsForModel } from "../components/Settings/models";
 import type { SecretKeyId } from "../types/settings";
 
-export type UseConfiguredModels = {
+export interface UseConfiguredModels {
   configured: (modelId: string) => boolean;
   refresh: () => void;
-};
+}
 
-const ALL_SECRETS: SecretKeyId[] = Array.from(
-  new Set(MODELS.flatMap((m) => requiredSecretsForModel(m.id))),
-);
+const ALL_SECRETS: SecretKeyId[] = Array.from(new Set(MODELS.flatMap((m) => requiredSecretsForModel(m.id))));
 
 export function useConfiguredModels(): UseConfiguredModels {
   const [present, setPresent] = useState<Partial<Record<SecretKeyId, boolean>>>({});
@@ -31,8 +29,12 @@ export function useConfiguredModels(): UseConfiguredModels {
           .catch(() => [keyId, false] as const),
       ),
     )
-      .then((pairs) => setPresent(Object.fromEntries(pairs)))
-      .catch((err) => console.error("read secret presence failed:", err));
+      .then((pairs) => {
+        setPresent(Object.fromEntries(pairs));
+      })
+      .catch((err) => {
+        console.error("read secret presence failed:", err);
+      });
   }, []);
 
   useEffect(() => {
@@ -47,7 +49,9 @@ export function useConfiguredModels(): UseConfiguredModels {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => console.error("focus subscribe failed:", err));
+      .catch((err) => {
+        console.error("focus subscribe failed:", err);
+      });
     return () => {
       cancelled = true;
       unlisten?.();

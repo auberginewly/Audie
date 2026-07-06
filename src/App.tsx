@@ -14,19 +14,19 @@ import { HomeScreen } from "./components/screens/HomeScreen";
 import { HistoryScreen } from "./components/screens/HistoryScreen";
 import { SetupWizard } from "./components/screens/SetupWizard";
 import { SettingsDialog } from "./components/Settings";
+import { I18nProvider, isLanguage, useI18n } from "./i18n";
 
 // Sidebar dock card nudging first-run setup — real progress + CTA into the wizard.
 // Rendered only while onboarding is incomplete, so the permission/secret polls run
 // only then (completed users pay nothing). x/n mirrors the wizard's per-step
 // checkmarks (one unit per step): 权限 / 快捷键 / 听写 / 润色 / 试一下.
 function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; onContinue: () => void }) {
+  const { t } = useI18n();
   const perms = usePermissions();
   const { configured } = useConfiguredModels();
   const everSucceeded = useRecordingStore((s) => s.everSucceeded);
   const steps = [
-    perms.microphone.granted === true &&
-      perms.accessibility.granted === true &&
-      perms.inputMonitoring.granted === true,
+    perms.microphone.granted === true && perms.accessibility.granted === true && perms.inputMonitoring.granted === true,
     !!settings?.hotkey,
     !!settings && configured(modelIdForAsrProvider(settings.asr_provider)),
     configured("deepseek"), // 润色: the openai_compatible LLM slot's key
@@ -37,7 +37,7 @@ function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; o
   return (
     <div className="rounded-md bg-gray-100 p-3">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-[13px] font-medium text-text-primary">完成配置</span>
+        <span className="text-[13px] font-medium text-text-primary">{t("app.setup.progressTitle")}</span>
         <span className="font-mono text-[11px] text-text-tertiary">
           {done}/{total}
         </span>
@@ -46,7 +46,7 @@ function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; o
         <div className="h-full rounded-full bg-accent-fill" style={{ width: `${(done / total) * 100}%` }} />
       </div>
       <Button size="sm" variant="accent" block iconRight="chevron-right" onClick={onContinue}>
-        继续配置
+        {t("app.setup.continue")}
       </Button>
     </div>
   );
@@ -63,6 +63,7 @@ function App() {
   // when a fresh install reports it incomplete; the ref stops it reopening if the
   // user closes it without finishing (it auto-opens again next launch, like Voxt).
   const onboardingCompleted = data.settings?.onboarding_completed;
+  const language = data.settings && isLanguage(data.settings.ui_language) ? data.settings.ui_language : "zh-Hans";
   const autoOpened = useRef(false);
   useEffect(() => {
     if (onboardingCompleted === false && !autoOpened.current) {
@@ -84,12 +85,16 @@ function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    listen("open-settings", () => setSettingsOpen(true))
+    listen("open-settings", () => {
+      setSettingsOpen(true);
+    })
       .then((fn) => {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => console.error("failed to subscribe open-settings:", err));
+      .catch((err) => {
+        console.error("failed to subscribe open-settings:", err);
+      });
     return () => {
       cancelled = true;
       unlisten?.();
@@ -97,44 +102,61 @@ function App() {
   }, []);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-surface-app">
-      {/* Overlay titlebar: drag the window by the top strip; macOS paints the
-       * traffic lights over its top-left. Sidebar content clears it (pt-9). */}
-      <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-7" />
+    <I18nProvider language={language}>
+      <div className="relative h-screen w-screen overflow-hidden bg-surface-app">
+        {/* Overlay titlebar: drag the window by the top strip; macOS paints the
+         * traffic lights over its top-left. Sidebar content clears it (pt-9). */}
+        <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-7" />
 
-      <AppShell
-        bleed
-        sidebar={
-          <AppSidebar
-            active={nav}
-            onNavigate={setNav}
-            version="0.0.0"
-            settingsLabel="设置"
-            settingsActive={settingsOpen}
-            onSettings={() => setSettingsOpen(true)}
-            aboveDock={
-              onboardingCompleted === false ? (
-                <SetupGuideCard settings={data.settings} onContinue={() => setSetupOpen(true)} />
-              ) : undefined
-            }
-          />
-        }
-      >
-        {nav === "home" ? <HomeScreen /> : <HistoryScreen data={data} />}
-      </AppShell>
+        <AppShell
+          bleed
+          sidebar={
+            <AppSidebar
+              active={nav}
+              onNavigate={setNav}
+              version="0.0.0"
+              settingsActive={settingsOpen}
+              onSettings={() => {
+                setSettingsOpen(true);
+              }}
+              aboveDock={
+                onboardingCompleted === false ? (
+                  <SetupGuideCard
+                    settings={data.settings}
+                    onContinue={() => {
+                      setSetupOpen(true);
+                    }}
+                  />
+                ) : undefined
+              }
+            />
+          }
+        >
+          {nav === "home" ? <HomeScreen /> : <HistoryScreen data={data} />}
+        </AppShell>
 
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} data={data} onRerunSetup={rerunSetup} />
+        <SettingsDialog
+          open={settingsOpen}
+          onClose={() => {
+            setSettingsOpen(false);
+          }}
+          data={data}
+          onRerunSetup={rerunSetup}
+        />
 
-      <SetupWizard
-        open={setupOpen}
-        onClose={() => setSetupOpen(false)}
-        onComplete={() => {
-          void data.update({ onboarding_completed: true });
-          setSetupOpen(false);
-        }}
-        data={data}
-      />
-    </div>
+        <SetupWizard
+          open={setupOpen}
+          onClose={() => {
+            setSetupOpen(false);
+          }}
+          onComplete={() => {
+            void data.update({ onboarding_completed: true });
+            setSetupOpen(false);
+          }}
+          data={data}
+        />
+      </div>
+    </I18nProvider>
   );
 }
 

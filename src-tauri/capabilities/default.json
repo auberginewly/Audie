@@ -12,6 +12,9 @@
     "core:window:allow-set-position",
     "core:window:allow-set-ignore-cursor-events",
     "core:window:allow-start-dragging",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "x-apple.systempreferences:*" }]

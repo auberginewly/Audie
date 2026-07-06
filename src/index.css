@@ -136,20 +136,42 @@
 /* Recording-capsule motion (design RecordingCapsule). base.css downgrades all of
  * these under prefers-reduced-motion. */
 @keyframes audie-wave {
-  0%, 100% { transform: scaleY(0.4); }
-  50% { transform: scaleY(1); }
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
 }
 @keyframes audie-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 @keyframes audie-draw {
-  to { stroke-dashoffset: 0; }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 @keyframes audie-twinkle {
-  0%, 100% { transform: scale(0.98); opacity: 0.82; }
-  50% { transform: scale(1.02); opacity: 1; }
+  0%,
+  100% {
+    transform: scale(0.98);
+    opacity: 0.82;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 1;
+  }
 }
 @keyframes audie-rise {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 
-type DialogProps = {
+interface DialogProps {
   open: boolean;
   onClose: () => void;
   icon?: IconName;
@@ -9,7 +9,7 @@ type DialogProps = {
   children?: ReactNode;
   actions?: ReactNode;
   width?: number;
-};
+}
 
 /**
  * A centered modal dialog. Backdrop dims the window; click-outside dismisses.
@@ -26,7 +26,9 @@ export function Dialog({ open, onClose, icon, title, children, actions, width = 
       <div
         role="dialog"
         aria-modal="true"
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+        }}
         style={{ width }}
         className="max-w-full overflow-hidden rounded-md bg-surface-overlay shadow-modal"
       >

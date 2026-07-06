@@ -11,33 +11,39 @@ import type { ModelType } from "./models";
 import { TextSection } from "./TextSection";
 import { GeneralSection } from "./GeneralSection";
 import { AboutSection } from "./AboutSection";
+import { useI18n, type I18nKey } from "../../i18n";
 
-type SectionCtx = {
+interface SectionCtx {
   onRerunSetup: () => void;
   modelType: ModelType;
   setModelType: (t: ModelType) => void;
   goToModelLlm: () => void;
-};
-type SectionDef = { id: string; icon: IconName; label: string; render: (s: UseSettings, ctx: SectionCtx) => ReactNode };
+}
+interface SectionDef {
+  id: string;
+  icon: IconName;
+  labelKey: I18nKey;
+  render: (s: UseSettings, ctx: SectionCtx) => ReactNode;
+}
 
 const SECTIONS: SectionDef[] = [
   {
     id: "model",
     icon: "cpu",
-    label: "模型",
+    labelKey: "settings.tabs.model",
     render: (data, { modelType, setModelType }) => <ModelSection data={data} type={modelType} onType={setModelType} />,
   },
   {
     id: "text",
     icon: "sparkles",
-    label: "文本处理",
+    labelKey: "settings.tabs.text",
     render: ({ settings, update }, { goToModelLlm }) =>
       settings ? <TextSection settings={settings} update={update} onJumpToModelLlm={goToModelLlm} /> : null,
   },
   {
     id: "general",
     icon: "sliders",
-    label: "通用",
+    labelKey: "settings.tabs.general",
     render: ({ settings, update, microphones, autoDevice }) =>
       settings ? (
         <GeneralSection settings={settings} update={update} microphones={microphones} autoDevice={autoDevice} />
@@ -46,19 +52,20 @@ const SECTIONS: SectionDef[] = [
   {
     id: "about",
     icon: "book",
-    label: "关于",
+    labelKey: "settings.tabs.about",
     render: (_data, { onRerunSetup }) => <AboutSection onRerunSetup={onRerunSetup} />,
   },
 ];
 
-type SettingsDialogProps = {
+interface SettingsDialogProps {
   open: boolean;
   onClose: () => void;
   data: UseSettings;
   onRerunSetup: () => void;
-};
+}
 
 export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDialogProps) {
+  const { t } = useI18n();
   const [activeId, setActiveId] = useState(SECTIONS[0].id);
   const [modelType, setModelType] = useState<ModelType>("asr");
 
@@ -81,7 +88,9 @@ export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDi
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -95,23 +104,27 @@ export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDi
       <div
         role="dialog"
         aria-modal="true"
-        onMouseDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+        }}
         className="relative flex h-[min(540px,100%)] w-[min(800px,100%)] flex-col overflow-hidden rounded-md bg-surface-app shadow-modal"
       >
         <div className="absolute right-2.5 top-2.5 z-10">
-          <IconButton name="x" label="关闭" onClick={onClose} />
+          <IconButton name="x" label={t("settings.close")} onClick={onClose} />
         </div>
 
         <div className="flex min-h-0 flex-1">
           <nav className="flex w-48 shrink-0 flex-col gap-0.5 overflow-y-auto bg-surface-sidebar p-2.5">
-            <div className="px-2.5 pb-2 pt-1 text-sm font-semibold text-text-primary">设置</div>
+            <div className="px-2.5 pb-2 pt-1 text-sm font-semibold text-text-primary">{t("settings.title")}</div>
             {SECTIONS.map((s) => (
               <NavItem
                 key={s.id}
                 icon={s.icon}
-                label={s.label}
+                label={t(s.labelKey)}
                 active={s.id === active.id}
-                onClick={() => setActiveId(s.id)}
+                onClick={() => {
+                  setActiveId(s.id);
+                }}
               />
             ))}
           </nav>

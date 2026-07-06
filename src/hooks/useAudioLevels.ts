@@ -6,11 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import {
-  AudioLevelSchema,
-  EVENT_AUDIO_LEVEL,
-  type AudioLevel,
-} from "../types/events";
+import { AudioLevelSchema, EVENT_AUDIO_LEVEL, type AudioLevel } from "../types/events";
 
 export type LevelRing = readonly [number, number, number, number];
 

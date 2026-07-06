@@ -10,14 +10,14 @@ import { HistoryEntrySchema, EVENT_HISTORY_UPDATED, type HistoryEntry } from "..
 
 const HistoryListSchema = HistoryEntrySchema.array();
 
-export type UseHistory = {
+export interface UseHistory {
   entries: HistoryEntry[];
   remove: (id: number) => Promise<void>;
   clearAll: () => Promise<void>;
   // Re-run the current LLM on a stored entry's transcript. Resolves on success
   // (the history-updated event refreshes the list); rejects so callers can toast.
   reenhance: (id: number) => Promise<void>;
-};
+}
 
 export function useHistory(): UseHistory {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
@@ -36,7 +36,9 @@ export function useHistory(): UseHistory {
             console.error("history parse failed:", parsed.error);
           }
         })
-        .catch((err) => console.error("load history failed:", err));
+        .catch((err) => {
+          console.error("load history failed:", err);
+        });
     };
 
     load();
@@ -45,7 +47,9 @@ export function useHistory(): UseHistory {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => console.error("subscribe history-updated failed:", err));
+      .catch((err) => {
+        console.error("subscribe history-updated failed:", err);
+      });
 
     return () => {
       cancelled = true;
@@ -71,7 +75,7 @@ export function useHistory(): UseHistory {
 
   // Let this one reject: the History screen shows a toast on failure (network /
   // missing key), and the success path refreshes via history-updated.
-  const reenhance = (id: number) => invoke<void>("reenhance_history_entry", { id });
+  const reenhance = (id: number): Promise<void> => invoke("reenhance_history_entry", { id });
 
   return { entries, remove, clearAll, reenhance };
 }

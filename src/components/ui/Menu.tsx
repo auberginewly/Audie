@@ -2,15 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 
 export type MenuItem =
-  | { type: "divider" }
-  | { icon?: IconName; label: string; tone?: "default" | "danger"; onClick?: () => void };
+  { type: "divider" } | { icon?: IconName; label: string; tone?: "default" | "danger"; onClick?: () => void };
 
-type MenuProps = {
+interface MenuProps {
   trigger: ReactNode;
   items: MenuItem[];
   align?: "left" | "right";
   width?: number;
-};
+}
 
 /**
  * A click-triggered popover menu. Wrap any trigger; opens below it and closes on

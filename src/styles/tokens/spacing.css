@@ -17,10 +17,10 @@
   --space-16: 64px;
 
   /* ---- Radius — kept tight. One radius family per view. ---- */
-  --radius-sm: 6px;       /* controls, rows, cards (everyday) */
-  --radius-md: 10px;      /* menus, modals, larger cards */
-  --radius-lg: 14px;      /* fullscreen surfaces */
-  --radius-full: 9999px;  /* pills, capsule, avatars */
+  --radius-sm: 6px; /* controls, rows, cards (everyday) */
+  --radius-md: 10px; /* menus, modals, larger cards */
+  --radius-lg: 14px; /* fullscreen surfaces */
+  --radius-full: 9999px; /* pills, capsule, avatars */
 
   /* ---- Control heights ---- */
   --control-sm: 28px;
@@ -32,10 +32,9 @@
 
   /* ---- Elevation (dark — shadows stay subtle; hierarchy is tonal) ---- */
   --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.16);
-  --shadow-popover: 0 1px 1px rgba(0, 0, 0, 0.5), 0 4px 8px -4px rgba(0, 0, 0, 0.5),
-    0 16px 24px -8px rgba(0, 0, 0, 0.6);
-  --shadow-modal: 0 1px 1px rgba(0, 0, 0, 0.5), 0 8px 16px -4px rgba(0, 0, 0, 0.6),
-    0 24px 32px -8px rgba(0, 0, 0, 0.7);
+  --shadow-popover:
+    0 1px 1px rgba(0, 0, 0, 0.5), 0 4px 8px -4px rgba(0, 0, 0, 0.5), 0 16px 24px -8px rgba(0, 0, 0, 0.6);
+  --shadow-modal: 0 1px 1px rgba(0, 0, 0, 0.5), 0 8px 16px -4px rgba(0, 0, 0, 0.6), 0 24px 32px -8px rgba(0, 0, 0, 0.7);
   --shadow-capsule: 0 8px 28px -6px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.4);
 
   /* ---- Motion — short, physical, never decorative. Honor reduced-motion. ---- */

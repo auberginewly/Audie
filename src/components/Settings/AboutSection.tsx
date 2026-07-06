@@ -3,6 +3,7 @@
 import { Button, Icon } from "../ui";
 import { openExternal } from "../../lib/open";
 import { SettingSection, SettingRow } from "./SettingSection";
+import { useI18n } from "../../i18n";
 
 const REPO_URL = "https://github.com/auberginewly/Audie";
 
@@ -26,9 +27,10 @@ function ExtLink({ href, children, mono }: { href: string; children: string; mon
 }
 
 export function AboutSection({ onRerunSetup }: { onRerunSetup: () => void }) {
+  const { t } = useI18n();
   return (
     <>
-      <SettingSection icon="info" title="版本">
+      <SettingSection icon="info" title={t("settings.about.version")}>
         <SettingRow
           label="Audie"
           divider={false}
@@ -36,20 +38,34 @@ export function AboutSection({ onRerunSetup }: { onRerunSetup: () => void }) {
         />
       </SettingSection>
 
-      <SettingSection icon="github" title="关于项目">
-        <SettingRow label="源代码" divider={false} control={<ExtLink mono href={REPO_URL}>auberginewly/Audie</ExtLink>} />
-        <SettingRow label="问题反馈" control={<ExtLink href={`${REPO_URL}/issues`}>GitHub Issues</ExtLink>} />
-        <SettingRow label="作者" control={<ExtLink href="https://github.com/auberginewly">auberginewly</ExtLink>} />
+      <SettingSection icon="github" title={t("settings.about.project")}>
+        <SettingRow
+          label={t("settings.about.source")}
+          divider={false}
+          control={
+            <ExtLink mono href={REPO_URL}>
+              auberginewly/Audie
+            </ExtLink>
+          }
+        />
+        <SettingRow
+          label={t("settings.about.issues")}
+          control={<ExtLink href={`${REPO_URL}/issues`}>GitHub Issues</ExtLink>}
+        />
+        <SettingRow
+          label={t("settings.about.author")}
+          control={<ExtLink href="https://github.com/auberginewly">auberginewly</ExtLink>}
+        />
       </SettingSection>
 
-      <SettingSection icon="flag" title="配置向导">
+      <SettingSection icon="flag" title={t("settings.about.wizard")}>
         <SettingRow
-          label="重新运行配置向导"
-          description="重新过一遍权限、模型与测试录音。"
+          label={t("settings.about.rerunWizard")}
+          description={t("settings.about.rerunWizardDesc")}
           divider={false}
           control={
             <Button size="sm" variant="secondary" onClick={onRerunSetup}>
-              运行
+              {t("settings.about.run")}
             </Button>
           }
         />

@@ -4,6 +4,7 @@
 
 import { Icon, Keycap, type IconName } from "../ui";
 import { useUsageStats } from "../../hooks/useUsageStats";
+import { useI18n } from "../../i18n";
 
 function StatCard({ icon, value, unit, label }: { icon: IconName; value: string; unit: string; label: string }) {
   return (
@@ -28,6 +29,7 @@ function formatCount(n: number): string {
 }
 
 export function HomeScreen() {
+  const { t } = useI18n();
   const stats = useUsageStats();
   // 「口述」三卡只算纯口述听写（mode=polish），不被写作/改写产出虚高（见 history.rs）。
   const words = stats?.spoken_words ?? 0;
@@ -37,22 +39,27 @@ export function HomeScreen() {
   const aiWords = stats?.ai_output_words ?? 0;
 
   const cards: { icon: IconName; value: string; unit: string; label: string }[] = [
-    { icon: "clock", value: String(spokenMin), unit: "分钟", label: "口述时间" },
-    { icon: "mic", value: formatCount(words), unit: "字", label: "口述字数" },
-    { icon: "sparkles", value: formatCount(aiWords), unit: "字", label: "AI 产出" },
-    { icon: "audio-lines", value: String(wpm), unit: "字/分", label: "平均口述速度" },
+    { icon: "clock", value: String(spokenMin), unit: t("home.stat.minutes"), label: t("home.stat.spokenTime") },
+    { icon: "mic", value: formatCount(words), unit: t("home.stat.characters"), label: t("home.stat.spokenWords") },
+    { icon: "sparkles", value: formatCount(aiWords), unit: t("home.stat.characters"), label: t("home.stat.aiOutput") },
+    {
+      icon: "audio-lines",
+      value: String(wpm),
+      unit: t("home.stat.charactersPerMinute"),
+      label: t("home.stat.averageSpeed"),
+    },
   ];
 
   return (
     <div data-tauri-drag-region className="px-7 pt-6">
       <div className="mb-6 pl-1">
         <h1 className="max-w-[36ch] text-balance text-xl font-semibold leading-[26px] tracking-[-0.4px] text-text-primary">
-          言为心声，出口成章
+          {t("home.hero.title")}
         </h1>
         <div className="mt-3 flex items-center gap-2 text-sm text-text-tertiary">
-          <span>按住</span>
+          <span>{t("home.hero.prefix")}</span>
           <Keycap>fn</Keycap>
-          <span>开始和停止语音输入。</span>
+          <span>{t("home.hero.suffix")}</span>
         </div>
       </div>
 

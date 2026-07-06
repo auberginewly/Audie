@@ -1,14 +1,14 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Icon, type IconName } from "../ui";
 
-type SettingSectionProps = {
+interface SettingSectionProps {
   icon?: IconName;
   title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
   children: ReactNode;
   cardStyle?: CSSProperties;
-};
+}
 
 /** A titled settings section: icon + title above a filled card holding rows. */
 export function SettingSection({ icon, title, description, action, children, cardStyle }: SettingSectionProps) {
@@ -31,13 +31,13 @@ export function SettingSection({ icon, title, description, action, children, car
   );
 }
 
-type SettingRowProps = {
+interface SettingRowProps {
   label: ReactNode;
   description?: ReactNode;
   control?: ReactNode;
   icon?: IconName;
   divider?: boolean;
-};
+}
 
 /** A single row inside a SettingSection. Rows stack with inset hairline dividers. */
 export function SettingRow({ label, description, control, icon, divider = true }: SettingRowProps) {

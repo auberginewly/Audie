@@ -12,13 +12,13 @@ const NOTICE: Record<NoticeTone, { box: string; fg: string; icon: IconName }> = 
   danger: { box: "bg-red-100", fg: "text-red-900", icon: "alert" },
 };
 
-type InlineNoticeProps = {
+interface InlineNoticeProps {
   tone?: NoticeTone;
   title?: ReactNode;
   icon?: IconName;
   action?: ReactNode;
   children?: ReactNode;
-};
+}
 
 /** A boxed inline notice — fallback warnings, tips, recoverable errors. */
 export function InlineNotice({ tone = "info", title, icon, action, children }: InlineNoticeProps) {
@@ -51,11 +51,11 @@ const STATUS: Record<StatusTone, { color: string; icon: IconName }> = {
   pending: { color: "text-text-tertiary", icon: "loader" },
 };
 
-type StatusMessageProps = {
+interface StatusMessageProps {
   tone?: StatusTone;
   icon?: IconName | null; // null = no leading icon (text only)
   children: ReactNode;
-};
+}
 
 /** Inline status line — the small "未检查 / 已保存 / key 无效" feedback under a field. */
 export function StatusMessage({ tone = "neutral", icon, children }: StatusMessageProps) {

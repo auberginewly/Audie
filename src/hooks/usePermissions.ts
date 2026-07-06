@@ -14,11 +14,11 @@ import { openExternal } from "../lib/open";
 
 const StatusSchema = z.boolean();
 
-export type PermissionState = {
+export interface PermissionState {
   granted: boolean | null; // null while loading
   request: () => Promise<void>;
   openSettings: () => void;
-};
+}
 
 type PermKey = "microphone" | "accessibility" | "inputMonitoring";
 
@@ -57,10 +57,14 @@ export function usePermissions(): UsePermissions {
         const parsed = StatusSchema.safeParse(raw);
         if (parsed.success) setGranted((g) => ({ ...g, [key]: parsed.data }));
       })
-      .catch((err) => console.error(`${key} status failed:`, err));
+      .catch((err) => {
+        console.error(`${key} status failed:`, err);
+      });
   }, []);
 
-  const readAll = useCallback(() => PERM_KEYS.forEach(read), [read]);
+  const readAll = useCallback(() => {
+    PERM_KEYS.forEach(read);
+  }, [read]);
 
   useEffect(() => {
     readAll();
@@ -74,7 +78,9 @@ export function usePermissions(): UsePermissions {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => console.error("focus subscribe failed:", err));
+      .catch((err) => {
+        console.error("focus subscribe failed:", err);
+      });
     return () => {
       cancelled = true;
       unlisten?.();
@@ -93,7 +99,9 @@ export function usePermissions(): UsePermissions {
           console.error(`request ${key} failed:`, err);
         }
       },
-      openSettings: () => openExternal(COMMANDS[key].settingsUrl),
+      openSettings: () => {
+        openExternal(COMMANDS[key].settingsUrl);
+      },
     }),
     [granted],
   );

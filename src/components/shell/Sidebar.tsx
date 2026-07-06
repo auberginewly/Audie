@@ -1,6 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Icon, IconButton, type IconName } from "../ui";
 import { openExternal } from "../../lib/open";
+import { useI18n, type I18nKey } from "../../i18n";
 
 type SidebarItemProps = {
   icon?: IconName;
@@ -50,14 +51,19 @@ export function SidebarHeader({ version = "0.0.0" }: { version?: string }) {
   );
 }
 
-export type SidebarNavItem = { key: string; icon: IconName; label: string; trailing?: ReactNode };
+export interface SidebarNavItem {
+  key: string;
+  icon: IconName;
+  labelKey: I18nKey;
+  trailing?: ReactNode;
+}
 
 const DEFAULT_NAV: SidebarNavItem[] = [
-  { key: "home", icon: "home", label: "Home" },
-  { key: "history", icon: "history", label: "History" },
+  { key: "home", icon: "home", labelKey: "app.sidebar.home" },
+  { key: "history", icon: "history", labelKey: "app.sidebar.history" },
 ];
 
-type AppSidebarProps = {
+interface AppSidebarProps {
   active?: string;
   onNavigate?: (key: string) => void;
   items?: SidebarNavItem[];
@@ -65,9 +71,8 @@ type AppSidebarProps = {
   githubUrl?: string;
   onSettings?: () => void;
   settingsActive?: boolean;
-  settingsLabel?: string;
   aboveDock?: ReactNode;
-};
+}
 
 /**
  * The Audie desktop left rail. Brand header on top, primary nav in the middle,
@@ -82,9 +87,9 @@ export function AppSidebar({
   githubUrl = "https://github.com/auberginewly/Audie",
   onSettings,
   settingsActive = false,
-  settingsLabel = "Settings",
   aboveDock,
 }: AppSidebarProps) {
+  const { t } = useI18n();
   return (
     <aside
       data-tauri-drag-region
@@ -97,7 +102,7 @@ export function AppSidebar({
           <SidebarItem
             key={it.key}
             icon={it.icon}
-            label={it.label}
+            label={t(it.labelKey)}
             trailing={it.trailing}
             active={active === it.key}
             onClick={() => onNavigate?.(it.key)}
@@ -129,7 +134,7 @@ export function AppSidebar({
         </a>
         <IconButton
           name="settings"
-          label={settingsLabel}
+          label={t("app.sidebar.settings")}
           size="md"
           variant={settingsActive ? "outline" : "ghost"}
           onClick={() => onSettings?.()}

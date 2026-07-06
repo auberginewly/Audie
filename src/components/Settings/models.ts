@@ -9,7 +9,7 @@ import type { AsrProviderId, SecretKeyId, Settings } from "../../types/settings"
 export type ModelType = "asr" | "llm";
 export type ModelSource = "cloud" | "local";
 
-export type ModelMeta = {
+export interface ModelMeta {
   id: string;
   name: string;
   type: ModelType;
@@ -17,18 +17,69 @@ export type ModelMeta = {
   icon: IconName;
   model: string;
   tags: string[];
-};
+}
 
-export type ModelOption = { id: string; title: string };
+export interface ModelOption {
+  id: string;
+  title: string;
+}
 
 export const MODELS: ModelMeta[] = [
   // ASR
-  { id: "doubao", name: "豆包", type: "asr", source: "cloud", icon: "audio-lines", model: "Doubao ASR 2.0 (Hourly)", tags: ["云端"] },
-  { id: "groq", name: "Groq", type: "asr", source: "cloud", icon: "audio-lines", model: "whisper-large-v3-turbo", tags: ["云端"] },
-  { id: "openai-asr", name: "OpenAI Transcribe", type: "asr", source: "cloud", icon: "audio-lines", model: "whisper-1", tags: ["云端"] },
-  { id: "glm-asr", name: "智谱 GLM ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "glm-asr-1", tags: ["云端"] },
-  { id: "aliyun-asr", name: "通义 Paraformer ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "fun-asr-realtime", tags: ["云端"] },
-  { id: "stepfun-asr", name: "StepFun ASR", type: "asr", source: "cloud", icon: "audio-lines", model: "stepaudio-2.5-asr", tags: ["云端"] },
+  {
+    id: "doubao",
+    name: "豆包",
+    type: "asr",
+    source: "cloud",
+    icon: "audio-lines",
+    model: "Doubao ASR 2.0 (Hourly)",
+    tags: ["云端"],
+  },
+  {
+    id: "groq",
+    name: "Groq",
+    type: "asr",
+    source: "cloud",
+    icon: "audio-lines",
+    model: "whisper-large-v3-turbo",
+    tags: ["云端"],
+  },
+  {
+    id: "openai-asr",
+    name: "OpenAI Transcribe",
+    type: "asr",
+    source: "cloud",
+    icon: "audio-lines",
+    model: "whisper-1",
+    tags: ["云端"],
+  },
+  {
+    id: "glm-asr",
+    name: "智谱 GLM ASR",
+    type: "asr",
+    source: "cloud",
+    icon: "audio-lines",
+    model: "glm-asr-1",
+    tags: ["云端"],
+  },
+  {
+    id: "aliyun-asr",
+    name: "通义 Paraformer ASR",
+    type: "asr",
+    source: "cloud",
+    icon: "audio-lines",
+    model: "fun-asr-realtime",
+    tags: ["云端"],
+  },
+  {
+    id: "stepfun-asr",
+    name: "StepFun ASR",
+    type: "asr",
+    source: "cloud",
+    icon: "audio-lines",
+    model: "stepaudio-2.5-asr",
+    tags: ["云端"],
+  },
   // LLM — all drive the single openai_compatible slot. No hardcoded model: the card
   // subtitle shows the real configured model (active card) or nothing; model field
   // is unused for LLM display, kept empty so the catalog carries no guessed ids.
@@ -212,7 +263,7 @@ export function llmPresetForModelId(id: string): { baseUrl: string; model: strin
 // configured, which the badge surfaces as 未配置). No hardcoded model id.
 export function llmPickPatch(id: string, settings: Settings): Partial<Settings> {
   const preset = llmPresetForModelId(id);
-  const models = { ...(settings.llm_models ?? {}) };
+  const models = { ...settings.llm_models };
   const outgoing = llmModelIdForBaseUrl(settings.openai_compatible_base_url);
   if (outgoing && settings.openai_compatible_model) {
     models[outgoing] = settings.openai_compatible_model;
@@ -239,7 +290,7 @@ export function discoveredLlmPickPatch(
   model: string,
   settings: Settings,
 ): Partial<Settings> {
-  const models = { ...(settings.llm_models ?? {}) };
+  const models = { ...settings.llm_models };
   const outgoing = llmModelIdForBaseUrl(settings.openai_compatible_base_url);
   if (outgoing && settings.openai_compatible_model) {
     models[outgoing] = settings.openai_compatible_model;
@@ -258,7 +309,8 @@ export function discoveredLlmPickPatch(
 // The active card's model lives in openai_compatible_model until it's switched away
 // (then llmPickPatch preserves it into llm_models), so callers OR this with inUse.
 export function llmHasStoredModel(id: string, settings: Settings): boolean {
-  return (settings.llm_models?.[id] ?? "").trim() !== "";
+  const stored = settings.llm_models[id];
+  return typeof stored === "string" && stored.trim() !== "";
 }
 
 // Hostname of a base_url, or "" if unparseable. Used to match a saved endpoint to

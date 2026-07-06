@@ -39,8 +39,7 @@ const ICONS = {
   message: '<path d="M22 17a2 2 0 0 1-2 2H6l-4 4V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/>',
   shield:
     '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
-  command:
-    '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>',
+  command: '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>',
   "external-link":
     '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   "arrow-up-right": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
@@ -85,7 +84,7 @@ type IconProps = {
 
 /** A single-color stroke icon from the Audie (Lucide) set. */
 export function Icon({ name, size = 18, strokeWidth = 1.5, className = "", style, ...rest }: IconProps) {
-  const inner = ICONS[name] ?? ICONS.info;
+  const inner = ICONS[name];
   return (
     <svg
       width={size}

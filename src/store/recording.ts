@@ -24,14 +24,19 @@ export const useRecordingStore = create<RecordingStore>((set) => ({
   everSucceeded: false,
   // A fresh recording clears any stale error so the capsule starts clean; a SUCCESS
   // latches everSucceeded (never reset within the session).
-  setState: (next) =>
+  setState: (next) => {
     set(
       next === "RECORDING"
         ? { state: next, error: null, enhanceProgress: null }
         : next === "SUCCESS"
           ? { state: next, everSucceeded: true }
           : { state: next },
-    ),
-  setError: (err) => set({ error: err }),
-  setEnhanceProgress: (progress) => set({ enhanceProgress: progress }),
+    );
+  },
+  setError: (err) => {
+    set({ error: err });
+  },
+  setEnhanceProgress: (progress) => {
+    set({ enhanceProgress: progress });
+  },
 }));

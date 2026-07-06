@@ -8,13 +8,13 @@ const KNOB_POS: Record<SwitchSize, { off: string; on: string }> = {
   md: { off: "left-0.5", on: "left-[18px]" },
 };
 
-type SwitchProps = {
+interface SwitchProps {
   checked?: boolean;
   onChange?: (next: boolean) => void;
   disabled?: boolean;
   size?: SwitchSize;
   className?: string;
-};
+}
 
 /** Boolean toggle. Accent fill when on. Controlled via `checked` + `onChange`. */
 export function Switch({ checked = false, onChange, disabled = false, size = "md", className = "" }: SwitchProps) {

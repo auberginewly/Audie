@@ -1,8 +1,5 @@
-// 通用 — keyboard · language · device · system · permissions · input. Only the
-// hotkey is backed (maps to the preset enum); language/device/system toggles/
-// permissions/input are mock for visual fidelity (see plan).
-
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 
 import type { AudioDevice, Hotkey, Settings } from "../../types/settings";
 import { Badge, DevicePicker, Select, Switch } from "../ui";
@@ -10,134 +7,173 @@ import { SettingSection, SettingRow } from "./SettingSection";
 import { HotkeyRecorder } from "./HotkeyRecorder";
 import { PermissionRow } from "./PermissionRow";
 import { useMicMonitor } from "../../hooks/useMicMonitor";
-import { useInputMonitoring } from "../../hooks/useInputMonitoring";
+import { LANGUAGES, useI18n, type Language } from "../../i18n";
 
-// mock: a Switch holding its own demo state, for unbacked rows.
-function MockSwitch({ defaultOn }: { defaultOn?: boolean }) {
-  const [on, setOn] = useState(!!defaultOn);
-  return <Switch checked={on} onChange={setOn} />;
-}
-
-type GeneralSectionProps = {
+interface GeneralSectionProps {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   microphones: AudioDevice[];
   autoDevice: string | null;
-};
+}
 
 export function GeneralSection({ settings, update, microphones, autoDevice }: GeneralSectionProps) {
+  const { t } = useI18n();
+  const [launchAtLogin, setLaunchAtLogin] = useState(false);
+  const [launchAtLoginBusy, setLaunchAtLoginBusy] = useState(true);
   // Live preview of the selected mic — lets the user confirm it's picking up
   // sound (a silent meter on e.g. AirPods A2DP flags a dead mic before they rely
   // on it). Runs while this tab is open; recording stops it server-side.
   const micLevel = useMicMonitor(settings.input_device, true);
-  const inputMonitoring = useInputMonitoring();
 
   // The "自动" row already names the device it resolves to, so hide that same mic
   // from the explicit list to avoid listing it twice — unless it happens to be
   // the current explicit pick (keep it so the selection stays visible).
-  const explicitDevices = microphones.filter(
-    (d) => d.id !== autoDevice || d.id === settings.input_device,
-  );
+  const explicitDevices = microphones.filter((d) => d.id !== autoDevice || d.id === settings.input_device);
+
+  useEffect(() => {
+    let alive = true;
+    isEnabled()
+      .then((enabled) => {
+        if (alive) setLaunchAtLogin(enabled);
+      })
+      .catch((err) => {
+        console.error("load launch-at-login failed:", err);
+      })
+      .finally(() => {
+        if (alive) setLaunchAtLoginBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const changeLaunchAtLogin = (next: boolean) => {
+    const previous = launchAtLogin;
+    setLaunchAtLogin(next);
+    setLaunchAtLoginBusy(true);
+    const task = next ? enable() : disable();
+    task
+      .then(() => isEnabled())
+      .then((enabled) => {
+        setLaunchAtLogin(enabled);
+      })
+      .catch((err) => {
+        console.error("update launch-at-login failed:", err);
+        setLaunchAtLogin(previous);
+      })
+      .finally(() => {
+        setLaunchAtLoginBusy(false);
+      });
+  };
 
   return (
     <>
-      <SettingSection icon="command" title="触发键">
+      <SettingSection icon="command" title={t("settings.general.hotkeys")}>
         <SettingRow
-          label="润色 / 改写触发键"
-          description="按一下开始、再按一下结束。有选中文字走改写，没选中走润色"
+          label={t("settings.general.primaryHotkey")}
+          description={t("settings.general.primaryHotkeyDesc")}
           divider={false}
           control={
             <HotkeyRecorder
               value={settings.hotkey}
-              onChange={(h: Hotkey) => update({ hotkey: h })}
+              onChange={(h: Hotkey) => {
+                update({ hotkey: h });
+              }}
               conflictWith={settings.compose_hotkey}
             />
           }
         />
         <SettingRow
-          label="写作触发键"
-          description="留空 = 不启用写作。按它说出要点，生成的文本插入光标处"
+          label={t("settings.general.composeHotkey")}
+          description={t("settings.general.composeHotkeyDesc")}
           control={
             <HotkeyRecorder
               value={settings.compose_hotkey}
-              onChange={(h: Hotkey) => update({ compose_hotkey: h })}
+              onChange={(h: Hotkey) => {
+                update({ compose_hotkey: h });
+              }}
               conflictWith={settings.hotkey}
             />
           }
         />
         {settings.hotkey === "Fn" ? (
-          <div className="px-3.5 pb-3 text-xs text-warning-text">
-            提示：macOS 默认按 fn 会弹表情面板。到「系统设置 → 键盘 → 按下 🌐 键用来」改为「无操作」，fn 才会纯归 Audie。
-          </div>
+          <div className="px-3.5 pb-3 text-xs text-warning-text">{t("settings.general.fnTip")}</div>
         ) : null}
       </SettingSection>
 
-      <SettingSection icon="globe" title="语言" cardStyle={{ overflow: "visible" }}>
-        {/* mock: interface language switch isn't backed */}
+      <SettingSection icon="globe" title={t("settings.general.language")} cardStyle={{ overflow: "visible" }}>
         <SettingRow
-          label="界面语言"
+          label={t("settings.general.uiLanguage")}
           divider={false}
           control={
             <div className="w-[200px]">
-              <Select defaultValue="zh">
-                <option value="zh">简体中文</option>
-                <option value="en">English</option>
+              <Select
+                value={settings.ui_language}
+                onChange={(e) => {
+                  update({ ui_language: e.target.value as Language });
+                }}
+              >
+                {LANGUAGES.map((language) => (
+                  <option key={language} value={language}>
+                    {language === "zh-Hans"
+                      ? t("settings.general.language.zhHans")
+                      : language === "zh-Hant"
+                        ? t("settings.general.language.zhHant")
+                        : t("settings.general.language.en")}
+                  </option>
+                ))}
               </Select>
             </div>
           }
         />
       </SettingSection>
 
-      <SettingSection icon="mic" title="设备" cardStyle={{ overflow: "visible" }}>
+      <SettingSection icon="mic" title={t("settings.general.devices")} cardStyle={{ overflow: "visible" }}>
         <div className="p-3.5">
           <DevicePicker
-            autoLabel={autoDevice ? `自动检测 · ${autoDevice}` : "自动检测的麦克风（推荐）"}
+            autoLabel={
+              autoDevice
+                ? t("settings.general.autoDevice", { device: autoDevice })
+                : t("settings.general.autoDeviceFallback")
+            }
             devices={explicitDevices}
             value={settings.input_device || "auto"}
-            onChange={(id) => update({ input_device: id === "auto" ? "" : id })}
+            onChange={(id) => {
+              update({ input_device: id === "auto" ? "" : id });
+            }}
             level={micLevel}
           />
         </div>
       </SettingSection>
 
-      <SettingSection icon="settings" title="系统">
-        {/* mock: launch-at-login / dock visibility aren't backed */}
-        <SettingRow label="开机自动启动" divider={false} control={<MockSwitch defaultOn />} />
+      <SettingSection icon="settings" title={t("settings.general.system")}>
+        <SettingRow
+          label={t("settings.general.launchAtLogin")}
+          divider={false}
+          control={<Switch checked={launchAtLogin} disabled={launchAtLoginBusy} onChange={changeLaunchAtLogin} />}
+        />
         <SettingRow
           label={
             <span className="inline-flex items-center gap-2">
-              在 Dock 中显示
+              {t("settings.general.showInDock")}
               <Badge tone="neutral">macOS</Badge>
             </span>
           }
-          control={<MockSwitch defaultOn />}
-        />
-      </SettingSection>
-
-      <SettingSection icon="shield" title="权限">
-        {/* mic / accessibility status still mock; input monitoring is real (P3.9) */}
-        <PermissionRow icon="mic" name="麦克风" status="granted" divider={false} />
-        <PermissionRow icon="command" name="辅助功能" status="granted" />
-        <PermissionRow
-          icon="monitor"
-          name="输入监控"
-          description="触发键（默认 fn）需要；授权后需重启 Audie 生效"
-          status={inputMonitoring.granted ? "granted" : "pending"}
-          onGrant={inputMonitoring.request}
-          grantLabel="授权"
-        />
-      </SettingSection>
-
-      <SettingSection icon="copy" title="输入">
-        <SettingRow
-          label="剪贴板粘贴"
-          divider={false}
           control={
-            <Badge tone="accent" dot>
-              默认
-            </Badge>
+            <Switch
+              checked={settings.show_in_dock}
+              onChange={(showInDock) => {
+                update({ show_in_dock: showInDock });
+              }}
+            />
           }
         />
+      </SettingSection>
+
+      <SettingSection icon="shield" title={t("settings.general.permissions")}>
+        {/* mic / accessibility status still mock; input monitoring is real (P3.9) */}
+        <PermissionRow icon="mic" name={t("settings.general.microphone")} status="granted" divider={false} />
+        <PermissionRow icon="command" name={t("settings.general.accessibility")} status="granted" />
       </SettingSection>
     </>
   );

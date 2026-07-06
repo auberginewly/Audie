@@ -43,7 +43,9 @@ export function useRecordingFlow(): void {
       setState(parsed.data.to);
     })
       .then(track)
-      .catch((err) => console.error("failed to subscribe state-change:", err));
+      .catch((err) => {
+        console.error("failed to subscribe state-change:", err);
+      });
 
     // The ERROR state-change and this `error` event arrive as a pair; the latter
     // carries the message the capsule renders.
@@ -54,9 +56,11 @@ export function useRecordingFlow(): void {
         return;
       }
       setError(parsed.data);
-      })
+    })
       .then(track)
-      .catch((err) => console.error("failed to subscribe error:", err));
+      .catch((err) => {
+        console.error("failed to subscribe error:", err);
+      });
 
     listen<EnhanceProgressEvent>(EVENT_ENHANCE_PROGRESS, (event) => {
       const parsed = EnhanceProgressSchema.safeParse(event.payload);
@@ -67,11 +71,15 @@ export function useRecordingFlow(): void {
       setEnhanceProgress(parsed.data);
     })
       .then(track)
-      .catch((err) => console.error("failed to subscribe enhance-progress:", err));
+      .catch((err) => {
+        console.error("failed to subscribe enhance-progress:", err);
+      });
 
     return () => {
       cancelled = true;
-      unlisteners.forEach((fn) => fn());
+      unlisteners.forEach((fn) => {
+        fn();
+      });
     };
   }, [setState, setError, setEnhanceProgress]);
 }

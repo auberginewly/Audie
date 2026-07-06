@@ -6,21 +6,21 @@
 
 :root {
   /* ---- Surfaces ---- */
-  --surface-app: var(--background-100);      /* window / page base */
-  --surface-sidebar: #0a0a0a;                /* left rail — a hair off-black */
-  --surface-card: var(--gray-100);           /* settings cards, rows */
+  --surface-app: var(--background-100); /* window / page base */
+  --surface-sidebar: #0a0a0a; /* left rail — a hair off-black */
+  --surface-card: var(--gray-100); /* settings cards, rows */
   --surface-card-hover: var(--gray-200);
-  --surface-inset: var(--background-200);     /* wells, code blocks, subtle separation */
-  --surface-capsule: #0d0d0dF2;              /* recording overlay (with blur) */
-  --surface-overlay: var(--gray-100);         /* menus, popovers */
+  --surface-inset: var(--background-200); /* wells, code blocks, subtle separation */
+  --surface-capsule: #0d0d0df2; /* recording overlay (with blur) */
+  --surface-overlay: var(--gray-100); /* menus, popovers */
 
   /* ---- Text ---- */
-  --text-primary: var(--gray-1000);          /* headings, primary copy */
-  --text-secondary: var(--gray-900);         /* secondary copy, labels */
-  --text-tertiary: var(--gray-600);          /* hints, metadata, captions */
+  --text-primary: var(--gray-1000); /* headings, primary copy */
+  --text-secondary: var(--gray-900); /* secondary copy, labels */
+  --text-tertiary: var(--gray-600); /* hints, metadata, captions */
   --text-disabled: var(--gray-500);
-  --text-on-accent: #ffffff;                 /* text on solid blue */
-  --text-on-solid: var(--background-100);    /* text on primary (gray-1000) fill */
+  --text-on-accent: #ffffff; /* text on solid blue */
+  --text-on-solid: var(--background-100); /* text on primary (gray-1000) fill */
 
   /* ---- Borders / dividers (translucent, layer anywhere) ---- */
   --border-subtle: var(--gray-alpha-200);
@@ -31,8 +31,8 @@
   /* ---- Accent (Audie aubergine / 茄子) ---- */
   --accent-fill: var(--aubergine-700);
   --accent-fill-hover: var(--aubergine-800);
-  --accent-text: var(--aubergine-900);            /* aubergine text/icon on dark */
-  --accent-bg: var(--aubergine-100);              /* tinted aubergine background */
+  --accent-text: var(--aubergine-900); /* aubergine text/icon on dark */
+  --accent-bg: var(--aubergine-100); /* tinted aubergine background */
   --accent-border: var(--aubergine-400);
 
   /* ---- State: success / connected / granted ---- */
@@ -59,7 +59,7 @@
 
 .theme-light {
   --surface-sidebar: #fafafa;
-  --surface-capsule: #ffffffF2;
+  --surface-capsule: #fffffff2;
   --text-on-accent: #ffffff;
   --focus-ring: 0 0 0 2px var(--background-100), 0 0 0 4px var(--aubergine-800);
 }

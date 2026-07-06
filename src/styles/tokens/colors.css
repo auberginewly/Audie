@@ -12,14 +12,14 @@
 
 :root {
   /* ---- Brand anchors ---- */
-  --primary: #ededed;            /* primary text / strongest fill on dark */
-  --secondary: #a0a0a0;          /* secondary text */
-  --accent: #c08cf0;             /* aubergine accent text on dark */
+  --primary: #ededed; /* primary text / strongest fill on dark */
+  --secondary: #a0a0a0; /* secondary text */
+  --accent: #c08cf0; /* aubergine accent text on dark */
   --neutral: #1a1a1a;
 
   /* ---- Surfaces (dark) ---- */
-  --background-100: #000000;     /* app + capsule base */
-  --background-200: #0a0a0a;     /* subtle separation only */
+  --background-100: #000000; /* app + capsule base */
+  --background-200: #0a0a0a; /* subtle separation only */
 
   /* ---- Gray (solid) ---- */
   --gray-100: #1a1a1a;
