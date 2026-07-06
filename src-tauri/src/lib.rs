@@ -290,12 +290,24 @@ pub fn run() {
             app.manage::<ActiveModeSlot>(Arc::new(parking_lot::Mutex::new(DictationMode::Polish)));
             app.manage::<RewriteSourceSlot>(Arc::new(parking_lot::Mutex::new(None)));
 
+            let presentation_app = app_handle.clone();
+            let presentation_platform = platform.clone();
+            let show_in_dock = commands::load_settings(&app_handle).show_in_dock;
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(150));
+                if let Err(err) = presentation_platform.apply_app_icon(&presentation_app) {
+                    log::warn!("apply app icon failed: {err:?}");
+                }
+                if !show_in_dock {
+                    if let Err(err) =
+                        presentation_platform.set_dock_visible(&presentation_app, false)
+                    {
+                        log::error!("apply Dock visibility failed: {err:?}");
+                    }
+                }
+            });
+
             let hotkey = commands::load_hotkey(&app_handle);
-            if let Err(err) =
-                platform.set_dock_visible(&app_handle, commands::load_settings(&app_handle).show_in_dock)
-            {
-                log::error!("apply Dock visibility failed: {err:?}");
-            }
             if let Err(err) = platform.register_hotkey(
                 &app_handle,
                 HotkeySlot::Primary,

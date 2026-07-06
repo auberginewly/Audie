@@ -87,6 +87,10 @@ impl Platform for MacosPlatform {
         dock::set_visible(app, visible)
     }
 
+    fn apply_app_icon(&self, app: &AppHandle) -> AppResult<()> {
+        dock::apply_app_icon(app)
+    }
+
     fn ensure_microphone_permission(&self) -> bool {
         permissions::ensure_microphone_permission()
     }

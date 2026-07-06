@@ -134,6 +134,10 @@ pub trait Platform: Send + Sync {
         Ok(())
     }
 
+    fn apply_app_icon(&self, _app: &AppHandle) -> AppResult<()> {
+        Ok(())
+    }
+
     /// P1 — system keychain (macOS Keychain Services / Windows Credential Manager).
     fn store_secret(&self, key: &str, value: &str) -> AppResult<()>;
     fn has_secret(&self, key: &str) -> AppResult<bool>;
