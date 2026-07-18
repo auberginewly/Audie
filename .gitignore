@@ -26,3 +26,8 @@ dist-ssr
 AGENTS.md
 
 .omo/
+
+# Local tool artifacts (not project code)
+.pnpm-store/
+.playwright-cli/
+download/
