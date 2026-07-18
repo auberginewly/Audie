@@ -1,35 +1,64 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import type { SecretKeyId } from "../../../types/settings";
 import { useI18n } from "../../../i18n";
 import { IconButton, Input } from "../../ui";
-import { getSecretForSettings } from "./modelConfigActions";
 
 interface KeyInputProps {
   keyId: SecretKeyId;
   placeholder: string;
 }
 
-// Keychain-backed password field. Loading the existing secret is user-initiated by
-// opening the config dialog; stable app signing keeps that read silent.
+// Opening Settings only checks presence. The saved value enters the WebView only
+// after the user explicitly clicks Reveal; a blank field still preserves it on save.
 export function KeyInput({ keyId, placeholder }: KeyInputProps) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [revealed, setRevealed] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [revealing, setRevealing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    getSecretForSettings(keyId)
-      .then((secret) => {
-        if (!cancelled && secret) setValue(secret);
+    invoke("has_secret", { keyId })
+      .then((present) => {
+        if (!cancelled) setConfigured(present === true);
       })
       .catch(() => {
-        // Missing or unreadable secrets should leave the field blank.
+        if (!cancelled) setConfigured(false);
       });
     return () => {
       cancelled = true;
     };
   }, [keyId]);
+
+  const toggleReveal = () => {
+    if (revealed) {
+      setRevealed(false);
+      return;
+    }
+    if (value) {
+      setRevealed(true);
+      return;
+    }
+    if (!configured || revealing) return;
+
+    setRevealing(true);
+    invoke("get_secret_for_settings", { keyId })
+      .then((secret) => {
+        if (typeof secret === "string" && secret) {
+          setValue(secret);
+          setRevealed(true);
+        }
+      })
+      .catch(() => {
+        setRevealed(false);
+      })
+      .finally(() => {
+        setRevealing(false);
+      });
+  };
 
   return (
     <div className="relative">
@@ -40,7 +69,7 @@ export function KeyInput({ keyId, placeholder }: KeyInputProps) {
         onChange={(e) => {
           setValue(e.target.value);
         }}
-        placeholder={placeholder}
+        placeholder={configured ? t("settings.config.keyConfiguredPlaceholder") : placeholder}
         data-key-id={keyId}
         className="pr-9"
       />
@@ -49,9 +78,8 @@ export function KeyInput({ keyId, placeholder }: KeyInputProps) {
           name={revealed ? "eye" : "eye-off"}
           label={revealed ? t("settings.config.hide") : t("settings.config.reveal")}
           size="sm"
-          onClick={() => {
-            setRevealed((r) => !r);
-          }}
+          disabled={revealing || (!configured && !value)}
+          onClick={toggleReveal}
         />
       </div>
     </div>

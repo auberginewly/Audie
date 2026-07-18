@@ -15,9 +15,18 @@ use security_framework_sys::keychain_item::{
 
 use crate::error::{AppError, AppResult};
 
-// Store API keys as generic-password items using SecItem* directly (Voxt-style):
-// service = "com.audie.app.secure-storage"; account = key_id; value = secret bytes.
-const KEYCHAIN_SERVICE: &str = "com.audie.app.secure-storage";
+// Keep development credentials separate from packaged-app credentials. Their
+// code-signing identities can differ, and sharing an item would make macOS ask
+// the other identity to authenticate before revealing its value.
+const KEYCHAIN_SERVICE: &str = keychain_service_for_build(cfg!(debug_assertions));
+
+const fn keychain_service_for_build(is_debug: bool) -> &'static str {
+    if is_debug {
+        "com.audie.app.dev.secure-storage"
+    } else {
+        "com.audie.app.secure-storage"
+    }
+}
 
 pub(super) fn store_secret(key: &str, value: &str) -> AppResult<()> {
     let value_data = CFData::from_buffer(value.as_bytes());
@@ -180,6 +189,18 @@ extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_and_release_builds_use_separate_keychain_services() {
+        assert_eq!(
+            keychain_service_for_build(true),
+            "com.audie.app.dev.secure-storage"
+        );
+        assert_eq!(
+            keychain_service_for_build(false),
+            "com.audie.app.secure-storage"
+        );
+    }
 
     #[test]
     #[ignore = "touches the user's macOS Keychain; run manually for P1.2 smoke verification"]

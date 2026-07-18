@@ -723,12 +723,18 @@ pub fn has_secret(app: AppHandle, key_id: String) -> Result<bool, AppError> {
     platform_has_secret(platform.inner().as_ref(), &key_id)
 }
 
+/// Return a saved secret only for the Settings eye-button Reveal action.
+/// Opening the dialog uses `has_secret` instead, so it never requests Keychain data.
 #[tauri::command]
 pub fn get_secret_for_settings(app: AppHandle, key_id: String) -> Result<Option<String>, AppError> {
     validate_secret_key_id(&key_id)?;
 
     let platform = app.state::<Arc<dyn Platform>>();
-    platform_secret_for_settings(platform.inner().as_ref(), &key_id)
+    secret_for_explicit_reveal(
+        &key_id,
+        |key_id| platform.has_secret(key_id),
+        |key_id| platform.read_secret(key_id),
+    )
 }
 
 #[tauri::command]
@@ -756,12 +762,13 @@ fn platform_has_secret(platform: &dyn Platform, key_id: &str) -> Result<bool, Ap
     platform.has_secret(key_id)
 }
 
-fn platform_secret_for_settings(
-    platform: &dyn Platform,
+fn secret_for_explicit_reveal(
     key_id: &str,
+    has_secret: impl FnOnce(&str) -> Result<bool, AppError>,
+    read_secret: impl FnOnce(&str) -> Result<String, AppError>,
 ) -> Result<Option<String>, AppError> {
-    if platform.has_secret(key_id)? {
-        platform.read_secret(key_id).map(Some)
+    if has_secret(key_id)? {
+        read_secret(key_id).map(Some)
     } else {
         Ok(None)
     }
@@ -1305,110 +1312,29 @@ mod tests {
     }
 
     #[test]
-    fn settings_secret_snapshot_returns_none_for_missing_secret_without_reading_value() {
-        struct MissingSecretPlatform;
+    fn explicit_reveal_returns_saved_secret_value() {
+        let secret = secret_for_explicit_reveal(
+            "openai_api_key",
+            |_| Ok(true),
+            |key_id| {
+                assert_eq!(key_id, "openai_api_key");
+                Ok("saved-openai-key".into())
+            },
+        )
+        .unwrap();
 
-        impl Platform for MissingSecretPlatform {
-            fn register_hotkey(
-                &self,
-                _app: &AppHandle,
-                _slot: crate::platform::HotkeySlot,
-                _combo: &str,
-                _callback: crate::platform::HotkeyCallback,
-            ) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn unregister_hotkey(&self, _app: &AppHandle, _slot: crate::platform::HotkeySlot) {
-                unreachable!()
-            }
-
-            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn ensure_microphone_permission(&self) -> bool {
-                unreachable!()
-            }
-
-            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
-                Ok(false)
-            }
-
-            fn read_secret(&self, _key: &str) -> crate::error::AppResult<String> {
-                panic!("missing settings snapshot must not read the secret value")
-            }
-
-            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-        }
-
-        let secret = platform_secret_for_settings(&MissingSecretPlatform, "groq_api_key").unwrap();
-
-        assert_eq!(secret, None);
+        assert_eq!(secret.as_deref(), Some("saved-openai-key"));
     }
 
     #[test]
-    fn settings_secret_snapshot_returns_saved_secret_value() {
-        struct PresentSecretPlatform;
+    fn explicit_reveal_skips_data_read_when_secret_is_missing() {
+        let secret = secret_for_explicit_reveal(
+            "groq_api_key",
+            |_| Ok(false),
+            |_| panic!("missing secret must not read Keychain data"),
+        )
+        .unwrap();
 
-        impl Platform for PresentSecretPlatform {
-            fn register_hotkey(
-                &self,
-                _app: &AppHandle,
-                _slot: crate::platform::HotkeySlot,
-                _combo: &str,
-                _callback: crate::platform::HotkeyCallback,
-            ) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn unregister_hotkey(&self, _app: &AppHandle, _slot: crate::platform::HotkeySlot) {
-                unreachable!()
-            }
-
-            fn unregister_all_hotkeys(&self, _app: &AppHandle) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn inject_text(&self, _app: &AppHandle, _text: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn ensure_microphone_permission(&self) -> bool {
-                unreachable!()
-            }
-
-            fn store_secret(&self, _key: &str, _value: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-
-            fn has_secret(&self, _key: &str) -> crate::error::AppResult<bool> {
-                Ok(true)
-            }
-
-            fn read_secret(&self, key: &str) -> crate::error::AppResult<String> {
-                assert_eq!(key, "openai_api_key");
-                Ok("saved-openai-key".into())
-            }
-
-            fn delete_secret(&self, _key: &str) -> crate::error::AppResult<()> {
-                unreachable!()
-            }
-        }
-
-        let secret =
-            platform_secret_for_settings(&PresentSecretPlatform, "openai_api_key").unwrap();
-
-        assert_eq!(secret.as_deref(), Some("saved-openai-key"));
+        assert_eq!(secret, None);
     }
 }

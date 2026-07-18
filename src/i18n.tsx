@@ -147,6 +147,7 @@ const zhHans = {
   "settings.config.custom": "自定义…",
   "settings.config.hide": "隐藏",
   "settings.config.reveal": "查看",
+  "settings.config.keyConfiguredPlaceholder": "已配置（留空则保持不变）",
   "settings.config.recommendedModels": "推荐模型（按内存，点击填入）",
   "settings.config.primary": "主推",
   "settings.config.localModelHint":
@@ -364,6 +365,7 @@ const zhHant: Messages = {
   "settings.config.custom": "自訂…",
   "settings.config.hide": "隱藏",
   "settings.config.reveal": "查看",
+  "settings.config.keyConfiguredPlaceholder": "已配置（留空則保持不變）",
   "settings.config.recommendedModels": "推薦模型（按記憶體，點擊填入）",
   "settings.config.primary": "主推",
   "settings.config.localModelHint":
@@ -567,6 +569,7 @@ const en: Messages = {
   "settings.config.custom": "Custom…",
   "settings.config.hide": "Hide",
   "settings.config.reveal": "Reveal",
+  "settings.config.keyConfiguredPlaceholder": "Configured (leave blank to keep)",
   "settings.config.recommendedModels": "Recommended models by memory",
   "settings.config.primary": "Recommended",
   "settings.config.localModelHint":

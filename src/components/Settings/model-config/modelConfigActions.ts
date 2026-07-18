@@ -24,24 +24,18 @@ export function errorMessage(err: unknown, fallback: string): string {
   return typeof err === "string" && err ? err : fallback;
 }
 
-export async function getSecretForSettings(keyId: SecretKeyId): Promise<string | null> {
-  try {
-    const raw = await invoke("get_secret_for_settings", { keyId });
-    return typeof raw === "string" && raw ? raw : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function readKey(keyId: SecretKeyId): Promise<string | null> {
+function readDraftKey(keyId: SecretKeyId): string | null {
   const el = document.querySelector<HTMLInputElement>(`input[data-key-id="${keyId}"]`);
-  const typed = el?.value.trim();
-  if (typed) return typed;
-  return getSecretForSettings(keyId);
+  const typed = el?.value.trim() ?? "";
+  return typed.length > 0 ? typed : null;
 }
 
-export async function listProviderModels(baseUrl: string, apiKey: string | null): Promise<ModelOption[]> {
-  const raw = await invoke("list_provider_models", { baseUrl, apiKey });
+export async function listProviderModels(
+  baseUrl: string,
+  apiKey: string | null,
+  keyId: SecretKeyId | null = null,
+): Promise<ModelOption[]> {
+  const raw = await invoke("list_provider_models", { baseUrl, apiKey, keyId });
   const ids = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
   return ids.map((id) => ({ id, title: id }));
 }
@@ -57,8 +51,8 @@ export async function refreshModels({
 }): Promise<{ models: ModelOption[] | null; status: ActionStatus; firstModel?: string }> {
   try {
     const keyId = llmKeyIdForModelId(model.id);
-    const apiKey = keyId ? await readKey(keyId) : null;
-    const models = await listProviderModels(llmDraft.baseUrl, apiKey);
+    const apiKey = keyId ? readDraftKey(keyId) : null;
+    const models = await listProviderModels(llmDraft.baseUrl, apiKey, keyId);
     if (!models.length) {
       return { models: null, status: { tone: "danger", message: t("settings.config.noModelsReturned") } };
     }
@@ -145,7 +139,7 @@ export async function runProviderTest({
           kind: "asr",
           provider_id: "groq",
           key_id: "groq_api_key",
-          api_key: await readKey("groq_api_key"),
+          api_key: readDraftKey("groq_api_key"),
           base_url: null,
         },
       });
@@ -155,7 +149,7 @@ export async function runProviderTest({
           kind: "asr",
           provider_id: "openai",
           key_id: "openai_api_key",
-          api_key: await readKey("openai_api_key"),
+          api_key: readDraftKey("openai_api_key"),
           base_url: null,
         },
       });
@@ -166,7 +160,7 @@ export async function runProviderTest({
           kind: "llm",
           provider_id: "openai_compatible",
           key_id: llmKeyId ?? "openai_compatible_api_key",
-          api_key: llmKeyId ? await readKey(llmKeyId) : null,
+          api_key: llmKeyId ? readDraftKey(llmKeyId) : null,
           base_url: llmDraft.baseUrl,
         },
       });

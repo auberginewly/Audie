@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 use crate::commands::{
     available_asr_providers, available_llm_providers, validate_secret_key_id, DEFAULT_ASR_PROVIDER,
     DEFAULT_LLM_PROVIDER,
 };
 use crate::error::{AppError, AppResult};
+use crate::platform::Platform;
 
 const GROQ_MODELS_ENDPOINT: &str = "https://api.groq.com/openai/v1/models";
 const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
@@ -48,7 +52,10 @@ pub struct ProviderTestResult {
 }
 
 #[tauri::command]
-pub fn test_provider(request: ProviderTestRequest) -> Result<ProviderTestResult, AppError> {
+pub fn test_provider(
+    app: AppHandle,
+    request: ProviderTestRequest,
+) -> Result<ProviderTestResult, AppError> {
     validate_provider_target(request.kind, &request.provider_id)?;
     validate_secret_key_id(&request.key_id)?;
 
@@ -57,7 +64,14 @@ pub fn test_provider(request: ProviderTestRequest) -> Result<ProviderTestResult,
         .base_url
         .as_deref()
         .is_some_and(crate::llm::is_local_endpoint);
-    let api_key = read_api_key_for_test(request.api_key.as_deref(), local)?;
+    let platform = app.state::<Arc<dyn Platform>>();
+    let api_key = resolve_api_key_for_provider_action(
+        request.api_key.as_deref(),
+        Some(&request.key_id),
+        local,
+        |key_id| platform.has_secret(key_id),
+        |key_id| platform.read_secret(key_id),
+    )?;
 
     let endpoint = provider_test_endpoint(request.kind, &request.provider_id, request.base_url)?;
     test_models_endpoint(&endpoint, &api_key)?;
@@ -86,17 +100,28 @@ struct ModelEntry {
 /// the offline fallback when this isn't run / fails.
 #[tauri::command]
 pub fn list_provider_models(
+    app: AppHandle,
     base_url: String,
     api_key: Option<String>,
+    key_id: Option<String>,
 ) -> Result<Vec<String>, AppError> {
     let base = base_url.trim();
     if base.is_empty() {
         return Err(AppError::Provider("请先填写 base URL".into()));
     }
+    let local = crate::llm::is_local_endpoint(base);
+    let platform = app.state::<Arc<dyn Platform>>();
+    let api_key = resolve_api_key_for_provider_action(
+        api_key.as_deref(),
+        key_id.as_deref(),
+        local,
+        |key_id| platform.has_secret(key_id),
+        |key_id| platform.read_secret(key_id),
+    )?;
     let endpoint = join_url(base, OPENAI_COMPATIBLE_MODELS_PATH);
     fetch_chat_model_ids(
         &endpoint,
-        api_key.as_deref(),
+        (!api_key.is_empty()).then_some(api_key.as_str()),
         std::time::Duration::from_secs(TEST_TIMEOUT_SECS),
     )
 }
@@ -200,15 +225,35 @@ fn is_chat_model(id: &str) -> bool {
     !NON_CHAT.iter().any(|needle| lower.contains(needle))
 }
 
-fn read_api_key_for_test(inline_api_key: Option<&str>, local: bool) -> AppResult<String> {
-    match inline_api_key
+fn resolve_api_key_for_provider_action(
+    inline_api_key: Option<&str>,
+    key_id: Option<&str>,
+    local: bool,
+    has_secret: impl FnOnce(&str) -> AppResult<bool>,
+    read_secret: impl FnOnce(&str) -> AppResult<String>,
+) -> AppResult<String> {
+    if let Some(api_key) = inline_api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Some(api_key) => Ok(api_key.to_string()),
-        // Local providers run keyless against localhost; cloud must supply a key.
-        None if local => Ok(String::new()),
-        None => Err(AppError::Provider("请先填写 API key".into())),
+        return Ok(api_key.to_string());
+    }
+    if local {
+        return Ok(String::new());
+    }
+
+    let key_id = key_id.ok_or_else(|| AppError::Provider("请先填写 API key".into()))?;
+    validate_secret_key_id(key_id)?;
+    if !has_secret(key_id)? {
+        return Err(AppError::Provider("请先填写 API key".into()));
+    }
+
+    let api_key = read_secret(key_id)?;
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        Err(AppError::Provider("请先填写 API key".into()))
+    } else {
+        Ok(api_key.to_string())
     }
 }
 
@@ -301,6 +346,7 @@ fn classify_http_status(status: u16, body: &str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn is_chat_model_keeps_chat_drops_non_chat() {
@@ -354,7 +400,14 @@ mod tests {
     #[test]
     fn inline_api_key_is_trimmed() {
         assert_eq!(
-            read_api_key_for_test(Some("  inline-key  "), false).unwrap(),
+            resolve_api_key_for_provider_action(
+                Some("  inline-key  "),
+                Some("openai_api_key"),
+                false,
+                |_| panic!("inline key must not check Keychain presence"),
+                |_| panic!("inline key must not read Keychain data"),
+            )
+            .unwrap(),
             "inline-key"
         );
     }
@@ -363,13 +416,27 @@ mod tests {
     fn cloud_requires_a_key() {
         // Blank or missing key for a non-local provider is an error.
         assert_eq!(
-            read_api_key_for_test(Some("  "), false)
-                .unwrap_err()
-                .message(),
+            resolve_api_key_for_provider_action(
+                Some("  "),
+                Some("openai_api_key"),
+                false,
+                |_| Ok(false),
+                |_| panic!("missing key must not read Keychain data"),
+            )
+            .unwrap_err()
+            .message(),
             "请先填写 API key"
         );
         assert_eq!(
-            read_api_key_for_test(None, false).unwrap_err().message(),
+            resolve_api_key_for_provider_action(
+                None,
+                Some("openai_api_key"),
+                false,
+                |_| Ok(false),
+                |_| panic!("missing key must not read Keychain data"),
+            )
+            .unwrap_err()
+            .message(),
             "请先填写 API key"
         );
     }
@@ -377,7 +444,65 @@ mod tests {
     #[test]
     fn local_endpoint_needs_no_key() {
         // Ollama / LM Studio (localhost) test keyless.
-        assert_eq!(read_api_key_for_test(None, true).unwrap(), "");
+        assert_eq!(
+            resolve_api_key_for_provider_action(
+                None,
+                None,
+                true,
+                |_| panic!("local provider must not check Keychain presence"),
+                |_| panic!("local provider must not read Keychain data"),
+            )
+            .unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn provider_action_prefers_inline_key_without_reading_keychain() {
+        let key = resolve_api_key_for_provider_action(
+            Some("  typed-key  "),
+            Some("openai_api_key"),
+            false,
+            |_| panic!("inline key must not check Keychain presence"),
+            |_| panic!("inline key must not read Keychain data"),
+        )
+        .unwrap();
+
+        assert_eq!(key, "typed-key");
+    }
+
+    #[test]
+    fn provider_action_reads_saved_key_only_when_needed() {
+        let reads = Cell::new(0);
+
+        let key = resolve_api_key_for_provider_action(
+            None,
+            Some("openai_api_key"),
+            false,
+            |_| Ok(true),
+            |_| {
+                reads.set(reads.get() + 1);
+                Ok("saved-key".into())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(key, "saved-key");
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[test]
+    fn local_provider_action_never_reads_keychain() {
+        let key = resolve_api_key_for_provider_action(
+            None,
+            None,
+            true,
+            |_| panic!("local provider must not check Keychain presence"),
+            |_| panic!("local provider must not read Keychain data"),
+        )
+        .unwrap();
+
+        assert_eq!(key, "");
     }
 
     #[test]
