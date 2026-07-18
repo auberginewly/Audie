@@ -40,6 +40,7 @@ const SUCCESS_HOLD_MS: u64 = 150;
 // the overlay auto-settles to Idle. A user action transitions the state first,
 // which turns the pending settle into a no-op (see `settle_to_idle`).
 const TERMINAL_HOLD_MS: u64 = 6000;
+const STREAMING_AUDIO_QUEUE_CAPACITY: usize = 32;
 
 type ActiveStreamingSession = Arc<parking_lot::Mutex<Option<TranscriptStream>>>;
 
@@ -48,7 +49,7 @@ type ActiveStreamingSession = Arc<parking_lot::Mutex<Option<TranscriptStream>>>;
 /// finishes; `transcript` fills in once ASR returns (None if it never got there).
 #[derive(Clone)]
 struct LastTake {
-    audio: AudioData,
+    audio: Arc<AudioData>,
     transcript: Option<String>,
     duration_ms: u64,
 }
@@ -517,6 +518,10 @@ fn finish_recording(ctx: &HotkeyContext<'_>) {
     let mode = *ctx.active_mode.lock();
     match ctx.audio.stop_capture() {
         Ok(recorded) => {
+            let streaming_result = streaming_result_after_capture(
+                streaming_result,
+                recorded.streaming_queue_overflowed,
+            );
             spawn_transcription(
                 ctx.app.clone(),
                 ctx.state.clone(),
@@ -526,13 +531,14 @@ fn finish_recording(ctx: &HotkeyContext<'_>) {
                 ctx.last_take.clone(),
                 ctx.take_gen.clone(),
                 my_gen,
-                recorded,
+                recorded.audio,
                 streaming_result,
                 mode,
             );
         }
         Err(err) => {
             log::error!("stop capture: {err:?}");
+            clear_last_take(ctx.last_take);
             enter_error(ctx.app.clone(), ctx.state.clone(), err);
         }
     }
@@ -588,14 +594,18 @@ fn cancel_recording(app: AppHandle) {
             clear_streaming_session(ctx.streaming);
             match ctx.audio.stop_capture() {
                 Ok(recorded) => {
-                    let duration_ms = duration_ms(&recorded);
+                    let audio = Arc::new(recorded.audio);
+                    let duration_ms = duration_ms(&audio);
                     *ctx.last_take.lock() = Some(LastTake {
-                        audio: recorded,
+                        audio,
                         transcript: None,
                         duration_ms,
                     });
                 }
-                Err(err) => log::warn!("cancel stop_capture: {err:?}"),
+                Err(err) => {
+                    log::warn!("cancel stop_capture: {err:?}");
+                    clear_last_take(ctx.last_take);
+                }
             }
             if ctx
                 .state
@@ -768,6 +778,7 @@ fn spawn_transcription(
     mode: DictationMode,
 ) {
     thread::spawn(move || {
+        let audio = Arc::new(audio);
         let duration_ms = duration_ms(&audio);
 
         // Keep the take from the start so a terminal toast can always resume it,
@@ -1070,9 +1081,9 @@ fn start_streaming_session(
     app: &AppHandle,
     transcription: &TranscriptionManager,
     streaming: &ActiveStreamingSession,
-) -> Option<mpsc::Sender<AppResult<crate::asr::AudioChunk>>> {
+) -> Option<mpsc::SyncSender<AppResult<crate::asr::AudioChunk>>> {
     let config = doubao_streaming_config(app)?;
-    let (chunks_tx, chunks_rx) = mpsc::channel();
+    let (chunks_tx, chunks_rx) = mpsc::sync_channel(STREAMING_AUDIO_QUEUE_CAPACITY);
     match transcription.transcribe_stream(chunks_rx, &config) {
         Ok(transcripts) => {
             *streaming.lock() = Some(transcripts);
@@ -1091,6 +1102,18 @@ fn clear_streaming_session(streaming: &ActiveStreamingSession) {
 
 fn take_streaming_session(streaming: &ActiveStreamingSession) -> Option<TranscriptStream> {
     streaming.lock().take()
+}
+
+fn streaming_result_after_capture(
+    streaming_result: Option<TranscriptStream>,
+    streaming_queue_overflowed: bool,
+) -> Option<TranscriptStream> {
+    if streaming_queue_overflowed {
+        log::warn!("streaming audio queue overflowed; falling back to batch ASR");
+        None
+    } else {
+        streaming_result
+    }
 }
 
 fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
@@ -1369,10 +1392,17 @@ fn spawn_settle_after(app: AppHandle, state: Arc<StateMachine>, hold_ms: u64) {
 /// 撤销 / 重试 (now Processing) must not hide the capsule out from under them.
 fn settle_to_idle(app: &AppHandle, state: &Arc<StateMachine>, reason: &str) {
     if state.transition(app, AppState::Idle, Some(reason)) {
+        if let Some(last_take) = app.try_state::<LastTakeSlot>() {
+            clear_last_take(last_take.inner());
+        }
         if let Err(err) = hide_overlay(app) {
             log::error!("hide overlay: {err:?}");
         }
     }
+}
+
+fn clear_last_take(last_take: &LastTakeSlot) {
+    let _ = last_take.lock().take();
 }
 
 fn is_digital_silence(audio: &AudioData) -> bool {
@@ -1899,5 +1929,58 @@ mod tests {
         // 改写历史的「原文」= 口述指令 + 引用的选中内容（两段带小标题，给人看）。
         let raw = rewrite_history_raw("翻译成英文", "你好世界");
         assert_eq!(raw, "指令：翻译成英文\n\n引用：\n你好世界");
+    }
+
+    #[test]
+    fn last_take_clone_shares_audio_buffer() {
+        let audio = Arc::new(AudioData {
+            samples: vec![0.1, 0.2, 0.3],
+            sample_rate: 16_000,
+            channels: 1,
+        });
+        let take = LastTake {
+            audio: audio.clone(),
+            transcript: None,
+            duration_ms: 0,
+        };
+
+        let cloned = take.clone();
+
+        assert!(Arc::ptr_eq(&take.audio, &cloned.audio));
+    }
+
+    #[test]
+    fn clearing_last_take_drops_terminal_audio() {
+        let slot: LastTakeSlot = Arc::new(parking_lot::Mutex::new(Some(LastTake {
+            audio: Arc::new(AudioData {
+                samples: vec![0.1],
+                sample_rate: 16_000,
+                channels: 1,
+            }),
+            transcript: None,
+            duration_ms: 0,
+        })));
+
+        clear_last_take(&slot);
+
+        assert!(slot.lock().is_none());
+    }
+
+    #[test]
+    fn streaming_queue_overflow_falls_back_to_batch_resolution() {
+        let (_tx, rx) = mpsc::channel();
+
+        let selected = streaming_result_after_capture(Some(rx), true);
+
+        assert!(selected.is_none());
+    }
+
+    #[test]
+    fn streaming_result_kept_when_queue_did_not_overflow() {
+        let (_tx, rx) = mpsc::channel();
+
+        let selected = streaming_result_after_capture(Some(rx), false);
+
+        assert!(selected.is_some());
     }
 }

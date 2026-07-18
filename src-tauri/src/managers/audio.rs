@@ -12,8 +12,8 @@
 //
 // Mirrors Handy's pattern: cpal default host, blocking thread, atomic shutdown.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -34,6 +34,8 @@ const AUDIO_LEVEL_EVENT: &str = "audio-level";
 const MIC_MONITOR_LEVEL_EVENT: &str = "mic-monitor-level";
 const EMIT_INTERVAL_MS: u64 = 33;
 const SHUTDOWN_POLL_MS: u64 = 10;
+const MAX_RECORDING_SECONDS: u64 = 120;
+const RECORDING_TOO_LONG_MESSAGE: &str = "录音超过 120 秒，已丢弃这次音频，请重新录一段短句";
 
 #[derive(Serialize, Clone, Copy)]
 struct AudioLevelPayload {
@@ -53,12 +55,50 @@ struct AudioMeta {
     channels: u16,
 }
 
+struct RetainedSamples {
+    max_samples: AtomicUsize,
+    exceeded: AtomicBool,
+}
+
+impl RetainedSamples {
+    fn new(max_samples: usize) -> Self {
+        Self {
+            max_samples: AtomicUsize::new(max_samples),
+            exceeded: AtomicBool::new(false),
+        }
+    }
+
+    fn configure(&self, meta: AudioMeta) {
+        self.max_samples
+            .store(max_retained_samples(meta), Ordering::Relaxed);
+    }
+
+    fn accepted_len(&self, current_len: usize, incoming_len: usize) -> usize {
+        let max_samples = self.max_samples.load(Ordering::Relaxed);
+        let remaining = max_samples.saturating_sub(current_len);
+        let accepted = remaining.min(incoming_len);
+        if accepted < incoming_len {
+            self.exceeded.store(true, Ordering::Relaxed);
+        }
+        accepted
+    }
+
+    fn exceeded(&self) -> bool {
+        self.exceeded.load(Ordering::Relaxed)
+    }
+}
+
+fn max_retained_samples(meta: AudioMeta) -> usize {
+    meta.sample_rate as usize * meta.channels.max(1) as usize * MAX_RECORDING_SECONDS as usize
+}
+
 /// Optional live PCM outlet (P2.5). When present, the cpal callback forwards
 /// each buffer of samples as an `AudioChunk` in addition to the batch buffer —
 /// the streaming ASR consumer drains the receiver. `None` (the default path) is
 /// a no-op, so the batch flow keeps its current cost. Real consumer lands P2.6.
 struct ChunkSink {
-    tx: mpsc::Sender<AppResult<AudioChunk>>,
+    tx: SyncSender<AppResult<AudioChunk>>,
+    overflowed: Arc<AtomicBool>,
     sequence: AtomicU64,
     sample_rate: u32,
     channels: u16,
@@ -67,15 +107,19 @@ struct ChunkSink {
 impl ChunkSink {
     fn forward(&self, samples: Vec<f32>) {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
-        // A dropped receiver just means the streaming consumer went away; the
-        // batch path is unaffected, so swallow the send error.
-        let _ = self.tx.send(Ok(AudioChunk {
+        let result = self.tx.try_send(Ok(AudioChunk {
             samples,
             sample_rate: self.sample_rate,
             channels: self.channels,
             sequence,
             is_final: false,
         }));
+        match result {
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Full(_)) => {
+                self.overflowed.store(true, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Send an end-of-input sentinel so the streaming consumer's recv loop ends
@@ -86,13 +130,20 @@ impl ChunkSink {
     /// chunk breaks the loop now.
     fn finish(&self) {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
-        let _ = self.tx.send(Ok(AudioChunk {
+        let result = self.tx.try_send(Ok(AudioChunk {
             samples: Vec::new(),
             sample_rate: self.sample_rate,
             channels: self.channels,
             sequence,
             is_final: true,
         }));
+        match result {
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Full(_)) => {
+                self.overflowed.store(true, Ordering::Relaxed);
+                log::warn!("streaming audio queue full at final sentinel; receiver will finish on channel close");
+            }
+        }
     }
 }
 
@@ -101,7 +152,14 @@ struct CaptureSession {
     capture_thread: Option<JoinHandle<()>>,
     emit_thread: Option<JoinHandle<()>>,
     buffer: Arc<Mutex<Vec<f32>>>,
+    retained: Arc<RetainedSamples>,
+    streaming_queue_overflowed: Option<Arc<AtomicBool>>,
     meta: AudioMeta,
+}
+
+pub struct CapturedAudio {
+    pub audio: AudioData,
+    pub streaming_queue_overflowed: bool,
 }
 
 /// A level-only capture for the Settings mic preview. Like `CaptureSession` but
@@ -140,7 +198,7 @@ impl AudioManager {
     pub fn start_capture_streaming(
         &self,
         app: AppHandle,
-        chunk_tx: mpsc::Sender<AppResult<AudioChunk>>,
+        chunk_tx: SyncSender<AppResult<AudioChunk>>,
     ) -> AppResult<()> {
         self.start_capture_inner(app, Some(chunk_tx))
     }
@@ -148,7 +206,7 @@ impl AudioManager {
     fn start_capture_inner(
         &self,
         app: AppHandle,
-        chunk_tx: Option<mpsc::Sender<AppResult<AudioChunk>>>,
+        chunk_tx: Option<SyncSender<AppResult<AudioChunk>>>,
     ) -> AppResult<()> {
         let mut guard = self.session.lock();
         if guard.is_some() {
@@ -159,6 +217,9 @@ impl AudioManager {
         let shutdown = Arc::new(AtomicBool::new(false));
         let accum = Arc::new(Mutex::new(LevelAccum::default()));
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let retained = Arc::new(RetainedSamples::new(usize::MAX));
+        let streaming_queue_overflowed =
+            chunk_tx.as_ref().map(|_| Arc::new(AtomicBool::new(false)));
 
         // Device resolution: an explicit pick in Settings (`input_device`, empty =
         // automatic) wins; otherwise fall back to the platform's P0.7 auto-pick
@@ -182,21 +243,25 @@ impl AudioManager {
         let shutdown_cap = shutdown.clone();
         let accum_cap = accum.clone();
         let buffer_cap = buffer.clone();
+        let retained_cap = retained.clone();
+        let overflowed_cap = streaming_queue_overflowed.clone();
         let capture_thread = thread::Builder::new()
             .name("audie-audio-capture".into())
             .spawn(move || {
-                run_capture_thread(
-                    shutdown_cap,
-                    accum_cap,
-                    buffer_cap,
+                run_capture_thread(CaptureThreadArgs {
+                    shutdown: shutdown_cap,
+                    accum: accum_cap,
+                    buffer: buffer_cap,
+                    retained: retained_cap,
                     chunk_tx,
-                    CapturePlan {
+                    streaming_queue_overflowed: overflowed_cap,
+                    plan: CapturePlan {
                         preferred_name,
                         explicit,
                         level_only: false,
                     },
                     ready_tx,
-                );
+                });
             })
             .map_err(|e| AppError::Device(format!("spawn capture thread: {e}")))?;
 
@@ -236,6 +301,8 @@ impl AudioManager {
             capture_thread: Some(capture_thread),
             emit_thread: Some(emit_thread),
             buffer,
+            retained,
+            streaming_queue_overflowed,
             meta,
         });
 
@@ -249,7 +316,7 @@ impl AudioManager {
 
     /// Signal both threads to exit, join them, and return the buffered utterance.
     /// Errors if no capture is active.
-    pub fn stop_capture(&self) -> AppResult<AudioData> {
+    pub fn stop_capture(&self) -> AppResult<CapturedAudio> {
         let mut session = match self.session.lock().take() {
             Some(s) => s,
             None => {
@@ -274,12 +341,26 @@ impl AudioManager {
 
         // Threads are joined, so the cpal callback can no longer touch the buffer.
         let samples = std::mem::take(&mut *session.buffer.lock());
+        if session.retained.exceeded() {
+            log::warn!(
+                "audio capture exceeded retained sample cap; dropped {} retained samples",
+                samples.len()
+            );
+            return Err(AppError::Device(RECORDING_TOO_LONG_MESSAGE.into()));
+        }
         log::info!("audio capture stopped ({} samples)", samples.len());
+        let streaming_queue_overflowed = session
+            .streaming_queue_overflowed
+            .as_deref()
+            .is_some_and(|overflowed| overflowed.load(Ordering::Relaxed));
 
-        Ok(AudioData {
-            samples,
-            sample_rate: session.meta.sample_rate,
-            channels: session.meta.channels,
+        Ok(CapturedAudio {
+            audio: AudioData {
+                samples,
+                sample_rate: session.meta.sample_rate,
+                channels: session.meta.channels,
+            },
+            streaming_queue_overflowed,
         })
     }
 
@@ -310,21 +391,24 @@ impl AudioManager {
         let (ready_tx, ready_rx) = mpsc::channel::<AppResult<AudioMeta>>();
         let shutdown_cap = shutdown.clone();
         let accum_cap = accum.clone();
+        let retained = Arc::new(RetainedSamples::new(usize::MAX));
         let capture_thread = thread::Builder::new()
             .name("audie-monitor-capture".into())
             .spawn(move || {
-                run_capture_thread(
-                    shutdown_cap,
-                    accum_cap,
+                run_capture_thread(CaptureThreadArgs {
+                    shutdown: shutdown_cap,
+                    accum: accum_cap,
                     buffer,
-                    None,
-                    CapturePlan {
+                    retained,
+                    chunk_tx: None,
+                    streaming_queue_overflowed: None,
+                    plan: CapturePlan {
                         preferred_name,
                         explicit,
                         level_only: true,
                     },
                     ready_tx,
-                );
+                });
             })
             .map_err(|e| AppError::Device(format!("spawn monitor capture thread: {e}")))?;
 
@@ -406,14 +490,29 @@ struct CapturePlan {
     level_only: bool,
 }
 
-fn run_capture_thread(
+struct CaptureThreadArgs {
     shutdown: Arc<AtomicBool>,
     accum: Arc<Mutex<LevelAccum>>,
     buffer: Arc<Mutex<Vec<f32>>>,
-    chunk_tx: Option<mpsc::Sender<AppResult<AudioChunk>>>,
+    retained: Arc<RetainedSamples>,
+    chunk_tx: Option<SyncSender<AppResult<AudioChunk>>>,
+    streaming_queue_overflowed: Option<Arc<AtomicBool>>,
     plan: CapturePlan,
     ready_tx: mpsc::Sender<AppResult<AudioMeta>>,
-) {
+}
+
+fn run_capture_thread(args: CaptureThreadArgs) {
+    let CaptureThreadArgs {
+        shutdown,
+        accum,
+        buffer,
+        retained,
+        chunk_tx,
+        streaming_queue_overflowed,
+        plan,
+        ready_tx,
+    } = args;
+
     let host = cpal::default_host();
     let device = match resolve_input_device(&host, plan.preferred_name.as_deref(), plan.explicit) {
         Some(d) => d,
@@ -449,10 +548,13 @@ fn run_capture_thread(
         sample_rate: config.sample_rate.0,
         channels: config.channels,
     };
+    retained.configure(meta);
     // Build the optional live PCM outlet now that we know the stream format.
     let chunk_sink = chunk_tx.map(|tx| {
         Arc::new(ChunkSink {
             tx,
+            overflowed: streaming_queue_overflowed
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
             sequence: AtomicU64::new(0),
             sample_rate: meta.sample_rate,
             channels: meta.channels,
@@ -462,28 +564,43 @@ fn run_capture_thread(
 
     let build_result = match sample_format {
         SampleFormat::F32 => {
-            let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
+            let (a, b, r, s) = (
+                accum.clone(),
+                buffer.clone(),
+                retained.clone(),
+                chunk_sink.clone(),
+            );
             device.build_input_stream(
                 &config,
-                move |data: &[f32], _| process_f32(&a, &b, s.as_deref(), data, level_only),
+                move |data: &[f32], _| process_f32(&a, &b, s.as_deref(), &r, data, level_only),
                 err_fn,
                 None,
             )
         }
         SampleFormat::I16 => {
-            let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
+            let (a, b, r, s) = (
+                accum.clone(),
+                buffer.clone(),
+                retained.clone(),
+                chunk_sink.clone(),
+            );
             device.build_input_stream(
                 &config,
-                move |data: &[i16], _| process_i16(&a, &b, s.as_deref(), data, level_only),
+                move |data: &[i16], _| process_i16(&a, &b, s.as_deref(), &r, data, level_only),
                 err_fn,
                 None,
             )
         }
         SampleFormat::U16 => {
-            let (a, b, s) = (accum.clone(), buffer.clone(), chunk_sink.clone());
+            let (a, b, r, s) = (
+                accum.clone(),
+                buffer.clone(),
+                retained.clone(),
+                chunk_sink.clone(),
+            );
             device.build_input_stream(
                 &config,
-                move |data: &[u16], _| process_u16(&a, &b, s.as_deref(), data, level_only),
+                move |data: &[u16], _| process_u16(&a, &b, s.as_deref(), &r, data, level_only),
                 err_fn,
                 None,
             )
@@ -552,10 +669,12 @@ fn process_f32(
     accum: &Mutex<LevelAccum>,
     buffer: &Mutex<Vec<f32>>,
     sink: Option<&ChunkSink>,
+    retained: &RetainedSamples,
     data: &[f32],
     level_only: bool,
 ) {
     let mut peak = 0.0f32;
+    let mut accepted = data.len();
     {
         // `level_only` (Settings mic preview) tracks the peak only — no buffer
         // lock, no sample retention — so a long preview can't grow memory.
@@ -565,21 +684,24 @@ fn process_f32(
             Some(buffer.lock())
         };
         if let Some(buf) = buf.as_mut() {
-            buf.reserve(data.len());
+            accepted = retained.accepted_len(buf.len(), data.len());
+            buf.reserve(accepted);
         }
-        for &s in data {
+        for (index, &s) in data.iter().enumerate() {
             let a = s.abs();
             if a > peak {
                 peak = a;
             }
-            if let Some(buf) = buf.as_mut() {
-                buf.push(s);
+            if index < accepted {
+                if let Some(buf) = buf.as_mut() {
+                    buf.push(s);
+                }
             }
         }
     }
     merge_peak(accum, peak);
-    if let Some(sink) = sink {
-        sink.forward(data.to_vec());
+    if let Some(sink) = sink.filter(|_| accepted > 0) {
+        sink.forward(data[..accepted].to_vec());
     }
 }
 
@@ -587,32 +709,41 @@ fn process_i16(
     accum: &Mutex<LevelAccum>,
     buffer: &Mutex<Vec<f32>>,
     sink: Option<&ChunkSink>,
+    retained: &RetainedSamples,
     data: &[i16],
     level_only: bool,
 ) {
     let scale = i16::MAX as f32;
     let mut peak = 0.0f32;
-    let mut chunk = sink.map(|_| Vec::with_capacity(data.len()));
+    let mut chunk: Option<Vec<f32>> = None;
     {
         let mut buf = if level_only {
             None
         } else {
             Some(buffer.lock())
         };
+        let accepted = buf.as_ref().map_or(data.len(), |buf| {
+            retained.accepted_len(buf.len(), data.len())
+        });
         if let Some(buf) = buf.as_mut() {
-            buf.reserve(data.len());
+            buf.reserve(accepted);
         }
-        for &s in data {
+        if sink.is_some() && accepted > 0 {
+            chunk = Some(Vec::with_capacity(accepted));
+        }
+        for (index, &s) in data.iter().enumerate() {
             let v = s as f32 / scale;
             let a = v.abs();
             if a > peak {
                 peak = a;
             }
-            if let Some(buf) = buf.as_mut() {
-                buf.push(v);
-            }
-            if let Some(chunk) = chunk.as_mut() {
-                chunk.push(v);
+            if index < accepted {
+                if let Some(buf) = buf.as_mut() {
+                    buf.push(v);
+                }
+                if let Some(chunk) = chunk.as_mut() {
+                    chunk.push(v);
+                }
             }
         }
     }
@@ -626,32 +757,41 @@ fn process_u16(
     accum: &Mutex<LevelAccum>,
     buffer: &Mutex<Vec<f32>>,
     sink: Option<&ChunkSink>,
+    retained: &RetainedSamples,
     data: &[u16],
     level_only: bool,
 ) {
     let mut peak = 0.0f32;
-    let mut chunk = sink.map(|_| Vec::with_capacity(data.len()));
+    let mut chunk: Option<Vec<f32>> = None;
     {
         let mut buf = if level_only {
             None
         } else {
             Some(buffer.lock())
         };
+        let accepted = buf.as_ref().map_or(data.len(), |buf| {
+            retained.accepted_len(buf.len(), data.len())
+        });
         if let Some(buf) = buf.as_mut() {
-            buf.reserve(data.len());
+            buf.reserve(accepted);
         }
-        for &s in data {
+        if sink.is_some() && accepted > 0 {
+            chunk = Some(Vec::with_capacity(accepted));
+        }
+        for (index, &s) in data.iter().enumerate() {
             // u16 silence is centered at 32768.
             let v = (s as f32 - 32768.0) / 32768.0;
             let a = v.abs();
             if a > peak {
                 peak = a;
             }
-            if let Some(buf) = buf.as_mut() {
-                buf.push(v);
-            }
-            if let Some(chunk) = chunk.as_mut() {
-                chunk.push(v);
+            if index < accepted {
+                if let Some(buf) = buf.as_mut() {
+                    buf.push(v);
+                }
+                if let Some(chunk) = chunk.as_mut() {
+                    chunk.push(v);
+                }
             }
         }
     }
@@ -746,15 +886,25 @@ mod tests {
     fn process_f32_forwards_chunk_when_sink_present() {
         let accum = Mutex::new(LevelAccum::default());
         let buffer = Mutex::new(Vec::new());
-        let (tx, rx) = mpsc::channel();
+        let retained = RetainedSamples::new(usize::MAX);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let overflowed = Arc::new(AtomicBool::new(false));
         let sink = ChunkSink {
             tx,
+            overflowed,
             sequence: AtomicU64::new(0),
             sample_rate: 16_000,
             channels: 1,
         };
 
-        process_f32(&accum, &buffer, Some(&sink), &[0.5, -0.25], false);
+        process_f32(
+            &accum,
+            &buffer,
+            Some(&sink),
+            &retained,
+            &[0.5, -0.25],
+            false,
+        );
 
         // Batch buffer still gets the samples …
         assert_eq!(*buffer.lock(), vec![0.5, -0.25]);
@@ -769,8 +919,9 @@ mod tests {
     fn process_f32_without_sink_only_fills_buffer() {
         let accum = Mutex::new(LevelAccum::default());
         let buffer = Mutex::new(Vec::new());
+        let retained = RetainedSamples::new(usize::MAX);
 
-        process_f32(&accum, &buffer, None, &[0.1, 0.2], false);
+        process_f32(&accum, &buffer, None, &retained, &[0.1, 0.2], false);
 
         assert_eq!(*buffer.lock(), vec![0.1, 0.2]);
     }
@@ -779,15 +930,25 @@ mod tests {
     fn process_i16_normalizes_and_forwards() {
         let accum = Mutex::new(LevelAccum::default());
         let buffer = Mutex::new(Vec::new());
-        let (tx, rx) = mpsc::channel();
+        let retained = RetainedSamples::new(usize::MAX);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let overflowed = Arc::new(AtomicBool::new(false));
         let sink = ChunkSink {
             tx,
+            overflowed,
             sequence: AtomicU64::new(0),
             sample_rate: 16_000,
             channels: 1,
         };
 
-        process_i16(&accum, &buffer, Some(&sink), &[i16::MAX, 0], false);
+        process_i16(
+            &accum,
+            &buffer,
+            Some(&sink),
+            &retained,
+            &[i16::MAX, 0],
+            false,
+        );
 
         let chunk = rx.recv().unwrap().unwrap();
         assert_eq!(chunk.samples, vec![1.0, 0.0]);
@@ -798,12 +959,108 @@ mod tests {
     fn process_f32_level_only_tracks_peak_without_buffering() {
         let accum = Mutex::new(LevelAccum::default());
         let buffer = Mutex::new(Vec::new());
+        let retained = RetainedSamples::new(usize::MAX);
 
         // The Settings mic preview can run for minutes, so it must not retain
         // samples — but it must still update the peak that drives the meter.
-        process_f32(&accum, &buffer, None, &[0.5, -0.25], true);
+        process_f32(&accum, &buffer, None, &retained, &[0.5, -0.25], true);
 
         assert!(buffer.lock().is_empty());
         assert_eq!(accum.lock().peak, 0.5);
+    }
+
+    #[test]
+    fn process_f32_caps_batch_buffer_and_sets_overflow() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(vec![0.1, 0.2]);
+        let retained = RetainedSamples::new(3);
+
+        process_f32(&accum, &buffer, None, &retained, &[0.3, 0.4], false);
+
+        assert_eq!(*buffer.lock(), vec![0.1, 0.2, 0.3]);
+        assert!(retained.exceeded());
+        assert_eq!(accum.lock().peak, 0.4);
+    }
+
+    #[test]
+    fn process_i16_caps_forwarded_chunk_to_retained_samples() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(vec![0.0]);
+        let retained = RetainedSamples::new(2);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let sink = ChunkSink {
+            tx,
+            overflowed,
+            sequence: AtomicU64::new(0),
+            sample_rate: 16_000,
+            channels: 1,
+        };
+
+        process_i16(
+            &accum,
+            &buffer,
+            Some(&sink),
+            &retained,
+            &[i16::MAX, i16::MIN],
+            false,
+        );
+
+        assert_eq!(*buffer.lock(), vec![0.0, 1.0]);
+        assert!(retained.exceeded());
+        let chunk = rx.try_recv().unwrap().unwrap();
+        assert_eq!(chunk.samples, vec![1.0]);
+    }
+
+    #[test]
+    fn process_u16_after_cap_tracks_peak_without_growing_buffer() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(vec![0.1]);
+        let retained = RetainedSamples::new(1);
+
+        process_u16(&accum, &buffer, None, &retained, &[u16::MAX], false);
+
+        assert_eq!(*buffer.lock(), vec![0.1]);
+        assert!(retained.exceeded());
+        assert!(accum.lock().peak > 0.9);
+    }
+
+    #[test]
+    fn chunk_sink_sets_overflow_when_stream_queue_is_full() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let sink = ChunkSink {
+            tx,
+            overflowed: overflowed.clone(),
+            sequence: AtomicU64::new(0),
+            sample_rate: 16_000,
+            channels: 1,
+        };
+
+        sink.forward(vec![0.1]);
+        sink.forward(vec![0.2]);
+
+        assert!(overflowed.load(Ordering::Relaxed));
+        let chunk = rx.try_recv().unwrap().unwrap();
+        assert_eq!(chunk.samples, vec![0.1]);
+        assert_eq!(chunk.sequence, 0);
+    }
+
+    #[test]
+    fn chunk_sink_finish_does_not_block_when_stream_queue_is_full() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let sink = ChunkSink {
+            tx,
+            overflowed: overflowed.clone(),
+            sequence: AtomicU64::new(0),
+            sample_rate: 16_000,
+            channels: 1,
+        };
+
+        sink.forward(vec![0.1]);
+        sink.finish();
+
+        assert!(overflowed.load(Ordering::Relaxed));
     }
 }
