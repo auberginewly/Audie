@@ -1,19 +1,30 @@
-// Windows implementation of trait Platform.
-// PROJECT_SPEC.md §3.4 — macOS first, Windows in P4. Everything `unimplemented!()`.
-// This file exists now to lock the cross-platform seam: managers can compile
-// against `Platform` without knowing which OS implementation will fill it later.
-// The panics are intentional P4 tripwires, not forgotten production behavior.
-
+use parking_lot::Mutex;
 use tauri::AppHandle;
 
 use super::{HotkeyCallback, HotkeySlot, Platform};
 use crate::error::AppResult;
 
-pub struct WindowsPlatform;
+mod clipboard;
+mod credential;
+mod hotkey;
+mod language;
+
+#[derive(Default)]
+pub struct WindowsPlatform {
+    primary_hotkey: Mutex<Option<hotkey::HotkeyHandle>>,
+    compose_hotkey: Mutex<Option<hotkey::HotkeyHandle>>,
+}
 
 impl WindowsPlatform {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    fn slot_handle(&self, slot: HotkeySlot) -> &Mutex<Option<hotkey::HotkeyHandle>> {
+        match slot {
+            HotkeySlot::Primary => &self.primary_hotkey,
+            HotkeySlot::Compose => &self.compose_hotkey,
+        }
     }
 }
 
@@ -21,42 +32,66 @@ impl Platform for WindowsPlatform {
     fn register_hotkey(
         &self,
         _app: &AppHandle,
-        _slot: HotkeySlot,
-        _combo: &str,
-        _callback: HotkeyCallback,
+        slot: HotkeySlot,
+        combo: &str,
+        callback: HotkeyCallback,
     ) -> AppResult<()> {
-        unimplemented!("Windows hotkey — P4")
+        let slot_handle = self.slot_handle(slot);
+        if slot_handle.lock().is_some() {
+            return Ok(());
+        }
+        let handle = hotkey::register(slot, combo, callback)?;
+        *slot_handle.lock() = Some(handle);
+        Ok(())
     }
 
-    fn unregister_hotkey(&self, _app: &AppHandle, _slot: HotkeySlot) {
-        unimplemented!("Windows unregister — P4")
+    fn unregister_hotkey(&self, _app: &AppHandle, slot: HotkeySlot) {
+        let _ = self.slot_handle(slot).lock().take();
     }
 
     fn unregister_all_hotkeys(&self, _app: &AppHandle) -> AppResult<()> {
-        unimplemented!("Windows unregister — P4")
+        let _ = self.primary_hotkey.lock().take();
+        let _ = self.compose_hotkey.lock().take();
+        Ok(())
     }
 
-    fn inject_text(&self, _app: &AppHandle, _text: &str) -> AppResult<()> {
-        unimplemented!("Windows inject — P4")
+    fn inject_text(&self, app: &AppHandle, text: &str) -> AppResult<()> {
+        clipboard::inject_text(app, text)
     }
 
     fn ensure_microphone_permission(&self) -> bool {
-        unimplemented!("Windows mic permission — P4")
+        true
     }
 
-    fn store_secret(&self, _key: &str, _value: &str) -> AppResult<()> {
-        unimplemented!("Windows credential manager — P4")
+    fn microphone_status(&self) -> bool {
+        true
     }
 
-    fn has_secret(&self, _key: &str) -> AppResult<bool> {
-        unimplemented!("Windows credential manager — P4")
+    fn accessibility_status(&self) -> bool {
+        true
     }
 
-    fn read_secret(&self, _key: &str) -> AppResult<String> {
-        unimplemented!("Windows credential manager — P4")
+    fn input_monitoring_status(&self) -> bool {
+        true
     }
 
-    fn delete_secret(&self, _key: &str) -> AppResult<()> {
-        unimplemented!("Windows credential manager — P4")
+    fn system_language(&self) -> Option<String> {
+        language::system_language_label()
+    }
+
+    fn store_secret(&self, key: &str, value: &str) -> AppResult<()> {
+        credential::store_secret(key, value)
+    }
+
+    fn has_secret(&self, key: &str) -> AppResult<bool> {
+        credential::has_secret(key)
+    }
+
+    fn read_secret(&self, key: &str) -> AppResult<String> {
+        credential::read_secret(key)
+    }
+
+    fn delete_secret(&self, key: &str) -> AppResult<()> {
+        credential::delete_secret(key)
     }
 }
