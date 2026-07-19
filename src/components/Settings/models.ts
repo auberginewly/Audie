@@ -36,15 +36,6 @@ export const MODELS: ModelMeta[] = [
     tags: ["云端"],
   },
   {
-    id: "groq",
-    name: "Groq",
-    type: "asr",
-    source: "cloud",
-    icon: "audio-lines",
-    model: "whisper-large-v3-turbo",
-    tags: ["云端"],
-  },
-  {
     id: "openai-asr",
     name: "OpenAI Transcribe",
     type: "asr",
