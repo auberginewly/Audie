@@ -5,9 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import type { Hotkey } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
-import { usePermissions } from "../../hooks/usePermissions";
-import { useConfiguredModels } from "../../hooks/useConfiguredModels";
-import { useRecordingStore } from "../../store/recording";
+import type { UsePermissions } from "../../hooks/usePermissions";
 import { Button, IconButton } from "../ui";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
 import { MODELS, asrProviderForModelId, llmPickPatch, type ModelMeta } from "../Settings/models";
@@ -19,26 +17,34 @@ import { StepNav } from "./setup-wizard/StepNav";
 import { TestStep } from "./setup-wizard/TestStep";
 import { NUMBERED, type StepId } from "./setup-wizard/types";
 import { WelcomeStep } from "./setup-wizard/WelcomeStep";
+import type { OnboardingProgress } from "./setup-wizard/progress";
 
 interface SetupWizardProps {
   open: boolean;
   onClose: () => void;
   onComplete?: () => void;
   data: UseSettings;
+  permissions: UsePermissions;
+  progress: OnboardingProgress;
+  configured: (modelId: string) => boolean;
+  onRefreshModels: () => void;
   welcome?: boolean;
 }
 
-export function SetupWizard({ open, onClose, onComplete, data, welcome = true }: SetupWizardProps) {
+export function SetupWizard({
+  open,
+  onClose,
+  onComplete,
+  data,
+  permissions,
+  progress,
+  configured,
+  onRefreshModels,
+  welcome = true,
+}: SetupWizardProps) {
   const { t } = useI18n();
   const [step, setStep] = useState(0);
-  const perms = usePermissions();
-  const configuredModels = useConfiguredModels();
-  const [pickedAsr, setPickedAsr] = useState<string | null>(null);
-  const [pickedLlm, setPickedLlm] = useState<string | null>(null);
   const [configModel, setConfigModel] = useState<ModelMeta | null>(null);
-  // 试一下 completion is persistent (a dictation has succeeded) via the recording
-  // store, so the checkmark survives reopening the wizard.
-  const everSucceeded = useRecordingStore((s) => s.everSucceeded);
 
   useEffect(() => {
     if (open) setStep(0);
@@ -50,20 +56,6 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   const cur = Math.min(step, last);
   const id = ids[cur];
 
-  const permDone =
-    perms.microphone.granted === true && perms.accessibility.granted === true && perms.inputMonitoring.granted === true;
-  // ASR step needs a picked model whose key is actually configured (real
-  // has_secret), so onboarding can't "complete" with an unusable transcriber.
-  const asrDone = !!pickedAsr && configuredModels.configured(pickedAsr);
-  // A step is "done" when its own requirement is actually met (not merely passed),
-  // so the sidebar checks each step the moment it's complete — current step included.
-  const doneMap: Record<string, boolean> = {
-    permissions: permDone,
-    hotkey: !!data.settings?.hotkey,
-    asr: asrDone,
-    llm: !!pickedLlm,
-    test: everSucceeded,
-  };
   const subMap: Record<string, string> = {
     permissions: t("setup.required"),
     hotkey: t("setup.required"),
@@ -73,7 +65,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   };
 
   const isLast = id === "test";
-  const blockNext = id === "asr" && !asrDone;
+  const blockNext = id === "asr" && !progress.steps.asr;
   const next = () => {
     if (!blockNext) setStep(Math.min(last, cur + 1));
   };
@@ -82,12 +74,12 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   };
 
   const pickAsr = (m: ModelMeta) => {
-    setPickedAsr(m.id);
     const provider = asrProviderForModelId(m.id);
-    if (provider) void data.update({ asr_provider: provider });
+    // Match the settings picker: a model id belongs to its previous ASR provider,
+    // so clear it when switching and let the selected provider use its default.
+    if (provider) void data.update({ asr_provider: provider, asr_model: "" });
   };
   const pickLlm = (m: ModelMeta) => {
-    setPickedLlm(m.id);
     if (data.settings) void data.update(llmPickPatch(m.id, data.settings));
   };
 
@@ -100,9 +92,9 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
   } else if (id === "permissions") {
     body = (
       <PermissionStep
-        microphone={perms.microphone}
-        accessibility={perms.accessibility}
-        inputMonitoring={perms.inputMonitoring}
+        microphone={permissions.microphone}
+        accessibility={permissions.accessibility}
+        inputMonitoring={permissions.inputMonitoring}
         hotkey={data.settings?.hotkey}
       />
     );
@@ -113,11 +105,11 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
       <ModelStep
         kind="asr"
         models={asrModels}
-        pickedModelId={pickedAsr}
-        configured={configuredModels.configured}
+        pickedModelId={progress.pickedAsr}
+        configured={configured}
         onPick={pickAsr}
         onConfigure={setConfigModel}
-        asrDone={asrDone}
+        asrDone={progress.steps.asr}
       />
     );
   } else if (id === "llm") {
@@ -125,8 +117,8 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
       <ModelStep
         kind="llm"
         models={llmModels}
-        pickedModelId={pickedLlm}
-        configured={configuredModels.configured}
+        pickedModelId={progress.pickedLlm}
+        configured={configured}
         onPick={pickLlm}
         onConfigure={setConfigModel}
       />
@@ -153,7 +145,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <StepNav current={id} ids={ids} doneMap={doneMap} subMap={subMap} onSelect={setStep} />
+          <StepNav current={id} ids={ids} doneMap={progress.steps} subMap={subMap} onSelect={setStep} />
 
           <div className="flex min-w-0 flex-1 flex-col bg-surface-app">
             <div key={id} className="min-h-0 flex-1 overflow-y-auto px-7 py-[26px] [overscroll-behavior:contain]">
@@ -167,7 +159,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
               ) : null}
               <div className="flex-1" />
               {isLast ? (
-                <Button variant="accent" onClick={onComplete ?? onClose}>
+                <Button variant="accent" disabled={!progress.requiredComplete} onClick={onComplete ?? onClose}>
                   {t("setup.startUsing")}
                 </Button>
               ) : (
@@ -184,7 +176,7 @@ export function SetupWizard({ open, onClose, onComplete, data, welcome = true }:
           data={data}
           onClose={() => {
             setConfigModel(null);
-            configuredModels.refresh(); // a just-saved key should flip the badge
+            onRefreshModels(); // a just-saved key should flip the shared progress
           }}
         />
       </div>

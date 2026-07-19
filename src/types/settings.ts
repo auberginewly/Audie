@@ -29,6 +29,7 @@ export const SettingsSchema = z.object({
   doubao_resource_id: z.string().min(1),
   input_device: z.string(),
   onboarding_completed: z.boolean(),
+  onboarding_test_completed: z.boolean(),
   // User's main language; the backend prepends it as a line to the enhance prompt.
   // "" = follow system locale (resolved backend-side).
   primary_language: z.string(),

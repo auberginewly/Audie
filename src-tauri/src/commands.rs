@@ -68,6 +68,9 @@ pub struct Settings {
     /// Whether first-run onboarding has been completed (P3.12). Default false so a
     /// fresh install auto-opens the SetupWizard; set true when the user finishes it.
     pub onboarding_completed: bool,
+    /// Whether a real dictation has succeeded at least once. This makes the
+    /// onboarding "Try it" verification survive restarting the app.
+    pub onboarding_test_completed: bool,
     /// User's main language; lib.rs prepends it as a line to the enhance prompt at
     /// send time. Empty string = follow the system locale (like `input_device`'s
     /// empty = automatic). Resolved at enhance time (lib.rs).
@@ -112,6 +115,7 @@ impl Default for Settings {
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
             input_device: String::new(),
             onboarding_completed: false,
+            onboarding_test_completed: false,
             primary_language: String::new(),
             history_retention: DEFAULT_HISTORY_RETENTION.to_string(),
             ui_language: DEFAULT_UI_LANGUAGE.to_string(),
@@ -143,6 +147,7 @@ pub struct SettingsPatch {
     pub doubao_resource_id: Option<String>,
     pub input_device: Option<String>,
     pub onboarding_completed: Option<bool>,
+    pub onboarding_test_completed: Option<bool>,
     pub primary_language: Option<String>,
     pub history_retention: Option<String>,
     pub ui_language: Option<String>,
@@ -536,6 +541,9 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
         onboarding_completed: patch
             .onboarding_completed
             .unwrap_or(current.onboarding_completed),
+        onboarding_test_completed: patch
+            .onboarding_test_completed
+            .unwrap_or(current.onboarding_test_completed),
         // Empty is meaningful (= follow system locale), so like input_device we keep
         // an empty patch value rather than filtering it back to current.
         primary_language: patch.primary_language.unwrap_or(current.primary_language),
@@ -1039,6 +1047,7 @@ mod tests {
                 doubao_resource_id: None,
                 input_device: None,
                 onboarding_completed: None,
+                onboarding_test_completed: None,
                 primary_language: None,
                 history_retention: None,
                 ui_language: None,
@@ -1068,6 +1077,7 @@ mod tests {
                 doubao_resource_id: None,
                 input_device: None,
                 onboarding_completed: None,
+                onboarding_test_completed: None,
                 primary_language: None,
                 history_retention: None,
                 ui_language: None,

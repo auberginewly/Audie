@@ -6,44 +6,32 @@ import { useSettings } from "./hooks/useSettings";
 import { usePermissions } from "./hooks/usePermissions";
 import { useConfiguredModels } from "./hooks/useConfiguredModels";
 import { useRecordingStore } from "./store/recording";
-import { modelIdForAsrProvider } from "./components/Settings/models";
-import type { Settings } from "./types/settings";
 import { AppShell, AppSidebar } from "./components/shell";
 import { Button } from "./components/ui";
 import { HomeScreen } from "./components/screens/HomeScreen";
 import { HistoryScreen } from "./components/screens/HistoryScreen";
 import { SetupWizard } from "./components/screens/SetupWizard";
+import { deriveOnboardingProgress, type OnboardingProgress } from "./components/screens/setup-wizard/progress";
 import { SettingsDialog } from "./components/Settings";
 import { I18nProvider, isLanguage, useI18n } from "./i18n";
 
-// Sidebar dock card nudging first-run setup — real progress + CTA into the wizard.
-// Rendered only while onboarding is incomplete, so the permission/secret polls run
-// only then (completed users pay nothing). x/n mirrors the wizard's per-step
-// checkmarks (one unit per step): 权限 / 快捷键 / 听写 / 润色 / 试一下.
-function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; onContinue: () => void }) {
+// Sidebar and wizard consume the same derived snapshot, so their checkmarks and
+// x/5 value cannot diverge when a saved provider or keychain secret changes.
+function SetupGuideCard({ progress, onContinue }: { progress: OnboardingProgress; onContinue: () => void }) {
   const { t } = useI18n();
-  const perms = usePermissions();
-  const { configured } = useConfiguredModels();
-  const everSucceeded = useRecordingStore((s) => s.everSucceeded);
-  const steps = [
-    perms.microphone.granted === true && perms.accessibility.granted === true && perms.inputMonitoring.granted === true,
-    !!settings?.hotkey,
-    !!settings && configured(modelIdForAsrProvider(settings.asr_provider)),
-    configured("deepseek"), // 润色: the openai_compatible LLM slot's key
-    everSucceeded, // 试一下: a dictation has succeeded this session
-  ];
-  const total = steps.length;
-  const done = steps.filter(Boolean).length;
   return (
     <div className="rounded-md bg-gray-100 p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-[13px] font-medium text-text-primary">{t("app.setup.progressTitle")}</span>
         <span className="font-mono text-[11px] text-text-tertiary">
-          {done}/{total}
+          {progress.done}/{progress.total}
         </span>
       </div>
       <div className="mb-2.5 h-1 overflow-hidden rounded-full bg-gray-300">
-        <div className="h-full rounded-full bg-accent-fill" style={{ width: `${(done / total) * 100}%` }} />
+        <div
+          className="h-full rounded-full bg-accent-fill"
+          style={{ width: `${(progress.done / progress.total) * 100}%` }}
+        />
       </div>
       <Button size="sm" variant="accent" block iconRight="chevron-right" onClick={onContinue}>
         {t("app.setup.continue")}
@@ -53,8 +41,11 @@ function SetupGuideCard({ settings, onContinue }: { settings: Settings | null; o
 }
 
 function App() {
-  useRecordingFlow();
   const data = useSettings();
+  const permissions = usePermissions();
+  const configuredModels = useConfiguredModels();
+  const recordingState = useRecordingStore((s) => s.state);
+  useRecordingFlow();
   const [nav, setNav] = useState("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
@@ -64,6 +55,15 @@ function App() {
   // user closes it without finishing (it auto-opens again next launch, like Voxt).
   const onboardingCompleted = data.settings?.onboarding_completed;
   const language = data.settings && isLanguage(data.settings.ui_language) ? data.settings.ui_language : "zh-Hans";
+  const onboardingProgress = deriveOnboardingProgress(
+    data.settings,
+    {
+      microphone: permissions.microphone.granted,
+      accessibility: permissions.accessibility.granted,
+      inputMonitoring: permissions.inputMonitoring.granted,
+    },
+    configuredModels.configured,
+  );
   const autoOpened = useRef(false);
   useEffect(() => {
     if (onboardingCompleted === false && !autoOpened.current) {
@@ -71,6 +71,14 @@ function App() {
       setSetupOpen(true);
     }
   }, [onboardingCompleted]);
+
+  // SUCCESS is emitted only after the real dictation path completes. Persist it
+  // through the existing Settings store so reopening/restarting keeps "Try it" done.
+  useEffect(() => {
+    if (recordingState === "SUCCESS" && data.settings && !data.settings.onboarding_test_completed) {
+      void data.update({ onboarding_test_completed: true });
+    }
+  }, [data, recordingState]);
 
   // "重新运行配置向导" (About page): mark onboarding incomplete and reopen the
   // wizard, closing Settings so it's visible — saves the user editing the store.
@@ -122,7 +130,7 @@ function App() {
               aboveDock={
                 onboardingCompleted === false ? (
                   <SetupGuideCard
-                    settings={data.settings}
+                    progress={onboardingProgress}
                     onContinue={() => {
                       setSetupOpen(true);
                     }}
@@ -154,6 +162,10 @@ function App() {
             setSetupOpen(false);
           }}
           data={data}
+          permissions={permissions}
+          progress={onboardingProgress}
+          configured={configuredModels.configured}
+          onRefreshModels={configuredModels.refresh}
         />
       </div>
     </I18nProvider>
