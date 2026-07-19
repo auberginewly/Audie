@@ -1,6 +1,7 @@
-/* Geist webfonts — Geist Sans (UI/prose) + Geist Mono (code, keycaps, data).
+/* Geist Mono webfont (code, keycaps, data). UI/prose uses the platform system
+ * stack instead of Geist Sans — see tokens/typography.css for why.
  * Must stay first: CSS @import rules precede all other statements. */
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
 /* Audie design tokens (Geist, dark-first). Order matters: scales → semantic
@@ -20,19 +21,19 @@
  * ------------------------------------------------------------------------- */
 @theme inline {
   /* fonts */
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-mono);
 
   /* radius — tight Geist family (overrides Tailwind defaults intentionally) */
-  --radius-sm: var(--radius-sm);
-  --radius-md: var(--radius-md);
-  --radius-lg: var(--radius-lg);
+  --radius-sm: var(--corner-sm);
+  --radius-md: var(--corner-md);
+  --radius-lg: var(--corner-lg);
 
   /* elevation */
-  --shadow-raised: var(--shadow-raised);
-  --shadow-popover: var(--shadow-popover);
-  --shadow-modal: var(--shadow-modal);
-  --shadow-capsule: var(--shadow-capsule);
+  --shadow-raised: var(--elevation-raised);
+  --shadow-popover: var(--elevation-popover);
+  --shadow-modal: var(--elevation-modal);
+  --shadow-capsule: var(--elevation-capsule);
 
   /* ---- semantic surfaces ---- */
   --color-surface-app: var(--surface-app);

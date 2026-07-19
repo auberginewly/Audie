@@ -99,7 +99,7 @@ export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDi
   return (
     <div
       onMouseDown={onClose}
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-6 backdrop-blur-[2px]"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 p-6 backdrop-blur-[6px]"
     >
       <div
         role="dialog"
@@ -107,7 +107,7 @@ export function SettingsDialog({ open, onClose, data, onRerunSetup }: SettingsDi
         onMouseDown={(e) => {
           e.stopPropagation();
         }}
-        className="relative flex h-[min(540px,100%)] w-[min(800px,100%)] flex-col overflow-hidden rounded-md bg-surface-app shadow-modal"
+        className="relative flex h-[min(540px,100%)] w-[min(800px,100%)] flex-col overflow-hidden rounded-md border border-gray-alpha-100 bg-surface-app shadow-modal"
       >
         <div className="absolute right-2.5 top-2.5 z-10">
           <IconButton name="x" label={t("settings.close")} onClick={onClose} />

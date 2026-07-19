@@ -1,14 +1,19 @@
 /* ============================================================================
- * Audie · Typography tokens (Geist). Each token is a {family, size, weight,
- * line-height, tracking} set, exposed as composable vars. Prefer the role
- * shorthands (--text-*) in components; reach for raw steps when needed.
+ * Audie · Typography tokens. Each token is a {family, size, weight, line-height,
+ * tracking} set, exposed as composable vars. Prefer the role shorthands
+ * (--text-*) in components; reach for raw steps when needed.
  *
- * Geist Sans → UI + prose · Geist Mono → code, data, keycaps, tabular figures.
+ * 系统字体栈 → UI + prose（见下）· Geist Mono → code, data, keycaps, tabular.
  * ========================================================================== */
 
 :root {
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+  /* System stack, not Geist Sans: Geist has no CJK glyphs, so Chinese fell back
+   * to PingFang while Latin rendered in Geist — two typefaces whose weights don't
+   * match (字重违和). The platform stack pairs Latin + CJK from one design
+   * (macOS SF Pro + PingFang SC, Windows Segoe UI + Microsoft YaHei). */
+  --font-family-sans:
+    system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-family-mono: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
 
   /* ---- Weights ---- */
   --weight-regular: 400;

@@ -31,7 +31,7 @@ body {
    * the overlay webview must stay transparent (the capsule floats over other
    * apps). The main window paints --surface-app on its own root instead. */
   color: var(--text-primary);
-  font-family: var(--font-sans);
+  font-family: var(--font-family-sans);
   font-size: var(--copy-14-size);
   line-height: var(--copy-14-line);
   font-weight: var(--weight-regular);
