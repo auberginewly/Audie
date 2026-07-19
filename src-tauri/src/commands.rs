@@ -694,6 +694,17 @@ pub fn get_usage_stats(app: AppHandle) -> Result<crate::managers::history::Usage
         .usage_stats()
 }
 
+/// Per-day 口述/AI 产出 for the Home 近 N 天 chart. Only days with rows are
+/// returned; the frontend zero-fills the rest of the window.
+#[tauri::command]
+pub fn get_daily_usage(
+    app: AppHandle,
+    days: u32,
+) -> Result<Vec<crate::managers::history::DailyUsage>, AppError> {
+    app.state::<Arc<crate::managers::history::HistoryManager>>()
+        .daily_usage(days)
+}
+
 #[tauri::command]
 pub fn list_asr_providers() -> Vec<ProviderMetadata> {
     available_asr_providers()

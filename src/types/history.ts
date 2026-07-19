@@ -36,5 +36,14 @@ export const UsageStatsSchema = z.object({
 });
 export type UsageStats = z.infer<typeof UsageStatsSchema>;
 
+// 近 N 天曲线图的一天（本地日历日，YYYY-MM-DD）。口径与 UsageStats 一致
+// （history.rs fetch_daily）；没有记录的天不出现在列表里，由组件补零。
+export const DailyUsageSchema = z.object({
+  day: z.string(),
+  spoken_words: z.number(),
+  ai_output_words: z.number(),
+});
+export type DailyUsage = z.infer<typeof DailyUsageSchema>;
+
 // Emitted by HistoryManager after any insert/delete/clear; screens re-fetch on it.
 export const EVENT_HISTORY_UPDATED = "history-updated";

@@ -202,6 +202,7 @@ pub fn run() {
             commands::delete_history_entry,
             commands::clear_history,
             commands::get_usage_stats,
+            commands::get_daily_usage,
             commands::start_mic_monitor,
             commands::stop_mic_monitor,
             commands::set_secret,

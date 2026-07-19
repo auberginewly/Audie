@@ -45,6 +45,20 @@ pub struct UsageStats {
     pub ai_output_words: i64,
 }
 
+/// One local-calendar-day bucket for the Home 近 N 天 chart. Same 口述/AI 产出
+/// split as UsageStats so the curve and the all-time cards agree (see fetch_daily).
+/// Only days that have rows are returned — the frontend zero-fills the gaps.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct DailyUsage {
+    /// Local date, `YYYY-MM-DD` (SQLite `date(..., 'localtime')`).
+    pub day: String,
+    pub spoken_words: i64,
+    pub ai_output_words: i64,
+}
+
+/// Upper bound for `daily_usage` range requests — a defensive clamp, not a product limit.
+const MAX_DAILY_DAYS: u32 = 90;
+
 pub struct HistoryManager {
     db_path: PathBuf,
 }
@@ -152,6 +166,14 @@ impl HistoryManager {
     pub fn usage_stats(&self) -> AppResult<UsageStats> {
         let conn = self.open()?;
         fetch_stats(&conn).map_err(map_sqlite)
+    }
+
+    /// Per-day 口述/AI 产出 for the Home chart, over the last `days` local days
+    /// (`days` = 0 means 全部/all time; otherwise clamped to MAX_DAILY_DAYS).
+    /// Days without rows are absent, not zero.
+    pub fn daily_usage(&self, days: u32) -> AppResult<Vec<DailyUsage>> {
+        let conn = self.open()?;
+        fetch_daily(&conn, days.min(MAX_DAILY_DAYS)).map_err(map_sqlite)
     }
 
     /// The stored transcript for an entry — drives the History 重试 (re-enhance).
@@ -302,6 +324,38 @@ fn fetch_stats(conn: &Connection) -> rusqlite::Result<UsageStats> {
     )
 }
 
+fn fetch_daily(conn: &Connection, days: u32) -> rusqlite::Result<Vec<DailyUsage>> {
+    // Same 口径 as fetch_stats (口述 = LENGTH(raw_text) of polish rows; AI 产出 =
+    // word_count of compose/rewrite rows that have enhanced text), bucketed by
+    // LOCAL calendar day — the generated `-(days - 1) days` modifier keeps the
+    // requested window on the user's wall clock without a date library.
+    // days = 0 means 全部 (all time): the empty `since` short-circuits the predicate.
+    let since = if days == 0 {
+        String::new()
+    } else {
+        format!("-{} days", days - 1)
+    };
+    let mut stmt = conn.prepare(
+        "SELECT
+           date(created_at, 'unixepoch', 'localtime') AS d,
+           COALESCE(SUM(CASE WHEN mode = 'polish' THEN LENGTH(raw_text) ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN mode IN ('compose', 'rewrite') AND enhanced_text IS NOT NULL THEN word_count ELSE 0 END), 0)
+         FROM history
+         WHERE kind = 'success'
+           AND (?1 = '' OR date(created_at, 'unixepoch', 'localtime') >= date('now', 'localtime', ?1))
+         GROUP BY d
+         ORDER BY d",
+    )?;
+    let rows = stmt.query_map([since], |row| {
+        Ok(DailyUsage {
+            day: row.get(0)?,
+            spoken_words: row.get(1)?,
+            ai_output_words: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
 fn delete_older_than(conn: &Connection, cutoff: i64) -> rusqlite::Result<usize> {
     conn.execute("DELETE FROM history WHERE created_at < ?1", [cutoff])
 }
@@ -442,6 +496,96 @@ mod tests {
         assert_eq!(stats.spoken_duration_ms, 0);
         assert_eq!(stats.spoken_count, 0);
         assert_eq!(stats.ai_output_words, 0);
+    }
+
+    #[test]
+    fn daily_buckets_by_local_day_and_split() {
+        let conn = setup();
+        // Day strings come from SQLite itself so the test is timezone-independent.
+        let today: String = conn
+            .query_row("SELECT date('now', 'localtime')", [], |r| r.get(0))
+            .expect("today");
+        let yesterday: String = conn
+            .query_row("SELECT date('now', 'localtime', '-1 day')", [], |r| {
+                r.get(0)
+            })
+            .expect("yesterday");
+        let now = now_unix();
+
+        // 今天：口述 4 字（LENGTH(raw)，不是 word_count 999）+ compose 产出 200；
+        // rewrite 无 enhanced 不计 AI 产出；error 行排除。
+        insert(&conn, now, "success", "polish", "口述听写", 999, 3000);
+        insert_enhanced(
+            &conn,
+            now,
+            "success",
+            "compose",
+            "写作指令",
+            "产出",
+            200,
+            1000,
+        );
+        insert(&conn, now, "success", "rewrite", "指令+引用", 50, 800);
+        insert(&conn, now, "error", "polish", "cancelled", 4, 0);
+        // 昨天：只有口述 2 字。
+        insert(&conn, now - 86_400, "success", "polish", "昨天", 2, 1000);
+        // 10 天前：超出 7 天窗口。
+        insert(
+            &conn,
+            now - 10 * 86_400,
+            "success",
+            "polish",
+            "很久以前",
+            4,
+            1000,
+        );
+
+        let rows = fetch_daily(&conn, 7).expect("daily");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            DailyUsage {
+                day: yesterday,
+                spoken_words: 2,
+                ai_output_words: 0,
+            }
+        );
+        assert_eq!(
+            rows[1],
+            DailyUsage {
+                day: today,
+                spoken_words: 4,
+                ai_output_words: 200,
+            }
+        );
+    }
+
+    #[test]
+    fn daily_empty_returns_no_rows() {
+        let conn = setup();
+        assert!(fetch_daily(&conn, 7).expect("daily").is_empty());
+    }
+
+    #[test]
+    fn daily_zero_days_returns_all_time() {
+        let conn = setup();
+        let now = now_unix();
+        insert(&conn, now, "success", "polish", "今天", 2, 1000);
+        insert(
+            &conn,
+            now - 10 * 86_400,
+            "success",
+            "polish",
+            "很久以前",
+            4,
+            1000,
+        );
+
+        // 7 天窗口看不到 10 天前；days = 0（全部）两天都在。
+        assert_eq!(fetch_daily(&conn, 7).expect("windowed").len(), 1);
+        let all = fetch_daily(&conn, 0).expect("all");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].spoken_words, 4); // 按天升序，老的在先
     }
 
     #[test]
