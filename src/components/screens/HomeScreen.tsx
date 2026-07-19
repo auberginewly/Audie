@@ -148,9 +148,10 @@ function UsageChart() {
           <Tooltip
             cursor={{ stroke: gridColor }}
             contentStyle={{
-              background: "var(--surface-overlay)",
-              border: "1px solid var(--border-default)",
+              background: "var(--chart-tooltip-bg)",
+              border: "1px solid var(--chart-tooltip-border)",
               borderRadius: 8,
+              boxShadow: "var(--chart-tooltip-shadow)",
               fontSize: 12,
             }}
             labelStyle={{ color: "var(--text-tertiary)", marginBottom: 4 }}
