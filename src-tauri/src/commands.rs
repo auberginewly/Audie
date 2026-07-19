@@ -949,6 +949,7 @@ mod tests {
         assert_eq!(settings.llm_provider, "openai_compatible");
         assert!(settings.enhance_enabled);
         assert!(!settings.onboarding_completed);
+        assert!(!settings.onboarding_test_completed);
         assert_eq!(settings.history_retention, DEFAULT_HISTORY_RETENTION);
         assert!(!settings.enhance_prompt.trim().is_empty());
         assert_eq!(
@@ -1089,7 +1090,42 @@ mod tests {
             .expect("deserialize partial");
         assert_eq!(parsed.hotkey, "F13");
         assert!(parsed.onboarding_completed);
+        assert!(!parsed.onboarding_test_completed);
         assert_eq!(parsed.asr_provider, DEFAULT_ASR_PROVIDER);
+    }
+
+    #[test]
+    fn patch_persists_onboarding_test_completion() {
+        let patched = settings_from_patch(
+            Settings::default(),
+            SettingsPatch {
+                hotkey: None,
+                asr_provider: None,
+                asr_model: None,
+                llm_provider: None,
+                enhance_enabled: None,
+                enhance_prompt: None,
+                openai_compatible_base_url: None,
+                openai_compatible_model: None,
+                llm_api_key_id: None,
+                doubao_endpoint: None,
+                doubao_resource_id: None,
+                input_device: None,
+                onboarding_completed: None,
+                onboarding_test_completed: Some(true),
+                primary_language: None,
+                history_retention: None,
+                ui_language: None,
+                show_in_dock: None,
+                compose_hotkey: None,
+                compose_prompt: None,
+                rewrite_prompt: None,
+                llm_models: None,
+            },
+        )
+        .expect("patch test completion");
+
+        assert!(patched.onboarding_test_completed);
     }
 
     #[test]
