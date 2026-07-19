@@ -75,6 +75,46 @@ function DateAxisTick({ x = 0, y = 0, payload, data, lastIndex, color }: DateAxi
   );
 }
 
+interface UsageTooltipPayload {
+  color?: string;
+  value?: number | string;
+}
+
+function UsageTooltip({
+  active,
+  label,
+  payload,
+  data,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: UsageTooltipPayload[];
+  data: ChartPoint[];
+}) {
+  if (!active || !payload?.length) return null;
+
+  return (
+    <div
+      className="rounded-lg border px-4 py-3 text-xs"
+      style={{
+        background: "var(--chart-tooltip-bg)",
+        borderColor: "var(--chart-tooltip-border)",
+        boxShadow: "var(--chart-tooltip-shadow)",
+      }}
+    >
+      <div className="mb-2 text-sm text-text-tertiary">{labelForTick(data, Number(label))}</div>
+      <div className="space-y-1.5">
+        {payload.map((item, index) => (
+          <div key={`${item.color ?? "series"}-${index}`} className="flex items-center gap-2 text-text-secondary">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: item.color }} />
+            <span className="font-mono text-[13px] leading-none">{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // 每日双线折线图：口述字数取亮紫，AI 产出取主题深紫；350ms 线性生长
 // 使用 Recharts 3.8.1 的稳定 dash 末帧。数据更新由 history-updated 驱动。
 const RANGE_LABEL_KEYS: Record<ChartRange, Parameters<I18nContextValue["t"]>[0]> = {
@@ -145,18 +185,7 @@ function UsageChart() {
             tick={<DateAxisTick data={data} lastIndex={days - 1} color={axisColor} />}
           />
           <YAxis hide domain={[0, "auto"]} />
-          <Tooltip
-            cursor={{ stroke: gridColor }}
-            contentStyle={{
-              background: "var(--chart-tooltip-bg)",
-              border: "1px solid var(--chart-tooltip-border)",
-              borderRadius: 8,
-              boxShadow: "var(--chart-tooltip-shadow)",
-              fontSize: 12,
-            }}
-            labelStyle={{ color: "var(--text-tertiary)", marginBottom: 4 }}
-            labelFormatter={(label) => labelForTick(data, Number(label))}
-          />
+          <Tooltip cursor={{ stroke: gridColor }} content={<UsageTooltip data={data} />} />
           <Line
             key={`spoken-${days}`}
             type="linear"
