@@ -1,5 +1,5 @@
 // TranscriptionManager — owns the active AsrProvider and turns buffered audio
-// into text. PROJECT_SPEC.md §6.1. P0 hard-wires Groq; P1 makes the provider
+// into text. PROJECT_SPEC.md §6.1. P1 makes the provider
 // selectable from settings.
 // This manager only chooses and calls an ASR adapter; it does not emit UI events,
 // mutate app state, or decide fallback behavior. Those decisions stay in lib.rs.
@@ -7,7 +7,6 @@
 use crate::asr::aliyun::client::AliyunProvider;
 use crate::asr::doubao::client::{DoubaoAuth, DoubaoStreamConfig, DoubaoStreamingProvider};
 use crate::asr::glm::GlmProvider;
-use crate::asr::groq::GroqProvider;
 use crate::asr::openai::OpenAiProvider;
 use crate::asr::stepfun::client::StepFunProvider;
 use crate::asr::{AsrProvider, AudioChunkStream, AudioData, TranscriptStream};
@@ -20,7 +19,6 @@ pub struct TranscriptionConfig {
     pub asr_provider: String,
     /// Selected ASR model id; empty = adapter built-in default. Doubao ignores it.
     pub asr_model: String,
-    pub groq_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
@@ -72,13 +70,6 @@ fn required_key(value: &Option<String>, message: &str) -> AppResult<String> {
 
 fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider>> {
     match config.asr_provider.as_str() {
-        "groq" => Ok(Box::new(GroqProvider::new(
-            required_key(
-                &config.groq_api_key,
-                "Groq API key 未配置，请先到设置页填写",
-            )?,
-            config.asr_model.clone(),
-        ))),
         "openai" => Ok(Box::new(OpenAiProvider::new(
             required_key(
                 &config.openai_api_key,
@@ -138,7 +129,6 @@ mod tests {
         let config = TranscriptionConfig {
             asr_provider: "openai".into(),
             asr_model: String::new(),
-            groq_api_key: Some("groq-key".into()),
             openai_api_key: None,
             doubao_endpoint: None,
             doubao_resource_id: None,
@@ -159,80 +149,6 @@ mod tests {
     }
 
     #[test]
-    fn groq_requires_keychain_secret() {
-        let config = TranscriptionConfig {
-            asr_provider: "groq".into(),
-            asr_model: String::new(),
-            groq_api_key: None,
-            openai_api_key: Some("openai-key".into()),
-            doubao_endpoint: None,
-            doubao_resource_id: None,
-            doubao_app_id: None,
-            doubao_api_key_or_access_token: None,
-            glm_api_key: None,
-            aliyun_api_key: None,
-            stepfun_api_key: None,
-        };
-
-        let err = match build_provider(&config) {
-            Ok(_) => panic!("expected Groq without key to fail"),
-            Err(err) => err,
-        };
-
-        assert!(matches!(err, AppError::Provider(_)));
-        assert_eq!(err.message(), "Groq API key 未配置，请先到设置页填写");
-    }
-
-    #[test]
-    fn groq_with_selected_model_builds_provider() {
-        // A non-empty asr_model must not break construction (model flows into the
-        // adapter); with a key present, build_provider succeeds.
-        let config = TranscriptionConfig {
-            asr_provider: "groq".into(),
-            asr_model: "whisper-large-v3".into(),
-            groq_api_key: Some("groq-key".into()),
-            openai_api_key: None,
-            doubao_endpoint: None,
-            doubao_resource_id: None,
-            doubao_app_id: None,
-            doubao_api_key_or_access_token: None,
-            glm_api_key: None,
-            aliyun_api_key: None,
-            stepfun_api_key: None,
-        };
-
-        assert!(build_provider(&config).is_ok());
-    }
-
-    #[test]
-    fn manager_batch_transcribe_still_uses_existing_provider_errors() {
-        let manager = TranscriptionManager::new();
-        let audio = AudioData {
-            samples: vec![0.0],
-            sample_rate: 16_000,
-            channels: 1,
-        };
-        let config = TranscriptionConfig {
-            asr_provider: "groq".into(),
-            asr_model: String::new(),
-            groq_api_key: None,
-            openai_api_key: None,
-            doubao_endpoint: None,
-            doubao_resource_id: None,
-            doubao_app_id: None,
-            doubao_api_key_or_access_token: None,
-            glm_api_key: None,
-            aliyun_api_key: None,
-            stepfun_api_key: None,
-        };
-
-        let err = manager.transcribe(&audio, &config).unwrap_err();
-
-        assert!(matches!(err, AppError::Provider(_)));
-        assert_eq!(err.message(), "Groq API key 未配置，请先到设置页填写");
-    }
-
-    #[test]
     fn manager_stream_transcribe_exposes_p2_contract_without_provider_impl() {
         let manager = TranscriptionManager::new();
         let (chunks_tx, chunks_rx) = std::sync::mpsc::channel();
@@ -247,10 +163,9 @@ mod tests {
             .unwrap();
         drop(chunks_tx);
         let config = TranscriptionConfig {
-            asr_provider: "groq".into(),
+            asr_provider: "openai".into(),
             asr_model: String::new(),
-            groq_api_key: Some("groq-key".into()),
-            openai_api_key: None,
+            openai_api_key: Some("openai-key".into()),
             doubao_endpoint: None,
             doubao_resource_id: None,
             doubao_app_id: None,
@@ -274,7 +189,6 @@ mod tests {
         let config = TranscriptionConfig {
             asr_provider: "doubao_stream".into(),
             asr_model: String::new(),
-            groq_api_key: None,
             openai_api_key: None,
             doubao_endpoint: Some("wss://example.test".into()),
             doubao_resource_id: Some("resource".into()),

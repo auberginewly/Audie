@@ -1,6 +1,6 @@
 // DashScope Fun-ASR realtime WebSocket client — auth + session driver.
 //
-// Batch shape (like groq/openai): `transcribe(&AudioData) -> String` runs one full
+// Batch shape (like OpenAI): `transcribe(&AudioData) -> String` runs one full
 // WS round-trip on a private current-thread runtime (we're already off the main
 // async loop, on the transcription worker thread). Flow:
 //   connect (Bearer header) → run-task (JSON text) → wait task-started

@@ -92,8 +92,6 @@ export const MODELS: ModelMeta[] = [
 // apiKeyIsOptional).
 export function requiredSecretsForModel(id: string): SecretKeyId[] {
   switch (id) {
-    case "groq":
-      return ["groq_api_key"];
     case "openai-asr":
       return ["openai_api_key"];
     case "glm-asr":
@@ -161,7 +159,6 @@ export function isKeyOptionalModel(id: string): boolean {
 // Picking doubao selects the streaming provider explicitly; the backend only
 // activates streaming when asr_provider == "doubao_stream" AND a token is stored.
 export function asrProviderForModelId(id: string): AsrProviderId | null {
-  if (id === "groq") return "groq";
   if (id === "openai-asr") return "openai";
   if (id === "doubao") return "doubao_stream";
   if (id === "glm-asr") return "glm";
@@ -172,7 +169,6 @@ export function asrProviderForModelId(id: string): AsrProviderId | null {
 
 // Backend ASR provider → which catalog card should read as active on load.
 export function modelIdForAsrProvider(provider: AsrProviderId): string {
-  if (provider === "groq") return "groq";
   if (provider === "openai") return "openai-asr";
   if (provider === "glm") return "glm-asr";
   if (provider === "aliyun_fun") return "aliyun-asr";
@@ -184,12 +180,6 @@ export function modelIdForAsrProvider(provider: AsrProviderId): string {
 // contract). Empty = no model choice for that card (doubao uses resource_id, not
 // asr_model). The first entry is the default.
 export function asrModelOptionsForModelId(id: string): ModelOption[] {
-  if (id === "groq") {
-    return [
-      { id: "whisper-large-v3-turbo", title: "whisper-large-v3-turbo" },
-      { id: "whisper-large-v3", title: "whisper-large-v3" },
-    ];
-  }
   if (id === "openai-asr") {
     return [
       { id: "whisper-1", title: "whisper-1" },

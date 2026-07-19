@@ -19,7 +19,7 @@ use crate::platform::{HotkeySlot, Platform};
 const LEGACY_SETTINGS_JSON: &str = "settings.json";
 
 pub const DEFAULT_HOTKEY: &str = "Fn";
-pub const DEFAULT_ASR_PROVIDER: &str = "groq";
+pub const DEFAULT_ASR_PROVIDER: &str = "doubao_stream";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gpt-4o-mini";
@@ -40,8 +40,7 @@ const UI_LANGUAGE_IDS: &[&str] = &["zh-Hans", "zh-Hant", "en"];
 pub struct Settings {
     pub hotkey: String,
     pub asr_provider: String,
-    /// ASR model id within the chosen provider (e.g. groq whisper-large-v3 vs
-    /// -turbo). Empty = use each adapter's built-in default const, so old TOML
+    /// ASR model id within the chosen provider. Empty = use each adapter's built-in default const, so old TOML
     /// files and untouched installs keep working. Doubao ignores it (豆包 uses
     /// resource_id, not model — left blank for it, see normalize note).
     pub asr_model: String,
@@ -334,15 +333,6 @@ fn provider_metadata(
 
 pub fn available_asr_providers() -> Vec<ProviderMetadata> {
     vec![
-        provider_metadata(
-            "groq",
-            "Groq",
-            "asr",
-            "Remote ASR",
-            Some("whisper-large-v3-turbo"),
-            true,
-            &["Remote", "Fast", "Whisper"],
-        ),
         provider_metadata(
             "openai",
             "OpenAI",
@@ -951,7 +941,7 @@ mod tests {
         let settings = Settings::default();
 
         assert_eq!(settings.hotkey, DEFAULT_HOTKEY);
-        assert_eq!(settings.asr_provider, "groq");
+        assert_eq!(settings.asr_provider, DEFAULT_ASR_PROVIDER);
         // Empty = each adapter uses its built-in default model (no behavior change).
         assert_eq!(settings.asr_model, "");
         assert_eq!(settings.llm_provider, "openai_compatible");
@@ -1229,7 +1219,7 @@ mod tests {
             asr.iter()
                 .map(|provider| provider.id.as_str())
                 .collect::<Vec<_>>(),
-            ["groq", "openai", "glm", "aliyun_fun", "stepfun"]
+            ["openai", "glm", "aliyun_fun", "stepfun"]
         );
         assert_eq!(
             llm.iter()
@@ -1237,17 +1227,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["openai_compatible",]
         );
-
-        let groq = asr.iter().find(|provider| provider.id == "groq").unwrap();
-        assert_eq!(groq.title, "Groq");
-        assert_eq!(groq.engine, "Remote ASR");
-        assert_eq!(
-            groq.default_model.as_deref(),
-            Some("whisper-large-v3-turbo")
-        );
-        assert!(groq.requires_key);
-        assert!(groq.tags.contains(&"Remote".to_string()));
-        assert!(groq.tags.contains(&"Fast".to_string()));
 
         let openai_compatible = &llm[0];
         assert_eq!(openai_compatible.title, "OpenAI Compatible");
@@ -1258,12 +1237,11 @@ mod tests {
 
     #[test]
     fn secret_key_ids_are_strict_identifiers() {
-        assert!(validate_secret_key_id("groq_api_key").is_ok());
         assert!(validate_secret_key_id("openai_compatible_api_key").is_ok());
         assert!(validate_secret_key_id("").is_err());
-        assert!(validate_secret_key_id("GroqApiKey").is_err());
-        assert!(validate_secret_key_id("../groq_api_key").is_err());
-        assert!(validate_secret_key_id("groq-api-key").is_err());
+        assert!(validate_secret_key_id("OpenAiKey").is_err());
+        assert!(validate_secret_key_id("../openai_api_key").is_err());
+        assert!(validate_secret_key_id("openai-api-key").is_err());
     }
 
     #[test]
@@ -1314,7 +1292,7 @@ mod tests {
             }
         }
 
-        assert!(!platform_has_secret(&MissingSecretPlatform, "groq_api_key").unwrap());
+        assert!(!platform_has_secret(&MissingSecretPlatform, "openai_api_key").unwrap());
     }
 
     #[test]
@@ -1365,7 +1343,7 @@ mod tests {
             }
         }
 
-        assert!(platform_has_secret(&PresentSecretPlatform, "groq_api_key").unwrap());
+        assert!(platform_has_secret(&PresentSecretPlatform, "openai_api_key").unwrap());
     }
 
     #[test]
@@ -1386,7 +1364,7 @@ mod tests {
     #[test]
     fn explicit_reveal_skips_data_read_when_secret_is_missing() {
         let secret = secret_for_explicit_reveal(
-            "groq_api_key",
+            "openai_api_key",
             |_| Ok(false),
             |_| panic!("missing secret must not read Keychain data"),
         )

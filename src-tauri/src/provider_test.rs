@@ -4,13 +4,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::{
-    available_asr_providers, available_llm_providers, validate_secret_key_id, DEFAULT_ASR_PROVIDER,
-    DEFAULT_LLM_PROVIDER,
+    available_asr_providers, available_llm_providers, validate_secret_key_id, DEFAULT_LLM_PROVIDER,
 };
 use crate::error::{AppError, AppResult};
 use crate::platform::Platform;
 
-const GROQ_MODELS_ENDPOINT: &str = "https://api.groq.com/openai/v1/models";
 const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
 const OPENAI_COMPATIBLE_MODELS_PATH: &str = "/models";
 const TEST_TIMEOUT_SECS: u64 = 8;
@@ -278,7 +276,6 @@ fn provider_test_endpoint(
     base_url: Option<String>,
 ) -> AppResult<String> {
     match (kind, provider_id) {
-        (ProviderKind::Asr, DEFAULT_ASR_PROVIDER) => Ok(GROQ_MODELS_ENDPOINT.into()),
         (ProviderKind::Asr, "openai") => Ok(OPENAI_MODELS_ENDPOINT.into()),
         (ProviderKind::Llm, DEFAULT_LLM_PROVIDER) => {
             let base = base_url

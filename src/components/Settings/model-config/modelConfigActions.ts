@@ -133,16 +133,6 @@ export async function runProviderTest({
     let raw: unknown;
     if (model.id === "doubao") {
       raw = await invoke("test_doubao_connection");
-    } else if (model.id === "groq") {
-      raw = await invoke("test_provider", {
-        request: {
-          kind: "asr",
-          provider_id: "groq",
-          key_id: "groq_api_key",
-          api_key: readDraftKey("groq_api_key"),
-          base_url: null,
-        },
-      });
     } else if (model.id === "openai-asr") {
       raw = await invoke("test_provider", {
         request: {

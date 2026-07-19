@@ -8,7 +8,7 @@ export const SettingsSchema = z.object({
   // Trigger key: "Fn", a function key ("F13"), or a combo ("Ctrl+Shift+Space").
   // Backend parse_trigger is the real gate (SPEC §5.8 P3.9), so keep it permissive.
   hotkey: z.string().min(1),
-  asr_provider: z.enum(["groq", "openai", "doubao_stream", "glm", "aliyun_fun", "stepfun"]),
+  asr_provider: z.enum(["openai", "doubao_stream", "glm", "aliyun_fun", "stepfun"]),
   // Selected ASR model id (front/back share the exact string). "" = use each
   // adapter's built-in default. default("") tolerates the field being absent
   // while the backend struct ships in parallel.
@@ -102,7 +102,6 @@ export type ProviderTestResult = z.infer<typeof ProviderTestResultSchema>;
 // `doubao_access_token` id for either new-console API Key or old-console Access
 // Token, covering both without migrating saved secrets.
 export const SecretKeyIdSchema = z.enum([
-  "groq_api_key",
   "openai_api_key",
   "openai_compatible_api_key",
   // Per-provider LLM keys (4b): each cloud LLM card stores its own key. OpenAI LLM
@@ -123,7 +122,7 @@ export type SecretKeyId = z.infer<typeof SecretKeyIdSchema>;
 
 // Only these providers have a reachable `test_provider` probe (P1.3). Doubao
 // streaming connectivity is exercised by a dev command in P2.5, not here.
-export const TestProviderKeyIdSchema = z.enum(["groq_api_key", "openai_api_key", "openai_compatible_api_key"]);
+export const TestProviderKeyIdSchema = z.enum(["openai_api_key", "openai_compatible_api_key"]);
 export type TestProviderKeyId = z.infer<typeof TestProviderKeyIdSchema>;
 
 export const ProviderTestRequestSchema = z.object({

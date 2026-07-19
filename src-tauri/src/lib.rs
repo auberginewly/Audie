@@ -1096,11 +1096,9 @@ fn transcription_config_from_settings(
     asr_model: String,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> TranscriptionConfig {
-    let (groq_api_key, openai_api_key) = match asr_provider.as_str() {
-        "groq" => (read_secret("groq_api_key"), None),
-        "openai" => (None, read_secret("openai_api_key")),
-        _ => (None, None),
-    };
+    let openai_api_key = (asr_provider == "openai")
+        .then(|| read_secret("openai_api_key"))
+        .flatten();
     // Each new cloud ASR reads only its own keychain key (and only when selected),
     // so picking another provider never touches an unrelated secret.
     let glm_api_key = (asr_provider == "glm")
@@ -1116,7 +1114,6 @@ fn transcription_config_from_settings(
     TranscriptionConfig {
         asr_provider,
         asr_model,
-        groq_api_key,
         openai_api_key,
         doubao_endpoint: None,
         doubao_resource_id: None,
@@ -1147,7 +1144,7 @@ fn doubao_streaming_config_from_settings(
 ) -> Option<TranscriptionConfig> {
     // Doubao streaming is opt-in: it only kicks in when the user explicitly picks
     // doubao in the model selector (asr_provider == "doubao_stream"). A saved token
-    // alone must NOT hijack every recording — picking Groq/Whisper has to win.
+    // alone must NOT hijack every recording — the explicit provider choice wins.
     if asr_provider != "doubao_stream" {
         return None;
     }
@@ -1159,7 +1156,6 @@ fn doubao_streaming_config_from_settings(
         // Doubao uses resource_id, not model; asr_model stays blank for it (left
         // for a future provider-specific variant mapping if豆包 ever needs one).
         asr_model: String::new(),
-        groq_api_key: None,
         openai_api_key: None,
         doubao_endpoint: Some(endpoint),
         doubao_resource_id: Some(resource_id),
@@ -1618,20 +1614,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn groq_transcription_config_reads_only_groq_key() {
-        let mut requested = Vec::new();
-
-        let config = transcription_config_from_settings("groq".into(), String::new(), |key_id| {
-            requested.push(key_id.to_string());
-            Some(format!("{key_id}-value"))
-        });
-
-        assert_eq!(requested, vec!["groq_api_key"]);
-        assert_eq!(config.groq_api_key.as_deref(), Some("groq_api_key-value"));
-        assert_eq!(config.openai_api_key, None);
-    }
-
-    #[test]
     fn openai_transcription_config_reads_only_openai_key() {
         let mut requested = Vec::new();
 
@@ -1641,7 +1623,6 @@ mod tests {
         });
 
         assert_eq!(requested, vec!["openai_api_key"]);
-        assert_eq!(config.groq_api_key, None);
         assert_eq!(
             config.openai_api_key.as_deref(),
             Some("openai_api_key-value")
@@ -1727,7 +1708,7 @@ mod tests {
         // A saved token must not activate streaming when the user picked another
         // provider — and we must not even touch the keychain in that case.
         let config = doubao_streaming_config_from_settings(
-            "groq",
+            "openai",
             "wss://example.test".into(),
             "resource".into(),
             |key_id| {

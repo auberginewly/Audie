@@ -2,12 +2,11 @@
 //
 // One trait, one adapter file per engine. Adding an engine = adding an adapter,
 // without touching anything else. P0 ships a single batch (non-streaming)
-// provider — Groq. P2 will extend this with a streaming variant.
+// provider — OpenAI. P2 extends this with a streaming variant.
 
 pub mod aliyun;
 pub mod doubao;
 pub mod glm;
-pub mod groq;
 pub mod openai;
 pub mod stepfun;
 
@@ -17,7 +16,7 @@ use crate::error::{AppError, AppResult};
 
 /// One captured utterance, as interleaved f32 samples in [-1.0, 1.0].
 /// Providers are responsible for encoding this into whatever wire format their
-/// API expects (Groq wants a WAV/MP3 file part).
+/// API expects.
 // Clone remains for small tests/helpers; the hot path keeps `LastTake` behind
 // `Arc<AudioData>` so retry/undo never copy the sample buffer.
 #[derive(Clone)]
