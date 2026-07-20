@@ -31,3 +31,6 @@ AGENTS.md
 .pnpm-store/
 .playwright-cli/
 download/
+docs/
+
+PROJECT_SPEC.md
