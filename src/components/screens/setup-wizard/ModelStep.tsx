@@ -23,7 +23,7 @@ function WizardModelRow({
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-text-primary">{m.name}</span>
           <Badge tone="neutral">{m.source === "local" ? t("setup.model.local") : t("setup.model.cloud")}</Badge>
-          {inUse ? (
+          {inUse && configured ? (
             <Badge tone="accent">{t("setup.model.inUse")}</Badge>
           ) : configured ? (
             <Badge tone="success">{t("setup.model.configured")}</Badge>
