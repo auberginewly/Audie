@@ -19,6 +19,9 @@ function PermItem({
 }) {
   const { t } = useI18n();
   const granted = state.granted === true;
+  const requesting = state.phase === "requesting";
+  const needsSettings = state.phase === "needsSettings";
+  const needsRestart = state.phase === "needsRestart";
   return (
     <div className="flex items-center gap-3 rounded-md bg-surface-card p-3.5">
       <span className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-sm bg-gray-200 text-text-secondary">
@@ -31,16 +34,27 @@ function PermItem({
             reflects a fresh grant after relaunch (P3.9). */}
         {!granted && hint ? <div className="mt-1 text-xs text-warning-text">{hint}</div> : null}
       </div>
-      {granted ? (
+      {needsRestart ? (
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge tone="success">{t("setup.permission.enabled")}</Badge>
+          <Button size="sm" variant="secondary" onClick={state.restart}>
+            {t("setup.permission.restart")}
+          </Button>
+        </div>
+      ) : granted ? (
         <Badge tone="success">{t("setup.permission.granted")}</Badge>
       ) : (
         <div className="flex shrink-0 items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={state.request}>
-            {t("setup.permission.request")}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={state.openSettings}>
-            {t("setup.permission.openSettings")}
-          </Button>
+          {needsSettings ? null : (
+            <Button size="sm" variant="secondary" disabled={requesting} onClick={state.request}>
+              {requesting ? t("setup.permission.requesting") : t("setup.permission.request")}
+            </Button>
+          )}
+          {requesting ? null : (
+            <Button size="sm" variant={needsSettings ? "secondary" : "ghost"} onClick={state.openSettings}>
+              {t("setup.permission.openSettings")}
+            </Button>
+          )}
         </div>
       )}
     </div>

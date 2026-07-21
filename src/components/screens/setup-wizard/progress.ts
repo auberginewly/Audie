@@ -1,5 +1,6 @@
 import { isKeyOptionalModel, llmModelIdForBaseUrl, modelIdForAsrProvider } from "../../Settings/models";
 import type { Settings } from "../../../types/settings";
+import { permissionsAreReady } from "../../../hooks/permissionState";
 
 export type OnboardingStepId = "permissions" | "hotkey" | "asr" | "llm" | "test";
 
@@ -29,8 +30,7 @@ export function deriveOnboardingProgress(
 ): OnboardingProgress {
   const pickedAsr = settings ? modelIdForAsrProvider(settings.asr_provider) : null;
   const pickedLlm = settings ? llmModelIdForBaseUrl(settings.openai_compatible_base_url) || null : null;
-  const permissionsDone =
-    permissions.microphone === true && permissions.accessibility === true && permissions.inputMonitoring === true;
+  const permissionsDone = permissionsAreReady(permissions);
   const hotkeyDone = Boolean(settings?.hotkey.trim());
   const asrDone = Boolean(pickedAsr && configured(pickedAsr));
   const llmDone = Boolean(
