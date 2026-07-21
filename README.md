@@ -4,7 +4,9 @@
 
 # Audie
 
-**按下快捷键说话，干净的文字立即出现在光标处。**
+English | [简体中文](README.zh-CN.md)
+
+**Speak with a shortcut. Clean text appears at your cursor.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-a78bfa.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-8e4ec6.svg)
@@ -13,6 +15,6 @@
 
 </div>
 
-![Audie 桌面端](assets/audie-showcase.webp)
+![Audie desktop app](assets/audie-showcase.webp)
 
-Audie 是一款跨平台语音输入工具：录音时实时上传音频，松开快捷键即可获得最终文本，并可通过 AI 自动整理语气词、错字与标点。
+Audie is a voice input app for macOS, with Windows support planned. It streams audio while you speak, delivers the final text when you stop, and can optionally use AI to clean up filler words, typos, and punctuation.
