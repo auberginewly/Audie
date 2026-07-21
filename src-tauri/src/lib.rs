@@ -1387,11 +1387,9 @@ fn is_digital_silence(audio: &AudioData) -> bool {
 
 fn duration_ms(audio: &AudioData) -> u64 {
     let denom = audio.sample_rate as u64 * audio.channels.max(1) as u64;
-    if denom == 0 {
-        0
-    } else {
-        audio.samples.len() as u64 * 1000 / denom
-    }
+    (audio.samples.len() as u64 * 1000)
+        .checked_div(denom)
+        .unwrap_or_default()
 }
 
 /// Swizzle the overlay `NSWindow` into a non-activating `NSPanel`. Clicking the

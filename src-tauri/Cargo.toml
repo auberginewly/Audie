@@ -1,6 +1,6 @@
 [package]
 name = "audie"
-version = "0.0.0"
+version = "0.1.0"
 description = "Cross-platform voice input tool — typeless open-source alternative"
 authors = ["aubergine"]
 edition = "2021"

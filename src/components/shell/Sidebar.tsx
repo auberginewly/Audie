@@ -34,7 +34,7 @@ export function SidebarItem({ icon, label, active = false, trailing, className =
 }
 
 /** Sidebar header — Audie waveform mark + wordmark + version badge. */
-export function SidebarHeader({ version = "0.0.0" }: { version?: string }) {
+export function SidebarHeader({ version = "—" }: { version?: string }) {
   return (
     <div className="flex items-center gap-[9px]">
       <span className="inline-flex h-[26px] w-[26px] items-center justify-center gap-0.5 rounded-[7px] bg-gray-200">
@@ -83,7 +83,7 @@ export function AppSidebar({
   active = "home",
   onNavigate,
   items = DEFAULT_NAV,
-  version = "0.0.0",
+  version = "—",
   githubUrl = "https://github.com/auberginewly/Audie",
   onSettings,
   settingsActive = false,

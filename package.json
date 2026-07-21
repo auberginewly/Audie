@@ -1,7 +1,7 @@
 {
   "name": "audie",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "test:home-chart": "node --test tests/home-chart.test.mjs",
     "test:settings-schema": "node --experimental-strip-types --test tests/settings-schema.test.mjs",
     "test:onboarding-permissions": "node --experimental-strip-types --test tests/onboarding-permissions.test.mjs"

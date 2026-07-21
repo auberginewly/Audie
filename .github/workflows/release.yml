@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    branches: [release]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish
+    if: github.event.before != '0000000000000000000000000000000000000000'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: aarch64-apple-darwin
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Validate the release version
+        id: version
+        run: |
+          VERSION="$(node scripts/check-release-version.mjs --require-unreleased)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm build
+      - run: cargo fmt --check
+        working-directory: src-tauri
+      - run: cargo test
+        working-directory: src-tauri
+      - run: cargo clippy -- -D warnings
+        working-directory: src-tauri
+
+      - name: Build the Apple Silicon DMG
+        run: >-
+          pnpm tauri build
+          --target aarch64-apple-darwin
+          --bundles dmg
+          --config '{"bundle":{"macOS":{"signingIdentity":"-"}}}'
+
+      - name: Verify the packaged application
+        id: artifact
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DMG_PATH="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$DMG_PATH" && test -f "$DMG_PATH"
+
+          MOUNT_PATH="$(mktemp -d)"
+          hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$MOUNT_PATH"
+          trap 'hdiutil detach "$MOUNT_PATH"' EXIT
+
+          APP_PATH="$MOUNT_PATH/Audie.app"
+          test -d "$APP_PATH"
+          BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+          test "$BUNDLE_VERSION" = "$EXPECTED_VERSION"
+          file "$APP_PATH/Contents/MacOS/audie" | grep -q 'arm64'
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DMG_PATH: ${{ steps.artifact.outputs.dmg_path }}
+        run: |
+          gh release create "v$VERSION" "$DMG_PATH" \
+            --target "$GITHUB_SHA" \
+            --title "Audie $VERSION Preview" \
+            --notes-file RELEASE_NOTES.md \
+            --prerelease
