@@ -70,9 +70,9 @@ core-graphics = "0.24"
 # CoreAudio HAL device-transport query: prefer wired/built-in input over
 # Bluetooth so AirPods don't blackhole capture into HFP silence (P0.7).
 core-foundation = "0.10"
-# Microphone TCC status (AVCaptureDevice authorizationStatus under the hood),
-# same crate Handy uses. We call its `check_microphone_permission` fn directly.
 tauri-plugin-macos-permissions = "2.3.0"
+block2 = "0.6"
+objc2-foundation = "0.3"
 # Hide the dead green zoom traffic light on the fixed-size main window via a
 # direct NSWindow msg_send. objc2 0.6 is already in the tree (Tauri depends on it).
 objc2 = "0.6"

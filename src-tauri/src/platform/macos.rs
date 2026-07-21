@@ -128,11 +128,11 @@ impl Platform for MacosPlatform {
     }
 
     fn accessibility_status(&self) -> bool {
-        clipboard::preflight_post_event_access()
+        permissions::accessibility_status()
     }
 
     fn request_accessibility(&self) {
-        clipboard::request_post_event_access();
+        permissions::request_accessibility();
     }
 
     fn start_trigger_capture(&self, app: &AppHandle) -> AppResult<()> {

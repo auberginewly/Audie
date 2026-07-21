@@ -1,35 +1,35 @@
-use tauri_plugin_macos_permissions::{check_microphone_permission, request_microphone_permission};
+use block2::RcBlock;
+use objc2::{class, msg_send, runtime::Bool};
+use objc2_foundation::NSString;
+use tauri_plugin_macos_permissions::{
+    check_accessibility_permission, check_microphone_permission, request_accessibility_permission,
+};
 
-// IOKit HID access for Input Monitoring (§5.8 option B: actively prompt).
-#[link(name = "IOKit", kind = "framework")]
+#[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
-    fn IOHIDCheckAccess(request: u32) -> u32;
-    fn IOHIDRequestAccess(request: u32) -> bool;
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
 }
 
-// <IOKit/hid/IOHIDLib.h>: kIOHIDRequestTypeListenEvent = 1; kIOHIDAccessTypeGranted = 0.
-const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
-const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
-
 pub(super) fn input_monitoring_granted() -> bool {
-    // SAFETY: C call from IOKit with a constant request type, returns an enum int.
-    unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) == K_IOHID_ACCESS_TYPE_GRANTED }
+    // SAFETY: CoreGraphics exposes this no-argument preflight as a process-wide
+    // TCC query. It returns a boolean and does not write through Rust memory.
+    unsafe { CGPreflightListenEventAccess() }
 }
 
 pub(super) fn request_input_monitoring_access() {
-    // SAFETY: Shows the system prompt when undecided; no-op once decided.
+    // SAFETY: CoreGraphics exposes this no-argument request to register the
+    // current process with the ListenEvent TCC service and show its system UI.
     unsafe {
-        IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+        CGRequestListenEventAccess();
     }
 }
 
 pub(super) fn ensure_microphone_permission() -> bool {
-    // `request` triggers requestAccess(.audio): it shows the prompt only when
-    // status is NotDetermined and is a no-op when already decided.
-    if let Err(err) = tauri::async_runtime::block_on(request_microphone_permission()) {
-        log::warn!("request microphone permission: {err}");
+    if !microphone_status() {
+        request_microphone();
     }
-    tauri::async_runtime::block_on(check_microphone_permission())
+    microphone_status()
 }
 
 pub(super) fn microphone_status() -> bool {
@@ -38,7 +38,31 @@ pub(super) fn microphone_status() -> bool {
 }
 
 pub(super) fn request_microphone() {
-    if let Err(err) = tauri::async_runtime::block_on(request_microphone_permission()) {
-        log::warn!("request microphone permission: {err}");
+    let media_type = NSString::from_str("soun");
+    let completion = RcBlock::new(|granted: Bool| {
+        log::info!(
+            "microphone permission request completed: {}",
+            granted.as_bool()
+        );
+    });
+
+    // SAFETY: [Category 8 — FFI boundary] `AVCaptureDevice` owns the documented
+    // class method, `media_type` is a live NSString containing AVMediaTypeAudio,
+    // and `RcBlock` supplies a non-null Objective-C block with the required
+    // `(BOOL) -> void` ABI. AVFoundation copies the asynchronous completion block.
+    unsafe {
+        let _: () = msg_send![
+            class!(AVCaptureDevice),
+            requestAccessForMediaType: &*media_type,
+            completionHandler: &*completion
+        ];
     }
+}
+
+pub(super) fn accessibility_status() -> bool {
+    tauri::async_runtime::block_on(check_accessibility_permission())
+}
+
+pub(super) fn request_accessibility() {
+    tauri::async_runtime::block_on(request_accessibility_permission());
 }

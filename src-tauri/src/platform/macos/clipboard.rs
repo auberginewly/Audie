@@ -7,6 +7,8 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::error::{AppError, AppResult};
 
+use super::permissions;
+
 pub(super) fn inject_text(
     app: &AppHandle,
     text: &str,
@@ -76,15 +78,11 @@ pub(super) fn current_frontmost_pid() -> Option<i32> {
 }
 
 pub(super) fn preflight_post_event_access() -> bool {
-    // SAFETY: parameterless C function from ApplicationServices.
-    unsafe { CGPreflightPostEventAccess() }
+    permissions::accessibility_status()
 }
 
 pub(super) fn request_post_event_access() {
-    // SAFETY: parameterless C function from ApplicationServices.
-    unsafe {
-        let _ = CGRequestPostEventAccess();
-    }
+    permissions::request_accessibility();
 }
 
 fn simulate_cmd_v() -> AppResult<()> {
@@ -148,9 +146,4 @@ fn restore_focus_if_stolen(target_pid: i32) -> bool {
         let activated: BOOL = msg_send![target, activateWithOptions: 0u64];
         activated
     }
-}
-
-extern "C" {
-    fn CGPreflightPostEventAccess() -> bool;
-    fn CGRequestPostEventAccess() -> bool;
 }
