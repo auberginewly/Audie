@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   quality:
-    name: quality
+    name: CI / quality
     runs-on: macos-14
     steps:
       - name: Require main as the release PR source
