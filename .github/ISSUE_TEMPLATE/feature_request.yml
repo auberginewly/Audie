@@ -1,0 +1,44 @@
+name: Feature request / 功能建议
+description: Suggest an improvement within Audie's dictation scope / 提议 Audie 语音输入范围内的改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Audie's product boundary is: press a shortcut, speak, and insert clean text at the cursor quickly.
+
+        Audie 的产品边界是：按下快捷键说话，快速把干净文字输入当前光标处。
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Use case / 使用场景
+      description: When would you use this? / 你会在什么场景使用它？
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Current problem / 当前痛点
+      description: What is difficult today? / 目前哪里不方便？
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Desired behavior / 期望行为
+      description: Describe the user-visible result, not an implementation. / 请描述用户能感知的结果，而不是实现方案。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / 替代方案
+      description: Optional. What have you tried? / 可选，你目前如何解决？
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Product scope / 产品范围
+      options:
+        - label: This stays within shortcut → speech → text at cursor. / 这个建议仍属于“快捷键 → 说话 → 文字进入光标”。
+          required: true
