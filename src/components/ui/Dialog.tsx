@@ -30,7 +30,7 @@ export function Dialog({ open, onClose, icon, title, children, actions, width = 
           e.stopPropagation();
         }}
         style={{ width }}
-        className="max-w-full overflow-hidden rounded-md bg-surface-overlay shadow-modal"
+        className="max-w-full overflow-hidden rounded-md border border-gray-alpha-100 bg-surface-overlay shadow-modal"
       >
         {icon || title ? (
           <div className="flex items-center gap-[11px] px-[18px] pt-[18px]">

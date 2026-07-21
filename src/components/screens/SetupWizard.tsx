@@ -138,7 +138,7 @@ export function SetupWizard({
         onMouseDown={(e) => {
           e.stopPropagation();
         }}
-        className="relative flex h-[min(520px,100%)] w-[min(780px,100%)] flex-col overflow-hidden rounded-md bg-surface-app shadow-modal"
+        className="relative flex h-[min(520px,100%)] w-[min(780px,100%)] flex-col overflow-hidden rounded-md border border-gray-alpha-100 bg-surface-app shadow-modal"
       >
         <div className="absolute right-2.5 top-2.5 z-10">
           <IconButton name="x" label={t("settings.close")} onClick={onClose} />

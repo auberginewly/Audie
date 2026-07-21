@@ -119,7 +119,7 @@ export function ModelConfigDialog({ model, data, onClose }: ModelConfigDialogPro
         onMouseDown={(e) => {
           e.stopPropagation();
         }}
-        className="flex max-h-full w-[min(460px,100%)] flex-col overflow-hidden rounded-lg bg-surface-overlay shadow-modal"
+        className="flex max-h-full w-[min(460px,100%)] flex-col overflow-hidden rounded-lg border border-gray-alpha-100 bg-surface-overlay shadow-modal"
       >
         <div className="flex shrink-0 items-center gap-2.5 px-[18px] pb-3.5 pt-[18px]">
           <div className="min-w-0 flex-1 text-base font-semibold tracking-[-0.32px] text-text-primary">
