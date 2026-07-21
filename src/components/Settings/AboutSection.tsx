@@ -1,8 +1,10 @@
 // 关于 — version · project · author.
 
 import { Button, Icon } from "../ui";
+import { getVersion } from "@tauri-apps/api/app";
 import { openExternal } from "../../lib/open";
 import { SettingSection, SettingRow } from "./SettingSection";
+import { useEffect, useState } from "react";
 import { useI18n } from "../../i18n";
 
 const REPO_URL = "https://github.com/auberginewly/Audie";
@@ -28,13 +30,31 @@ function ExtLink({ href, children, mono }: { href: string; children: string; mon
 
 export function AboutSection({ onRerunSetup }: { onRerunSetup: () => void }) {
   const { t } = useI18n();
+  const [appVersion, setAppVersion] = useState("—");
+
+  useEffect(() => {
+    let mounted = true;
+
+    void getVersion()
+      .then((version) => {
+        if (mounted) setAppVersion(version);
+      })
+      .catch(() => {
+        if (mounted) setAppVersion("—");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   return (
     <>
       <SettingSection icon="info" title={t("settings.about.version")}>
         <SettingRow
           label="Audie"
           divider={false}
-          control={<span className="font-mono text-[13px] text-text-tertiary">0.0.0</span>}
+          control={<span className="font-mono text-[13px] text-text-tertiary">{appVersion}</span>}
         />
       </SettingSection>
 
