@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 
 import { useRecordingFlow } from "./hooks/useRecordingFlow";
@@ -47,8 +48,25 @@ function App() {
   const recordingState = useRecordingStore((s) => s.state);
   useRecordingFlow();
   const [nav, setNav] = useState("home");
+  const [appVersion, setAppVersion] = useState("—");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    void getVersion()
+      .then((version) => {
+        if (mounted) setAppVersion(version);
+      })
+      .catch(() => {
+        if (mounted) setAppVersion("—");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // First-run onboarding is persisted in settings (P3.12). Auto-open the wizard once
   // when a fresh install reports it incomplete; the ref stops it reopening if the
@@ -122,7 +140,7 @@ function App() {
             <AppSidebar
               active={nav}
               onNavigate={setNav}
-              version="0.0.0"
+              version={appVersion}
               settingsActive={settingsOpen}
               onSettings={() => {
                 setSettingsOpen(true);
