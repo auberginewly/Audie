@@ -3,8 +3,6 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Audie 需要麦克风访问才能把你的语音转写成文字。音频只在本设备上处理，不会上传到任何第三方服务器。</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Audie 使用「本机听写」时，语音识别在本设备离线完成，音频不会上传到 Apple 或任何第三方服务器。</string>
+    <string>Audie 需要麦克风访问来采集语音，并将音频直接发送给你选择的语音识别服务。Audie 不经过自建服务器。</string>
 </dict>
 </plist>
