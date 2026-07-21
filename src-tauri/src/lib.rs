@@ -194,6 +194,7 @@ pub fn run() {
             commands::request_microphone_permission,
             commands::get_accessibility_permission_status,
             commands::request_accessibility_permission,
+            commands::restart_app,
             begin_trigger_capture,
             end_trigger_capture,
             provider_test::test_provider,
@@ -1086,18 +1087,24 @@ fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = commands::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
 
-    transcription_config_from_settings(settings.asr_provider, settings.asr_model, |key_id| {
+    transcription_config_from_settings(&settings, |key_id| {
         read_optional_secret(platform.inner().as_ref(), key_id)
     })
 }
 
 fn transcription_config_from_settings(
-    asr_provider: String,
-    asr_model: String,
+    settings: &commands::Settings,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> TranscriptionConfig {
+    let asr_provider = settings.asr_provider.clone();
     let openai_api_key = (asr_provider == "openai")
         .then(|| read_secret("openai_api_key"))
+        .flatten();
+    let doubao_api_key_or_access_token = (asr_provider == "doubao_stream")
+        .then(|| read_secret(doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN))
+        .flatten();
+    let doubao_app_id = (asr_provider == "doubao_stream")
+        .then(|| read_secret(doubao_config::SECRET_APP_ID))
         .flatten();
     // Each new cloud ASR reads only its own keychain key (and only when selected),
     // so picking another provider never touches an unrelated secret.
@@ -1113,14 +1120,17 @@ fn transcription_config_from_settings(
 
     TranscriptionConfig {
         asr_provider,
-        asr_model,
+        asr_model: settings.asr_model.clone(),
         openai_api_key,
-        doubao_endpoint: None,
-        doubao_resource_id: None,
-        doubao_app_id: None,
-        doubao_api_key_or_access_token: None,
+        doubao_endpoint: Some(settings.doubao_endpoint.clone()),
+        doubao_resource_id: Some(settings.doubao_resource_id.clone()),
+        doubao_app_id,
+        doubao_api_key_or_access_token,
+        glm_endpoint: Some(settings.glm_endpoint.clone()),
         glm_api_key,
+        aliyun_endpoint: Some(settings.aliyun_endpoint.clone()),
         aliyun_api_key,
+        stepfun_endpoint: Some(settings.stepfun_endpoint.clone()),
         stepfun_api_key,
     }
 }
@@ -1161,8 +1171,11 @@ fn doubao_streaming_config_from_settings(
         doubao_resource_id: Some(resource_id),
         doubao_app_id: app_id,
         doubao_api_key_or_access_token: Some(api_key_or_access_token),
+        glm_endpoint: None,
         glm_api_key: None,
+        aliyun_endpoint: None,
         aliyun_api_key: None,
+        stepfun_endpoint: None,
         stepfun_api_key: None,
     })
 }
@@ -1616,8 +1629,12 @@ mod tests {
     #[test]
     fn openai_transcription_config_reads_only_openai_key() {
         let mut requested = Vec::new();
+        let settings = commands::Settings {
+            asr_provider: "openai".into(),
+            ..commands::Settings::default()
+        };
 
-        let config = transcription_config_from_settings("openai".into(), String::new(), |key_id| {
+        let config = transcription_config_from_settings(&settings, |key_id| {
             requested.push(key_id.to_string());
             Some(format!("{key_id}-value"))
         });
@@ -1632,13 +1649,22 @@ mod tests {
     #[test]
     fn glm_transcription_config_reads_only_glm_key() {
         let mut requested = Vec::new();
+        let settings = commands::Settings {
+            asr_provider: "glm".into(),
+            glm_endpoint: "https://glm.example.test/audio/transcriptions".into(),
+            ..commands::Settings::default()
+        };
 
-        let config = transcription_config_from_settings("glm".into(), String::new(), |key_id| {
+        let config = transcription_config_from_settings(&settings, |key_id| {
             requested.push(key_id.to_string());
             Some(format!("{key_id}-value"))
         });
 
         assert_eq!(requested, vec![crate::asr::glm::SECRET_API_KEY]);
+        assert_eq!(
+            config.glm_endpoint.as_deref(),
+            Some("https://glm.example.test/audio/transcriptions")
+        );
         assert_eq!(config.glm_api_key.as_deref(), Some("glm_api_key-value"));
         assert_eq!(config.aliyun_api_key, None);
         assert_eq!(config.stepfun_api_key, None);
@@ -1647,17 +1673,24 @@ mod tests {
     #[test]
     fn aliyun_transcription_config_reads_only_aliyun_key() {
         let mut requested = Vec::new();
+        let settings = commands::Settings {
+            asr_provider: "aliyun_fun".into(),
+            ..commands::Settings::default()
+        };
 
-        let config =
-            transcription_config_from_settings("aliyun_fun".into(), String::new(), |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            });
+        let config = transcription_config_from_settings(&settings, |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
 
         assert_eq!(requested, vec![crate::asr::aliyun::config::SECRET_API_KEY]);
         assert_eq!(
             config.aliyun_api_key.as_deref(),
             Some("aliyun_dashscope_api_key-value")
+        );
+        assert_eq!(
+            config.aliyun_endpoint.as_deref(),
+            Some(crate::asr::aliyun::config::DEFAULT_ENDPOINT)
         );
         assert_eq!(config.glm_api_key, None);
     }
@@ -1665,17 +1698,24 @@ mod tests {
     #[test]
     fn stepfun_transcription_config_reads_only_stepfun_key() {
         let mut requested = Vec::new();
+        let settings = commands::Settings {
+            asr_provider: "stepfun".into(),
+            ..commands::Settings::default()
+        };
 
-        let config =
-            transcription_config_from_settings("stepfun".into(), String::new(), |key_id| {
-                requested.push(key_id.to_string());
-                Some(format!("{key_id}-value"))
-            });
+        let config = transcription_config_from_settings(&settings, |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
 
         assert_eq!(requested, vec![crate::asr::stepfun::config::SECRET_API_KEY]);
         assert_eq!(
             config.stepfun_api_key.as_deref(),
             Some("stepfun_api_key-value")
+        );
+        assert_eq!(
+            config.stepfun_endpoint.as_deref(),
+            Some(crate::asr::stepfun::config::ENDPOINT)
         );
         assert_eq!(config.glm_api_key, None);
     }
@@ -1698,6 +1738,39 @@ mod tests {
         assert_eq!(
             requested,
             vec![doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN]
+        );
+    }
+
+    #[test]
+    fn doubao_batch_config_keeps_endpoint_and_reads_only_doubao_secrets() {
+        let mut requested = Vec::new();
+        let settings = commands::Settings {
+            asr_provider: "doubao_stream".into(),
+            doubao_endpoint: "wss://doubao.example.test".into(),
+            doubao_resource_id: "resource".into(),
+            ..commands::Settings::default()
+        };
+
+        let config = transcription_config_from_settings(&settings, |key_id| {
+            requested.push(key_id.to_string());
+            Some(format!("{key_id}-value"))
+        });
+
+        assert_eq!(
+            requested,
+            vec![
+                doubao_config::SECRET_API_KEY_OR_ACCESS_TOKEN,
+                doubao_config::SECRET_APP_ID
+            ]
+        );
+        assert_eq!(
+            config.doubao_endpoint.as_deref(),
+            Some("wss://doubao.example.test")
+        );
+        assert_eq!(config.doubao_resource_id.as_deref(), Some("resource"));
+        assert_eq!(
+            config.doubao_api_key_or_access_token.as_deref(),
+            Some("doubao_access_token-value")
         );
     }
 

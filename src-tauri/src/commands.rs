@@ -60,6 +60,9 @@ pub struct Settings {
     pub llm_api_key_id: String,
     pub doubao_endpoint: String,
     pub doubao_resource_id: String,
+    pub glm_endpoint: String,
+    pub aliyun_endpoint: String,
+    pub stepfun_endpoint: String,
     /// Manually selected input device name (matches `cpal` device.name()). Empty
     /// string = automatic (P0.7 picks a reliable mic). Not `Option` so the patch
     /// can express "clear back to auto" via an empty string.
@@ -112,6 +115,9 @@ impl Default for Settings {
             llm_api_key_id: DEFAULT_LLM_API_KEY_ID.to_string(),
             doubao_endpoint: crate::asr::doubao::config::DEFAULT_ENDPOINT.to_string(),
             doubao_resource_id: crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string(),
+            glm_endpoint: crate::asr::glm::ENDPOINT.to_string(),
+            aliyun_endpoint: crate::asr::aliyun::config::DEFAULT_ENDPOINT.to_string(),
+            stepfun_endpoint: crate::asr::stepfun::config::ENDPOINT.to_string(),
             input_device: String::new(),
             onboarding_completed: false,
             onboarding_test_completed: false,
@@ -144,6 +150,9 @@ pub struct SettingsPatch {
     pub llm_api_key_id: Option<String>,
     pub doubao_endpoint: Option<String>,
     pub doubao_resource_id: Option<String>,
+    pub glm_endpoint: Option<String>,
+    pub aliyun_endpoint: Option<String>,
+    pub stepfun_endpoint: Option<String>,
     pub input_device: Option<String>,
     pub onboarding_completed: Option<bool>,
     pub onboarding_test_completed: Option<bool>,
@@ -267,6 +276,15 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     }
     if settings.doubao_resource_id.trim().is_empty() {
         settings.doubao_resource_id = crate::asr::doubao::config::DEFAULT_RESOURCE_ID.to_string();
+    }
+    if settings.glm_endpoint.trim().is_empty() {
+        settings.glm_endpoint = crate::asr::glm::ENDPOINT.to_string();
+    }
+    if settings.aliyun_endpoint.trim().is_empty() {
+        settings.aliyun_endpoint = crate::asr::aliyun::config::DEFAULT_ENDPOINT.to_string();
+    }
+    if settings.stepfun_endpoint.trim().is_empty() {
+        settings.stepfun_endpoint = crate::asr::stepfun::config::ENDPOINT.to_string();
     }
 
     if !HISTORY_RETENTION_IDS.contains(&settings.history_retention.as_str()) {
@@ -522,6 +540,21 @@ fn settings_from_patch(current: Settings, patch: SettingsPatch) -> Result<Settin
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or(current.doubao_resource_id),
+        glm_endpoint: patch
+            .glm_endpoint
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.glm_endpoint),
+        aliyun_endpoint: patch
+            .aliyun_endpoint
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.aliyun_endpoint),
+        stepfun_endpoint: patch
+            .stepfun_endpoint
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current.stepfun_endpoint),
         // Empty is meaningful here (= automatic), so unlike the others we keep an
         // empty patch value instead of filtering it back to the current value.
         input_device: patch
@@ -617,6 +650,17 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
     if settings.doubao_resource_id.trim().is_empty() {
         return Err(AppError::Internal(
             "Doubao resource id cannot be empty".into(),
+        ));
+    }
+    if settings.glm_endpoint.trim().is_empty() {
+        return Err(AppError::Internal("GLM endpoint cannot be empty".into()));
+    }
+    if settings.aliyun_endpoint.trim().is_empty() {
+        return Err(AppError::Internal("Aliyun endpoint cannot be empty".into()));
+    }
+    if settings.stepfun_endpoint.trim().is_empty() {
+        return Err(AppError::Internal(
+            "StepFun endpoint cannot be empty".into(),
         ));
     }
     Ok(())
@@ -906,6 +950,11 @@ pub fn request_accessibility_permission(app: AppHandle) -> bool {
     platform.accessibility_status()
 }
 
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.request_restart();
+}
+
 /// Decode a 16k/mono/16-bit wav into little-endian PCM16 bytes (hound decoder).
 #[cfg(debug_assertions)]
 fn read_wav_pcm16(path: &str) -> Result<Vec<u8>, AppError> {
@@ -966,6 +1015,15 @@ mod tests {
             settings.doubao_resource_id,
             crate::asr::doubao::config::DEFAULT_RESOURCE_ID
         );
+        assert_eq!(settings.glm_endpoint, crate::asr::glm::ENDPOINT);
+        assert_eq!(
+            settings.aliyun_endpoint,
+            crate::asr::aliyun::config::DEFAULT_ENDPOINT
+        );
+        assert_eq!(
+            settings.stepfun_endpoint,
+            crate::asr::stepfun::config::ENDPOINT
+        );
     }
 
     #[test]
@@ -994,6 +1052,18 @@ mod tests {
         let text = toml::to_string_pretty(&with_model).expect("serialize");
         assert_eq!(
             with_model,
+            toml::from_str::<Settings>(&text).expect("deserialize")
+        );
+
+        let with_custom_endpoints = Settings {
+            glm_endpoint: "https://glm.example.test/audio/transcriptions".into(),
+            aliyun_endpoint: "wss://aliyun.example.test/inference".into(),
+            stepfun_endpoint: "https://stepfun.example.test/audio/transcriptions".into(),
+            ..Settings::default()
+        };
+        let text = toml::to_string_pretty(&with_custom_endpoints).expect("serialize");
+        assert_eq!(
+            with_custom_endpoints,
             toml::from_str::<Settings>(&text).expect("deserialize")
         );
 
@@ -1035,6 +1105,9 @@ mod tests {
                 llm_api_key_id: None,
                 doubao_endpoint: None,
                 doubao_resource_id: None,
+                glm_endpoint: None,
+                aliyun_endpoint: None,
+                stepfun_endpoint: None,
                 input_device: None,
                 onboarding_completed: None,
                 onboarding_test_completed: None,
@@ -1065,6 +1138,9 @@ mod tests {
                 llm_api_key_id: None,
                 doubao_endpoint: None,
                 doubao_resource_id: None,
+                glm_endpoint: None,
+                aliyun_endpoint: None,
+                stepfun_endpoint: None,
                 input_device: None,
                 onboarding_completed: None,
                 onboarding_test_completed: None,
@@ -1080,6 +1156,91 @@ mod tests {
         )
         .expect("patch clearing model");
         assert_eq!(cleared.asr_model, "");
+    }
+
+    #[test]
+    fn patch_sets_provider_endpoints_and_blank_keeps_current_values() {
+        let current = Settings::default();
+        let patched = settings_from_patch(
+            current.clone(),
+            SettingsPatch {
+                hotkey: None,
+                asr_provider: None,
+                asr_model: None,
+                llm_provider: None,
+                enhance_enabled: None,
+                enhance_prompt: None,
+                openai_compatible_base_url: None,
+                openai_compatible_model: None,
+                llm_api_key_id: None,
+                doubao_endpoint: None,
+                doubao_resource_id: None,
+                glm_endpoint: Some("https://glm.example.test/audio/transcriptions".into()),
+                aliyun_endpoint: Some("wss://aliyun.example.test/inference".into()),
+                stepfun_endpoint: Some("https://stepfun.example.test/audio/transcriptions".into()),
+                input_device: None,
+                onboarding_completed: None,
+                onboarding_test_completed: None,
+                primary_language: None,
+                history_retention: None,
+                ui_language: None,
+                show_in_dock: None,
+                compose_hotkey: None,
+                compose_prompt: None,
+                rewrite_prompt: None,
+                llm_models: None,
+            },
+        )
+        .expect("patch endpoints");
+
+        assert_eq!(
+            patched.glm_endpoint,
+            "https://glm.example.test/audio/transcriptions"
+        );
+        assert_eq!(
+            patched.aliyun_endpoint,
+            "wss://aliyun.example.test/inference"
+        );
+        assert_eq!(
+            patched.stepfun_endpoint,
+            "https://stepfun.example.test/audio/transcriptions"
+        );
+
+        let blank = settings_from_patch(
+            current.clone(),
+            SettingsPatch {
+                hotkey: None,
+                asr_provider: None,
+                asr_model: None,
+                llm_provider: None,
+                enhance_enabled: None,
+                enhance_prompt: None,
+                openai_compatible_base_url: None,
+                openai_compatible_model: None,
+                llm_api_key_id: None,
+                doubao_endpoint: None,
+                doubao_resource_id: None,
+                glm_endpoint: Some("  ".into()),
+                aliyun_endpoint: Some(String::new()),
+                stepfun_endpoint: Some("\t".into()),
+                input_device: None,
+                onboarding_completed: None,
+                onboarding_test_completed: None,
+                primary_language: None,
+                history_retention: None,
+                ui_language: None,
+                show_in_dock: None,
+                compose_hotkey: None,
+                compose_prompt: None,
+                rewrite_prompt: None,
+                llm_models: None,
+            },
+        )
+        .expect("keep endpoints on blank patch");
+
+        assert_eq!(blank.glm_endpoint, current.glm_endpoint);
+        assert_eq!(blank.aliyun_endpoint, current.aliyun_endpoint);
+        assert_eq!(blank.stepfun_endpoint, current.stepfun_endpoint);
     }
 
     #[test]
@@ -1110,6 +1271,9 @@ mod tests {
                 llm_api_key_id: None,
                 doubao_endpoint: None,
                 doubao_resource_id: None,
+                glm_endpoint: None,
+                aliyun_endpoint: None,
+                stepfun_endpoint: None,
                 input_device: None,
                 onboarding_completed: None,
                 onboarding_test_completed: Some(true),

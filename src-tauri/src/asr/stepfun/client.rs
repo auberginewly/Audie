@@ -20,19 +20,24 @@ use crate::error::{AppError, AppResult};
 const REQUEST_TIMEOUT_SECS: u64 = 45;
 
 pub struct StepFunProvider {
+    endpoint: String,
     api_key: String,
     /// Resolved at construction: selected model, or DEFAULT_MODEL when blank.
     model: String,
 }
 
 impl StepFunProvider {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(endpoint: String, api_key: String, model: String) -> Self {
         let model = if model.trim().is_empty() {
             config::DEFAULT_MODEL.to_string()
         } else {
             model
         };
-        Self { api_key, model }
+        Self {
+            endpoint,
+            api_key,
+            model,
+        }
     }
 }
 
@@ -56,7 +61,7 @@ impl AsrProvider for StepFunProvider {
             .map_err(|e| AppError::Internal(format!("build stepfun http client: {e}")))?;
 
         let resp = client
-            .post(config::ENDPOINT)
+            .post(&self.endpoint)
             .bearer_auth(&self.api_key)
             .header("Accept", "text/event-stream")
             .json(&body)
@@ -302,19 +307,36 @@ mod tests {
 
     #[test]
     fn new_falls_back_to_default_model_when_blank() {
-        let provider = StepFunProvider::new("key".into(), "  ".into());
+        let provider = StepFunProvider::new(config::ENDPOINT.into(), "key".into(), "  ".into());
         assert_eq!(provider.model, config::DEFAULT_MODEL);
     }
 
     #[test]
+    fn new_keeps_explicit_endpoint() {
+        let provider = StepFunProvider::new(
+            "https://stepfun.example.test/audio/transcriptions".into(),
+            "key".into(),
+            config::DEFAULT_MODEL.into(),
+        );
+        assert_eq!(
+            provider.endpoint,
+            "https://stepfun.example.test/audio/transcriptions"
+        );
+    }
+
+    #[test]
     fn new_keeps_explicit_model() {
-        let provider = StepFunProvider::new("key".into(), "stepaudio-2-asr-pro".into());
+        let provider = StepFunProvider::new(
+            config::ENDPOINT.into(),
+            "key".into(),
+            "stepaudio-2-asr-pro".into(),
+        );
         assert_eq!(provider.model, "stepaudio-2-asr-pro");
     }
 
     #[test]
     fn transcribe_rejects_empty_key_as_provider_error() {
-        let provider = StepFunProvider::new("   ".into(), String::new());
+        let provider = StepFunProvider::new(config::ENDPOINT.into(), "   ".into(), String::new());
         let audio = AudioData {
             samples: vec![0.0],
             sample_rate: 16_000,

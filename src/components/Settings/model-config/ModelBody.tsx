@@ -17,6 +17,15 @@ import { OptionSelect } from "./OptionSelect";
 import { RecommendedLocalModels } from "./RecommendedLocalModels";
 import type { LlmDraft } from "./modelConfigActions";
 
+function asrEndpointField(
+  modelId: string,
+): keyof Pick<Settings, "glm_endpoint" | "aliyun_endpoint" | "stepfun_endpoint"> | null {
+  if (modelId === "glm-asr") return "glm_endpoint";
+  if (modelId === "aliyun-asr") return "aliyun_endpoint";
+  if (modelId === "stepfun-asr") return "stepfun_endpoint";
+  return null;
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-[7px]">
@@ -85,6 +94,7 @@ export function ModelBody({
   if (GENERIC_ASR_MODEL_IDS.has(model.id)) {
     const keyId = requiredSecretsForModel(model.id)[0];
     const options = asrModelOptionsForModelId(model.id);
+    const endpointField = asrEndpointField(model.id);
     return (
       <>
         <Field label={t("settings.config.model")}>
@@ -98,6 +108,17 @@ export function ModelBody({
             customLabel={t("settings.config.custom")}
           />
         </Field>
+        {endpointField ? (
+          <Field label={t("settings.config.endpoint")}>
+            <Input
+              mono
+              defaultValue={settings[endpointField]}
+              onChange={(e) => {
+                setField({ [endpointField]: e.target.value });
+              }}
+            />
+          </Field>
+        ) : null}
         <Field label="API Key">
           <KeyInput keyId={keyId} placeholder={t("settings.config.apiKeyPlaceholder")} />
         </Field>

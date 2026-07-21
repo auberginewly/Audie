@@ -25,19 +25,24 @@ pub const DEFAULT_MODEL: &str = "glm-asr-1";
 pub const SECRET_API_KEY: &str = "glm_api_key";
 
 pub struct GlmProvider {
+    endpoint: String,
     api_key: String,
     /// Resolved at construction: selected model, or DEFAULT_MODEL when blank.
     model: String,
 }
 
 impl GlmProvider {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(endpoint: String, api_key: String, model: String) -> Self {
         let model = if model.trim().is_empty() {
             DEFAULT_MODEL.to_string()
         } else {
             model
         };
-        Self { api_key, model }
+        Self {
+            endpoint,
+            api_key,
+            model,
+        }
     }
 }
 
@@ -61,7 +66,7 @@ impl AsrProvider for GlmProvider {
 
         let client = reqwest::blocking::Client::new();
         let resp = client
-            .post(ENDPOINT)
+            .post(&self.endpoint)
             .bearer_auth(&self.api_key)
             // Voxt lists SSE first, but we ask for a single JSON so the batch path
             // can parse one body; the parser still tolerates SSE if the server
@@ -194,13 +199,26 @@ mod tests {
 
     #[test]
     fn new_falls_back_to_default_model_when_blank() {
-        let provider = GlmProvider::new("key".into(), "  ".into());
+        let provider = GlmProvider::new(ENDPOINT.into(), "key".into(), "  ".into());
         assert_eq!(provider.model, DEFAULT_MODEL);
     }
 
     #[test]
+    fn new_keeps_explicit_endpoint() {
+        let provider = GlmProvider::new(
+            "https://glm.example.test/audio/transcriptions".into(),
+            "key".into(),
+            DEFAULT_MODEL.into(),
+        );
+        assert_eq!(
+            provider.endpoint,
+            "https://glm.example.test/audio/transcriptions"
+        );
+    }
+
+    #[test]
     fn new_keeps_explicit_model() {
-        let provider = GlmProvider::new("key".into(), "glm-asr-2512".into());
+        let provider = GlmProvider::new(ENDPOINT.into(), "key".into(), "glm-asr-2512".into());
         assert_eq!(provider.model, "glm-asr-2512");
     }
 

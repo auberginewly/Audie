@@ -55,7 +55,7 @@ pub struct AliyunProvider {
 }
 
 impl AliyunProvider {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(endpoint: String, api_key: String, model: String) -> Self {
         let model = if model.trim().is_empty() {
             config::DEFAULT_MODEL.to_string()
         } else {
@@ -63,7 +63,7 @@ impl AliyunProvider {
         };
         Self {
             config: AliyunStreamConfig {
-                endpoint: config::DEFAULT_ENDPOINT.to_string(),
+                endpoint,
                 api_key,
                 model,
             },
@@ -288,14 +288,32 @@ mod tests {
 
     #[test]
     fn new_falls_back_to_default_model_when_blank() {
-        let provider = AliyunProvider::new("key".into(), "  ".into());
+        let provider =
+            AliyunProvider::new(config::DEFAULT_ENDPOINT.into(), "key".into(), "  ".into());
         assert_eq!(provider.config.model, config::DEFAULT_MODEL);
         assert_eq!(provider.config.endpoint, config::DEFAULT_ENDPOINT);
     }
 
     #[test]
+    fn new_keeps_explicit_endpoint() {
+        let provider = AliyunProvider::new(
+            "wss://aliyun.example.test/inference".into(),
+            "key".into(),
+            config::DEFAULT_MODEL.into(),
+        );
+        assert_eq!(
+            provider.config.endpoint,
+            "wss://aliyun.example.test/inference"
+        );
+    }
+
+    #[test]
     fn new_keeps_explicit_model() {
-        let provider = AliyunProvider::new("key".into(), "paraformer-realtime-v2".into());
+        let provider = AliyunProvider::new(
+            config::DEFAULT_ENDPOINT.into(),
+            "key".into(),
+            "paraformer-realtime-v2".into(),
+        );
         assert_eq!(provider.config.model, "paraformer-realtime-v2");
     }
 

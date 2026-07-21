@@ -24,8 +24,11 @@ pub struct TranscriptionConfig {
     pub doubao_resource_id: Option<String>,
     pub doubao_app_id: Option<String>,
     pub doubao_api_key_or_access_token: Option<String>,
+    pub glm_endpoint: Option<String>,
     pub glm_api_key: Option<String>,
+    pub aliyun_endpoint: Option<String>,
     pub aliyun_api_key: Option<String>,
+    pub stepfun_endpoint: Option<String>,
     pub stepfun_api_key: Option<String>,
 }
 
@@ -81,10 +84,12 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
             doubao_stream_config(config)?,
         ))),
         "glm" => Ok(Box::new(GlmProvider::new(
+            required_key(&config.glm_endpoint, "GLM endpoint 未配置")?,
             required_key(&config.glm_api_key, "GLM API key 未配置，请先到设置页填写")?,
             config.asr_model.clone(),
         ))),
         "aliyun_fun" => Ok(Box::new(AliyunProvider::new(
+            required_key(&config.aliyun_endpoint, "通义 endpoint 未配置")?,
             required_key(
                 &config.aliyun_api_key,
                 "通义 DashScope API key 未配置，请先到设置页填写",
@@ -92,6 +97,7 @@ fn build_provider(config: &TranscriptionConfig) -> AppResult<Box<dyn AsrProvider
             config.asr_model.clone(),
         ))),
         "stepfun" => Ok(Box::new(StepFunProvider::new(
+            required_key(&config.stepfun_endpoint, "StepFun endpoint 未配置")?,
             required_key(
                 &config.stepfun_api_key,
                 "StepFun API key 未配置，请先到设置页填写",
@@ -134,8 +140,11 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_endpoint: None,
             glm_api_key: None,
+            aliyun_endpoint: None,
             aliyun_api_key: None,
+            stepfun_endpoint: None,
             stepfun_api_key: None,
         };
 
@@ -170,8 +179,11 @@ mod tests {
             doubao_resource_id: None,
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_endpoint: None,
             glm_api_key: None,
+            aliyun_endpoint: None,
             aliyun_api_key: None,
+            stepfun_endpoint: None,
             stepfun_api_key: None,
         };
 
@@ -194,8 +206,11 @@ mod tests {
             doubao_resource_id: Some("resource".into()),
             doubao_app_id: None,
             doubao_api_key_or_access_token: None,
+            glm_endpoint: None,
             glm_api_key: None,
+            aliyun_endpoint: None,
             aliyun_api_key: None,
+            stepfun_endpoint: None,
             stepfun_api_key: None,
         };
 
