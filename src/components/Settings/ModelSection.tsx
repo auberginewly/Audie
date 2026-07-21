@@ -57,14 +57,14 @@ function CloudModelCard({
   onConfigure: () => void;
   t: I18nContextValue["t"];
 }) {
-  // Status badge: 使用中 (picked) > 已配置 (usable: cloud key stored) > 未配置.
-  const statusBadge = inUse ? (
-    <Badge tone="accent">{t("settings.model.inUse")}</Badge>
-  ) : usable ? (
-    <Badge tone="success">{t("settings.model.configured")}</Badge>
-  ) : (
-    <Badge tone="neutral">{t("settings.model.unconfigured")}</Badge>
-  );
+  const statusBadge =
+    inUse && usable ? (
+      <Badge tone="accent">{t("settings.model.inUse")}</Badge>
+    ) : usable ? (
+      <Badge tone="success">{t("settings.model.configured")}</Badge>
+    ) : (
+      <Badge tone="neutral">{t("settings.model.unconfigured")}</Badge>
+    );
 
   return (
     <div className="flex items-center gap-3 rounded-md bg-surface-card px-3.5 py-[13px]">
