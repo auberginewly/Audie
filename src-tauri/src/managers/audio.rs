@@ -12,7 +12,7 @@
 //
 // Mirrors Handy's pattern: cpal default host, blocking thread, atomic shutdown.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -34,8 +34,10 @@ const AUDIO_LEVEL_EVENT: &str = "audio-level";
 const MIC_MONITOR_LEVEL_EVENT: &str = "mic-monitor-level";
 const EMIT_INTERVAL_MS: u64 = 33;
 const SHUTDOWN_POLL_MS: u64 = 10;
-const MAX_RECORDING_SECONDS: u64 = 120;
-const RECORDING_TOO_LONG_MESSAGE: &str = "录音超过 120 秒，已丢弃这次音频，请重新录一段短句";
+const MAX_RETAINED_AUDIO_BYTES: usize = 512 * 1024 * 1024;
+const MAX_RETAINED_SAMPLES: usize = MAX_RETAINED_AUDIO_BYTES / std::mem::size_of::<f32>();
+const RECORDING_MEMORY_LIMIT_MESSAGE: &str =
+    "录音占用内存超过 512 MiB，已丢弃这次音频，请重新录一段较短内容";
 
 #[derive(Serialize, Clone, Copy)]
 struct AudioLevelPayload {
@@ -56,26 +58,20 @@ struct AudioMeta {
 }
 
 struct RetainedSamples {
-    max_samples: AtomicUsize,
+    max_samples: usize,
     exceeded: AtomicBool,
 }
 
 impl RetainedSamples {
     fn new(max_samples: usize) -> Self {
         Self {
-            max_samples: AtomicUsize::new(max_samples),
+            max_samples,
             exceeded: AtomicBool::new(false),
         }
     }
 
-    fn configure(&self, meta: AudioMeta) {
-        self.max_samples
-            .store(max_retained_samples(meta), Ordering::Relaxed);
-    }
-
     fn accepted_len(&self, current_len: usize, incoming_len: usize) -> usize {
-        let max_samples = self.max_samples.load(Ordering::Relaxed);
-        let remaining = max_samples.saturating_sub(current_len);
+        let remaining = self.max_samples.saturating_sub(current_len);
         let accepted = remaining.min(incoming_len);
         if accepted < incoming_len {
             self.exceeded.store(true, Ordering::Relaxed);
@@ -86,10 +82,6 @@ impl RetainedSamples {
     fn exceeded(&self) -> bool {
         self.exceeded.load(Ordering::Relaxed)
     }
-}
-
-fn max_retained_samples(meta: AudioMeta) -> usize {
-    meta.sample_rate as usize * meta.channels.max(1) as usize * MAX_RECORDING_SECONDS as usize
 }
 
 /// Optional live PCM outlet (P2.5). When present, the cpal callback forwards
@@ -217,7 +209,7 @@ impl AudioManager {
         let shutdown = Arc::new(AtomicBool::new(false));
         let accum = Arc::new(Mutex::new(LevelAccum::default()));
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let retained = Arc::new(RetainedSamples::new(usize::MAX));
+        let retained = Arc::new(RetainedSamples::new(MAX_RETAINED_SAMPLES));
         let streaming_queue_overflowed =
             chunk_tx.as_ref().map(|_| Arc::new(AtomicBool::new(false)));
 
@@ -343,10 +335,10 @@ impl AudioManager {
         let samples = std::mem::take(&mut *session.buffer.lock());
         if session.retained.exceeded() {
             log::warn!(
-                "audio capture exceeded retained sample cap; dropped {} retained samples",
+                "audio capture exceeded 512 MiB retained-memory fuse; dropped {} retained samples",
                 samples.len()
             );
-            return Err(AppError::Device(RECORDING_TOO_LONG_MESSAGE.into()));
+            return Err(AppError::Device(RECORDING_MEMORY_LIMIT_MESSAGE.into()));
         }
         log::info!("audio capture stopped ({} samples)", samples.len());
         let streaming_queue_overflowed = session
@@ -548,7 +540,6 @@ fn run_capture_thread(args: CaptureThreadArgs) {
         sample_rate: config.sample_rate.0,
         channels: config.channels,
     };
-    retained.configure(meta);
     // Build the optional live PCM outlet now that we know the stream format.
     let chunk_sink = chunk_tx.map(|tx| {
         Arc::new(ChunkSink {
@@ -967,6 +958,39 @@ mod tests {
 
         assert!(buffer.lock().is_empty());
         assert_eq!(accum.lock().peak, 0.5);
+    }
+
+    #[test]
+    fn recording_longer_than_120_seconds_is_still_retained() {
+        let meta = AudioMeta {
+            sample_rate: 48_000,
+            channels: 2,
+        };
+        let samples_at_125_seconds = meta.sample_rate as usize * meta.channels as usize * 125;
+        let retained = RetainedSamples::new(MAX_RETAINED_SAMPLES);
+
+        assert_eq!(retained.accepted_len(samples_at_125_seconds, 1_024), 1_024);
+        assert!(!retained.exceeded());
+    }
+
+    #[test]
+    fn retained_sample_limit_equals_512_mib_of_f32_audio() {
+        assert_eq!(
+            MAX_RETAINED_SAMPLES * std::mem::size_of::<f32>(),
+            MAX_RETAINED_AUDIO_BYTES
+        );
+    }
+
+    #[test]
+    fn process_f32_below_memory_fuse_keeps_all_samples() {
+        let accum = Mutex::new(LevelAccum::default());
+        let buffer = Mutex::new(vec![0.1]);
+        let retained = RetainedSamples::new(4);
+
+        process_f32(&accum, &buffer, None, &retained, &[0.2, 0.3], false);
+
+        assert_eq!(*buffer.lock(), vec![0.1, 0.2, 0.3]);
+        assert!(!retained.exceeded());
     }
 
     #[test]
