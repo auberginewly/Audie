@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Hotkey } from "../../types/settings";
 import type { UseSettings } from "../../hooks/useSettings";
 import type { UsePermissions } from "../../hooks/usePermissions";
+import type { RuntimePlatform } from "../../lib/runtimePlatform";
 import { Button, IconButton } from "../ui";
 import { ModelConfigDialog } from "../Settings/ModelConfigDialog";
 import { MODELS, asrProviderForModelId, llmPickPatch, type ModelMeta } from "../Settings/models";
@@ -26,6 +27,7 @@ interface SetupWizardProps {
   data: UseSettings;
   permissions: UsePermissions;
   progress: OnboardingProgress;
+  platform: RuntimePlatform;
   configured: (modelId: string) => boolean;
   onRefreshModels: () => void;
   welcome?: boolean;
@@ -38,6 +40,7 @@ export function SetupWizard({
   data,
   permissions,
   progress,
+  platform,
   configured,
   onRefreshModels,
   welcome = true,
@@ -95,6 +98,7 @@ export function SetupWizard({
         microphone={permissions.microphone}
         accessibility={permissions.accessibility}
         inputMonitoring={permissions.inputMonitoring}
+        platform={platform}
         hotkey={data.settings?.hotkey}
       />
     );

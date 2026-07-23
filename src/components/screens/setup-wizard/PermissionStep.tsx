@@ -1,5 +1,6 @@
 import type { PermissionState } from "../../../hooks/usePermissions";
 import { openExternal } from "../../../lib/open";
+import type { RuntimePlatform } from "../../../lib/runtimePlatform";
 import { Badge, Button, Icon, InlineNotice, type IconName } from "../../ui";
 import { useI18n } from "../../../i18n";
 import { StepHeader } from "./StepHeader";
@@ -65,11 +66,13 @@ interface PermissionStepProps {
   microphone: PermissionState;
   accessibility: PermissionState;
   inputMonitoring: PermissionState;
+  platform: RuntimePlatform;
   hotkey?: string;
 }
 
-export function PermissionStep({ microphone, accessibility, inputMonitoring, hotkey }: PermissionStepProps) {
+export function PermissionStep({ microphone, accessibility, inputMonitoring, platform, hotkey }: PermissionStepProps) {
   const { t } = useI18n();
+  const isMacOS = platform === "macos";
 
   return (
     <>
@@ -81,22 +84,26 @@ export function PermissionStep({ microphone, accessibility, inputMonitoring, hot
           desc={t("setup.permissions.micDesc")}
           state={microphone}
         />
-        <PermItem
-          icon="command"
-          name={t("settings.general.accessibility")}
-          desc={t("setup.permissions.accessibilityDesc")}
-          state={accessibility}
-        />
-        <PermItem
-          icon="key"
-          name={t("setup.permissions.inputMonitoring")}
-          desc={t("setup.permissions.inputMonitoringDesc")}
-          hint={t("setup.permissions.inputMonitoringHint")}
-          state={inputMonitoring}
-        />
+        {isMacOS ? (
+          <>
+            <PermItem
+              icon="command"
+              name={t("settings.general.accessibility")}
+              desc={t("setup.permissions.accessibilityDesc")}
+              state={accessibility}
+            />
+            <PermItem
+              icon="key"
+              name={t("setup.permissions.inputMonitoring")}
+              desc={t("setup.permissions.inputMonitoringDesc")}
+              hint={t("setup.permissions.inputMonitoringHint")}
+              state={inputMonitoring}
+            />
+          </>
+        ) : null}
       </div>
       {/* Default trigger is fn/Globe, which macOS consumes unless reassigned. */}
-      {hotkey === "Fn" ? (
+      {isMacOS && hotkey === "Fn" ? (
         <div className="mt-3">
           <InlineNotice
             tone="warning"
