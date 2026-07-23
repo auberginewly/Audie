@@ -1,3 +1,5 @@
+import type { RuntimePlatform } from "../lib/runtimePlatform";
+
 export type PermissionKey = "microphone" | "accessibility" | "inputMonitoring";
 export type PermissionPhase = "idle" | "requesting" | "needsSettings" | "needsRestart";
 
@@ -12,7 +14,8 @@ export interface PermissionGrantStatus {
   readonly inputMonitoring: boolean | null;
 }
 
-export function permissionsAreReady(permissions: PermissionGrantStatus): boolean {
+export function permissionsAreReady(permissions: PermissionGrantStatus, platform: RuntimePlatform): boolean {
+  if (platform === "windows") return permissions.microphone === true;
   return permissions.microphone === true && permissions.accessibility === true && permissions.inputMonitoring === true;
 }
 

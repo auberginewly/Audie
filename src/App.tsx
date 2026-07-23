@@ -15,6 +15,7 @@ import { SetupWizard } from "./components/screens/SetupWizard";
 import { deriveOnboardingProgress, type OnboardingProgress } from "./components/screens/setup-wizard/progress";
 import { SettingsDialog } from "./components/Settings";
 import { I18nProvider, isLanguage, useI18n } from "./i18n";
+import { getRuntimePlatform } from "./lib/runtimePlatform";
 
 // Sidebar and wizard consume the same derived snapshot, so their checkmarks and
 // x/5 value cannot diverge when a saved provider or keychain secret changes.
@@ -42,6 +43,7 @@ function SetupGuideCard({ progress, onContinue }: { progress: OnboardingProgress
 }
 
 function App() {
+  const platform = getRuntimePlatform();
   const data = useSettings();
   const permissions = usePermissions();
   const configuredModels = useConfiguredModels();
@@ -80,6 +82,7 @@ function App() {
       accessibility: permissions.accessibility.granted,
       inputMonitoring: permissions.inputMonitoring.granted,
     },
+    platform,
     configuredModels.configured,
   );
   const autoOpened = useRef(false);
@@ -182,6 +185,7 @@ function App() {
           data={data}
           permissions={permissions}
           progress={onboardingProgress}
+          platform={platform}
           configured={configuredModels.configured}
           onRefreshModels={configuredModels.refresh}
         />

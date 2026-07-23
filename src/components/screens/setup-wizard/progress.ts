@@ -1,6 +1,7 @@
 import { isKeyOptionalModel, llmModelIdForBaseUrl, modelIdForAsrProvider } from "../../Settings/models";
 import type { Settings } from "../../../types/settings";
 import { permissionsAreReady } from "../../../hooks/permissionState";
+import type { RuntimePlatform } from "../../../lib/runtimePlatform";
 
 export type OnboardingStepId = "permissions" | "hotkey" | "asr" | "llm" | "test";
 
@@ -26,11 +27,12 @@ const TOTAL_STEPS = 5;
 export function deriveOnboardingProgress(
   settings: Settings | null,
   permissions: OnboardingPermissionStatus,
+  platform: RuntimePlatform,
   configured: (modelId: string) => boolean,
 ): OnboardingProgress {
   const pickedAsr = settings ? modelIdForAsrProvider(settings.asr_provider) : null;
   const pickedLlm = settings ? llmModelIdForBaseUrl(settings.openai_compatible_base_url) || null : null;
-  const permissionsDone = permissionsAreReady(permissions);
+  const permissionsDone = permissionsAreReady(permissions, platform);
   const hotkeyDone = Boolean(settings?.hotkey.trim());
   const asrDone = Boolean(pickedAsr && configured(pickedAsr));
   const llmDone = Boolean(

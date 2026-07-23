@@ -8,6 +8,7 @@ import { HotkeyRecorder } from "./HotkeyRecorder";
 import { PermissionRow } from "./PermissionRow";
 import { useMicMonitor } from "../../hooks/useMicMonitor";
 import { LANGUAGES, useI18n, type Language } from "../../i18n";
+import { getRuntimePlatform } from "../../lib/runtimePlatform";
 
 interface GeneralSectionProps {
   settings: Settings;
@@ -18,6 +19,7 @@ interface GeneralSectionProps {
 
 export function GeneralSection({ settings, update, microphones, autoDevice }: GeneralSectionProps) {
   const { t } = useI18n();
+  const platform = getRuntimePlatform();
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [launchAtLoginBusy, setLaunchAtLoginBusy] = useState(true);
   // Live preview of the selected mic — lets the user confirm it's picking up
@@ -96,7 +98,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             />
           }
         />
-        {settings.hotkey === "Fn" ? (
+        {platform === "macos" && settings.hotkey === "Fn" ? (
           <div className="px-3.5 pb-3 text-xs text-warning-text">{t("settings.general.fnTip")}</div>
         ) : null}
       </SettingSection>
