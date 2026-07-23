@@ -161,7 +161,11 @@ function App() {
             />
           }
         >
-          {nav === "home" ? <HomeScreen /> : <HistoryScreen data={data} />}
+          {nav === "home" ? (
+            <HomeScreen hotkey={data.settings?.hotkey} platform={platform} />
+          ) : (
+            <HistoryScreen data={data} />
+          )}
         </AppShell>
 
         <SettingsDialog

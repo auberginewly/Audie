@@ -128,7 +128,7 @@ export function SetupWizard({
       />
     );
   } else {
-    body = <TestStep />;
+    body = <TestStep hotkey={data.settings?.hotkey} platform={platform} />;
   }
 
   return (

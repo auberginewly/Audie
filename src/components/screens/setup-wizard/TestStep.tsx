@@ -9,7 +9,9 @@ import {
   type AppErrorEvent,
 } from "../../../types/events";
 import { openExternal } from "../../../lib/open";
+import type { RuntimePlatform } from "../../../lib/runtimePlatform";
 import { useI18n } from "../../../i18n";
+import type { Hotkey } from "../../../types/settings";
 import { StepHeader } from "./StepHeader";
 import type { TestPhase } from "./types";
 
@@ -18,8 +20,9 @@ import type { TestPhase } from "./types";
 // judged from the Rust state-change/error events — NOT the textarea contents — so
 // it stays reliable regardless of where injection focus lands. Reuses the real
 // hotkey path; no new backend command.
-export function TestStep() {
+export function TestStep({ hotkey, platform }: { hotkey?: Hotkey; platform: RuntimePlatform }) {
   const { t } = useI18n();
+  const hotkeyLabel = hotkey ?? "…";
   const [phase, setPhase] = useState<TestPhase>("idle");
   const [err, setErr] = useState<AppErrorEvent | null>(null);
 
@@ -81,10 +84,14 @@ export function TestStep() {
 
   return (
     <>
-      <StepHeader title={t("setup.test.title")} desc={t("setup.test.desc")} tag={t("setup.optional")} />
+      <StepHeader
+        title={t("setup.test.title")}
+        desc={t("setup.test.desc", { hotkey: hotkeyLabel })}
+        tag={t("setup.optional")}
+      />
       <textarea
         rows={3}
-        placeholder={t("setup.test.placeholder")}
+        placeholder={t("setup.test.placeholder", { hotkey: hotkeyLabel })}
         className="w-full resize-none rounded-md bg-surface-card px-3.5 py-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:ring-1 focus:ring-accent-fill"
       />
       <div className="mt-3 text-xs">
@@ -107,11 +114,15 @@ export function TestStep() {
                 {t("setup.permission.openSettings")}
               </button>
             ) : (
-              t("setup.test.retryAfterFix")
+              t("setup.test.retryAfterFix", { hotkey: hotkeyLabel })
             )}
           </span>
         ) : (
-          <span className="text-text-tertiary">{t("setup.test.help")}</span>
+          <span className="text-text-tertiary">
+            {platform === "windows"
+              ? t("setup.test.helpWindows", { hotkey: hotkeyLabel })
+              : t("setup.test.help", { hotkey: hotkeyLabel })}
+          </span>
         )}
       </div>
     </>
