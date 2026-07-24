@@ -10,7 +10,7 @@
 
 [![许可证：MIT](https://img.shields.io/badge/license-MIT-a78bfa.svg)](LICENSE)
 ![平台：macOS](https://img.shields.io/badge/platform-macOS-8e4ec6.svg)
-![平台：Windows](https://img.shields.io/badge/platform-Windows-0078d4.svg)
+![平台：Windows](https://img.shields.io/badge/platform-Windows-8e4ec6.svg)
 [![最新版本](https://img.shields.io/github/v/release/auberginewly/Audie?include_prereleases&label=release&color=8e4ec6)](https://github.com/auberginewly/Audie/releases)
 
 </div>
