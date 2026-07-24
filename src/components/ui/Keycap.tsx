@@ -34,12 +34,13 @@ const METRICS: Record<KeycapSize, string> = {
 type KeycapProps = {
   children: ReactNode;
   size?: KeycapSize;
+  literal?: boolean;
 } & HTMLAttributes<HTMLElement>;
 
 /** A single physical key rendered as a keycap. Pass a known key name or any label. */
-export function Keycap({ children, size = "md", className = "", ...rest }: KeycapProps) {
+export function Keycap({ children, size = "md", literal = false, className = "", ...rest }: KeycapProps) {
   const raw = typeof children === "string" ? children : "";
-  const label = GLYPHS[raw.toLowerCase()] ?? children;
+  const label = literal ? children : (GLYPHS[raw.toLowerCase()] ?? children);
   return (
     <kbd
       className={[
@@ -60,14 +61,15 @@ interface KeyComboProps {
   keys: string[];
   size?: KeycapSize;
   className?: string;
+  literal?: boolean;
 }
 
 /** A hotkey combo: an array of keys joined by a thin gap. */
-export function KeyCombo({ keys, size = "md", className = "" }: KeyComboProps) {
+export function KeyCombo({ keys, size = "md", className = "", literal = false }: KeyComboProps) {
   return (
     <span className={["inline-flex items-center gap-1", className].join(" ")}>
       {keys.map((k, i) => (
-        <Keycap key={i} size={size}>
+        <Keycap key={i} size={size} literal={literal}>
           {k}
         </Keycap>
       ))}

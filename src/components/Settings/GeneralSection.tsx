@@ -8,16 +8,18 @@ import { HotkeyRecorder } from "./HotkeyRecorder";
 import { PermissionRow } from "./PermissionRow";
 import { useMicMonitor } from "../../hooks/useMicMonitor";
 import { LANGUAGES, useI18n, type Language } from "../../i18n";
+import { getRuntimePlatform } from "../../lib/runtimePlatform";
 
 interface GeneralSectionProps {
   settings: Settings;
-  update: (patch: Partial<Settings>) => void;
+  update: (patch: Partial<Settings>) => Promise<boolean>;
   microphones: AudioDevice[];
   autoDevice: string | null;
 }
 
 export function GeneralSection({ settings, update, microphones, autoDevice }: GeneralSectionProps) {
   const { t } = useI18n();
+  const platform = getRuntimePlatform();
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [launchAtLoginBusy, setLaunchAtLoginBusy] = useState(true);
   // Live preview of the selected mic — lets the user confirm it's picking up
@@ -76,9 +78,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
           control={
             <HotkeyRecorder
               value={settings.hotkey}
-              onChange={(h: Hotkey) => {
-                update({ hotkey: h });
-              }}
+              onChange={(h: Hotkey) => update({ hotkey: h })}
               conflictWith={settings.compose_hotkey}
             />
           }
@@ -89,14 +89,12 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
           control={
             <HotkeyRecorder
               value={settings.compose_hotkey}
-              onChange={(h: Hotkey) => {
-                update({ compose_hotkey: h });
-              }}
+              onChange={(h: Hotkey) => update({ compose_hotkey: h })}
               conflictWith={settings.hotkey}
             />
           }
         />
-        {settings.hotkey === "Fn" ? (
+        {platform === "macos" && settings.hotkey === "Fn" ? (
           <div className="px-3.5 pb-3 text-xs text-warning-text">{t("settings.general.fnTip")}</div>
         ) : null}
       </SettingSection>
@@ -110,7 +108,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
               <Select
                 value={settings.ui_language}
                 onChange={(e) => {
-                  update({ ui_language: e.target.value as Language });
+                  void update({ ui_language: e.target.value as Language });
                 }}
               >
                 {LANGUAGES.map((language) => (
@@ -139,7 +137,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             devices={explicitDevices}
             value={settings.input_device || "auto"}
             onChange={(id) => {
-              update({ input_device: id === "auto" ? "" : id });
+              void update({ input_device: id === "auto" ? "" : id });
             }}
             level={micLevel}
           />
@@ -163,7 +161,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             <Switch
               checked={settings.show_in_dock}
               onChange={(showInDock) => {
-                update({ show_in_dock: showInDock });
+                void update({ show_in_dock: showInDock });
               }}
             />
           }

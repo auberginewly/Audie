@@ -289,7 +289,10 @@ where
                 if let Some(text) = text {
                     if !text.is_empty() {
                         latest = text;
-                        log::info!("doubao transcript (final={is_final}): {latest}");
+                        log::debug!(
+                            "doubao recognition update (final={is_final}, chars={})",
+                            latest.chars().count()
+                        );
                     }
                 }
                 if is_final {

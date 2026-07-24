@@ -1,22 +1,22 @@
 use std::sync::mpsc;
 
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, WPARAM};
+use windows_sys::core::BOOL;
+use windows_sys::Win32::Foundation::WPARAM;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_DOWN, VK_ESCAPE, VK_F1, VK_F10, VK_F11,
-    VK_F12, VK_F13, VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F3, VK_F4,
-    VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
+    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_DOWN,
+    VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16, VK_F17, VK_F18,
+    VK_F19, VK_F2, VK_F20, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_LEFT, VK_RETURN,
+    VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW, RegisterHotKey,
-    TranslateMessage, UnregisterHotKey, MSG, PM_NOREMOVE, WM_HOTKEY, WM_QUIT,
+    DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW, TranslateMessage, MSG,
+    PM_NOREMOVE, WM_HOTKEY, WM_QUIT,
 };
 
 use crate::error::{AppError, AppResult};
 use crate::platform::{HotkeyCallback, HotkeySlot};
 
 const HOTKEY_ID: i32 = 1;
-const WINDOWS_PRIMARY_FALLBACK: &str = "Ctrl+Shift+Space";
-
 pub struct HotkeyHandle {
     thread_id: u32,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -141,13 +141,8 @@ struct HotkeySpec {
 }
 
 impl HotkeySpec {
-    fn parse(slot: HotkeySlot, combo: &str) -> AppResult<Self> {
-        let normalized = if combo.eq_ignore_ascii_case("fn") && slot == HotkeySlot::Primary {
-            WINDOWS_PRIMARY_FALLBACK
-        } else {
-            combo
-        };
-        parse_combo(normalized)
+    fn parse(_slot: HotkeySlot, combo: &str) -> AppResult<Self> {
+        parse_combo(combo)
     }
 }
 
@@ -248,12 +243,8 @@ mod tests {
     }
 
     #[test]
-    fn maps_primary_fn_to_windows_default_without_persisting_it() {
-        let spec = HotkeySpec::parse(HotkeySlot::Primary, "Fn").unwrap();
-
-        assert_eq!(spec.modifiers, MOD_CONTROL | MOD_SHIFT);
-        assert_eq!(spec.vk, VK_SPACE);
-        assert_eq!(spec.label, "Ctrl+Shift+Space");
+    fn rejects_fn_for_primary_slot() {
+        assert!(HotkeySpec::parse(HotkeySlot::Primary, "Fn").is_err());
     }
 
     #[test]

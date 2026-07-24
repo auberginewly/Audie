@@ -16,7 +16,7 @@ pub(super) fn store_secret(key: &str, value: &str) -> AppResult<()> {
     let mut secret = value.as_bytes().to_vec();
     let blob_size = u32::try_from(secret.len())
         .map_err(|_| AppError::Provider("secret value is too large".into()))?;
-    let mut credential = CREDENTIALW {
+    let credential = CREDENTIALW {
         Flags: 0,
         Type: CRED_TYPE_GENERIC,
         TargetName: target.as_ptr().cast_mut(),
@@ -32,7 +32,7 @@ pub(super) fn store_secret(key: &str, value: &str) -> AppResult<()> {
     };
     // SAFETY: Category 8 — FFI boundary. `credential` points to initialized fields;
     // target is NUL-terminated UTF-16, and CredentialBlob remains alive for call.
-    let ok = unsafe { CredWriteW(&mut credential, 0) };
+    let ok = unsafe { CredWriteW(&credential, 0) };
     if ok == 0 {
         Err(AppError::Internal(format!(
             "write Windows credential: {}",

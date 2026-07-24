@@ -3,9 +3,10 @@ use windows_sys::Win32::System::SystemServices::LOCALE_NAME_MAX_LENGTH;
 
 pub(super) fn system_language_label() -> Option<String> {
     let mut buffer = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
+    let capacity = i32::try_from(LOCALE_NAME_MAX_LENGTH).expect("locale name capacity fits in i32");
     // SAFETY: Category 8 — FFI boundary. `buffer` is valid for writes of the
     // provided length; Windows writes a NUL-terminated UTF-16 locale name.
-    let len = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), LOCALE_NAME_MAX_LENGTH) };
+    let len = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), capacity) };
     if len <= 1 {
         return None;
     }
