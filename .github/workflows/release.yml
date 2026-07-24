@@ -12,10 +12,12 @@ permissions:
   contents: write
 
 jobs:
-  publish:
-    name: publish
+  validate:
+    name: validate
     if: github.event.before != '0000000000000000000000000000000000000000'
     runs-on: macos-14
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,7 +35,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-          targets: aarch64-apple-darwin
 
       - run: pnpm install --frozen-lockfile
 
@@ -55,6 +56,28 @@ jobs:
       - run: cargo clippy -- -D warnings
         working-directory: src-tauri
 
+  build-macos:
+    name: build / macOS
+    needs: validate
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - run: pnpm install --frozen-lockfile
+
       - name: Build the Apple Silicon DMG
         run: >-
           pnpm tauri build
@@ -65,7 +88,7 @@ jobs:
       - name: Verify the packaged application
         id: artifact
         env:
-          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           DMG_PATH="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "$DMG_PATH" && test -f "$DMG_PATH"
@@ -83,13 +106,96 @@ jobs:
 
           echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: ${{ steps.artifact.outputs.dmg_path }}
+          if-no-files-found: error
+
+  build-windows:
+    name: build / Windows
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the Windows NSIS installer
+        run: pnpm tauri build --bundles nsis
+
+      - name: Verify the Windows installer
+        id: artifact
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $expectedName = "Audie_$($env:EXPECTED_VERSION)_x64-setup.exe"
+          $setupPath = Join-Path "src-tauri/target/release/bundle/nsis" $expectedName
+          if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
+            throw "Windows installer not found: $setupPath"
+          }
+
+          $productVersion = (Get-Item -LiteralPath $setupPath).VersionInfo.ProductVersion
+          if ($productVersion -notin @($env:EXPECTED_VERSION, "$env:EXPECTED_VERSION.0")) {
+            throw "Expected installer version $env:EXPECTED_VERSION, got $productVersion"
+          }
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $setupPath
+          if ($signature.Status -ne "NotSigned") {
+            throw "Expected an unsigned Windows preview, got $($signature.Status)"
+          }
+
+          Get-FileHash -LiteralPath $setupPath -Algorithm SHA256
+          "setup_path=$setupPath" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: ${{ steps.artifact.outputs.setup_path }}
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: [validate, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-macos
+          path: release-artifacts
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-windows
+          path: release-artifacts
+
       - name: Publish the GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          DMG_PATH: ${{ steps.artifact.outputs.dmg_path }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          gh release create "v$VERSION" "$DMG_PATH" \
+          test "$(find release-artifacts -maxdepth 1 -name '*.dmg' | wc -l)" -eq 1
+          test "$(find release-artifacts -maxdepth 1 -name '*-setup.exe' | wc -l)" -eq 1
+
+          gh release create "v$VERSION" \
+            release-artifacts/*.dmg \
+            release-artifacts/*-setup.exe \
             --target "$GITHUB_SHA" \
             --title "Audie $VERSION Preview" \
             --notes-file RELEASE_NOTES.md \
