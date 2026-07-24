@@ -17,8 +17,6 @@ use crate::error::{AppError, AppResult};
 use crate::platform::{HotkeyCallback, HotkeySlot};
 
 const HOTKEY_ID: i32 = 1;
-const WINDOWS_PRIMARY_FALLBACK: &str = "Ctrl+Shift+Space";
-
 pub struct HotkeyHandle {
     thread_id: u32,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -143,13 +141,8 @@ struct HotkeySpec {
 }
 
 impl HotkeySpec {
-    fn parse(slot: HotkeySlot, combo: &str) -> AppResult<Self> {
-        let normalized = if combo.eq_ignore_ascii_case("fn") && slot == HotkeySlot::Primary {
-            WINDOWS_PRIMARY_FALLBACK
-        } else {
-            combo
-        };
-        parse_combo(normalized)
+    fn parse(_slot: HotkeySlot, combo: &str) -> AppResult<Self> {
+        parse_combo(combo)
     }
 }
 
@@ -250,12 +243,8 @@ mod tests {
     }
 
     #[test]
-    fn maps_primary_fn_to_windows_default_without_persisting_it() {
-        let spec = HotkeySpec::parse(HotkeySlot::Primary, "Fn").unwrap();
-
-        assert_eq!(spec.modifiers, MOD_CONTROL | MOD_SHIFT);
-        assert_eq!(spec.vk, VK_SPACE);
-        assert_eq!(spec.label, "Ctrl+Shift+Space");
+    fn rejects_fn_for_primary_slot() {
+        assert!(HotkeySpec::parse(HotkeySlot::Primary, "Fn").is_err());
     }
 
     #[test]

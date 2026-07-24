@@ -25,9 +25,9 @@ thiserror = "2"
 anyhow = "1"
 parking_lot = "0.12"
 log = "0.4"
-env_logger = "0.11"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-log = "2"
 # Open external URLs (GitHub repo, author site) in the system browser — Tauri has
 # no built-in way; this is the official link-opening plugin.
 tauri-plugin-opener = "2"

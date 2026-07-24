@@ -151,10 +151,32 @@ static OVERLAY_LAST_TARGET: parking_lot::Mutex<Option<(f64, f64)>> = parking_lot
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .try_init();
+    let mut log_targets = vec![tauri_plugin_log::Target::new(
+        tauri_plugin_log::TargetKind::LogDir {
+            file_name: Some("audie".into()),
+        },
+    )];
+    #[cfg(debug_assertions)]
+    log_targets.push(tauri_plugin_log::Target::new(
+        tauri_plugin_log::TargetKind::Stdout,
+    ));
+
+    let log_level = if cfg!(debug_assertions) {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets(log_targets)
+                .level(log_level)
+                .max_file_size(5 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -332,29 +354,39 @@ pub(crate) fn build_hotkey_callback(app: &AppHandle, role: HotkeyRole) -> Hotkey
 }
 
 /// P3.10 trigger recorder: while the Settings recorder is open, stop the live
-/// trigger and run a listen-only capture tap (macOS) that emits `trigger-captured`
-/// / `trigger-capture-rejected` for whatever key / combo the user presses — the
-/// webview can't see fn, so all capture is native. `end_trigger_capture` stops the
-/// capture tap and restores the real trigger.
+/// trigger and start the platform capture session. macOS runs a native listen-only
+/// tap because the webview cannot see fn; Windows reads keydown in the focused
+/// recorder after this command has suspended the global shortcuts.
 #[tauri::command]
 fn begin_trigger_capture(app: AppHandle) -> AppResult<()> {
     let platform = app.state::<Arc<dyn Platform>>();
     platform.unregister_all_hotkeys(&app)?;
-    platform.start_trigger_capture(&app)
+    if let Err(err) = platform.start_trigger_capture(&app) {
+        if let Err(restore_err) = restore_configured_hotkeys(&app) {
+            log::error!("restore hotkeys after capture start failure: {restore_err}");
+        }
+        return Err(err);
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn end_trigger_capture(app: AppHandle) -> AppResult<()> {
     let platform = app.state::<Arc<dyn Platform>>();
     platform.stop_trigger_capture();
-    let hotkey = commands::load_hotkey(&app);
+    restore_configured_hotkeys(&app)
+}
+
+fn restore_configured_hotkeys(app: &AppHandle) -> AppResult<()> {
+    let platform = app.state::<Arc<dyn Platform>>();
+    let hotkey = commands::load_hotkey(app);
     platform.register_hotkey(
-        &app,
+        app,
         HotkeySlot::Primary,
         &hotkey,
-        build_hotkey_callback(&app, HotkeyRole::Primary),
+        build_hotkey_callback(app, HotkeyRole::Primary),
     )?;
-    register_compose_hotkey(&app);
+    register_compose_hotkey(app);
     Ok(())
 }
 
@@ -849,9 +881,10 @@ fn finish_pipeline_tail(
     duration_ms: u64,
     mode: DictationMode,
 ) -> AppResult<bool> {
-    // P0.3 acceptance: the transcript shows up in the console.
-    println!("[transcript] {text}");
-    log::info!("transcript ({duration_ms} ms): {text}");
+    log::info!(
+        "transcription completed (duration_ms={duration_ms}, chars={})",
+        text.chars().count()
+    );
     let _ = app.emit(
         "final-transcript",
         FinalTranscript {

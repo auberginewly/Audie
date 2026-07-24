@@ -7,10 +7,11 @@
 import { useMemo, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { Icon, Keycap, Select, type IconName } from "../ui";
+import { Icon, KeyCombo, Select, type IconName } from "../ui";
 import { useUsageStats } from "../../hooks/useUsageStats";
 import { useDailyUsage } from "../../hooks/useDailyUsage";
 import { useI18n, type I18nContextValue } from "../../i18n";
+import type { RuntimePlatform } from "../../lib/runtimePlatform";
 import {
   CHART_RANGES,
   createEvenTicks,
@@ -218,7 +219,7 @@ function UsageChart() {
   );
 }
 
-export function HomeScreen() {
+export function HomeScreen({ hotkey, platform }: { hotkey?: string; platform: RuntimePlatform }) {
   const { t } = useI18n();
   const stats = useUsageStats();
   // 「口述」三卡只算纯口述听写（mode=polish），不被写作/改写产出虚高（见 history.rs）。
@@ -246,11 +247,13 @@ export function HomeScreen() {
         <h1 className="max-w-[36ch] text-balance text-xl font-semibold leading-[26px] tracking-[-0.4px] text-text-primary">
           {t("home.hero.title")}
         </h1>
-        <div className="mt-3 flex items-center gap-2 text-sm text-text-tertiary">
-          <span>{t("home.hero.prefix")}</span>
-          <Keycap>fn</Keycap>
-          <span>{t("home.hero.suffix")}</span>
-        </div>
+        {hotkey ? (
+          <div className="mt-3 flex items-center gap-2 text-sm text-text-tertiary">
+            <span>{t("home.hero.prefix")}</span>
+            <KeyCombo keys={hotkey.split("+").map((key) => key.trim())} literal={platform === "windows"} />
+            <span>{t("home.hero.suffix")}</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-4 gap-3">

@@ -5,7 +5,7 @@ import { StepHeader } from "./StepHeader";
 
 interface HotkeyStepProps {
   hotkey?: Hotkey;
-  onChange: (hotkey: Hotkey) => void;
+  onChange: (hotkey: Hotkey) => Promise<boolean>;
 }
 
 export function HotkeyStep({ hotkey, onChange }: HotkeyStepProps) {

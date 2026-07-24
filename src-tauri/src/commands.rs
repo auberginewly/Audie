@@ -18,6 +18,9 @@ use crate::platform::{HotkeySlot, Platform};
 /// Legacy tauri-plugin-store filename, read once to migrate into TOML (P3 cleanup).
 const LEGACY_SETTINGS_JSON: &str = "settings.json";
 
+#[cfg(target_os = "windows")]
+pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
+#[cfg(not(target_os = "windows"))]
 pub const DEFAULT_HOTKEY: &str = "Fn";
 pub const DEFAULT_ASR_PROVIDER: &str = "doubao_stream";
 pub const DEFAULT_LLM_PROVIDER: &str = "openai_compatible";
@@ -218,7 +221,18 @@ pub fn load_settings(app: &AppHandle) -> Settings {
     if path.exists() {
         match std::fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<Settings>(&text) {
-                Ok(settings) => return normalize_settings(settings),
+                Ok(settings) => {
+                    let migrate_windows_fn = should_migrate_windows_fn(&settings.hotkey);
+                    let normalized = normalize_settings(settings);
+                    if migrate_windows_fn {
+                        if let Err(err) = write_settings_toml(&path, &normalized) {
+                            log::error!(
+                                "write settings.toml during Windows hotkey migration: {err}"
+                            );
+                        }
+                    }
+                    return normalized;
+                }
                 Err(err) => log::error!("parse settings.toml, using defaults: {err}"),
             },
             Err(err) => log::error!("read settings.toml: {err}"),
@@ -257,7 +271,7 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     // empty = built-in default. Only trim hand-edited whitespace, never reset.
     settings.asr_model = settings.asr_model.trim().to_string();
 
-    if settings.hotkey.trim().is_empty() {
+    if settings.hotkey.trim().is_empty() || should_migrate_windows_fn(&settings.hotkey) {
         settings.hotkey = DEFAULT_HOTKEY.to_string();
     }
     if settings.enhance_prompt.trim().is_empty() {
@@ -301,6 +315,10 @@ fn normalize_settings(mut settings: Settings) -> Settings {
     }
 
     settings
+}
+
+fn should_migrate_windows_fn(stored: &str) -> bool {
+    cfg!(target_os = "windows") && stored.trim().eq_ignore_ascii_case("fn")
 }
 
 fn normalize_doubao_resource_id(stored: String) -> String {
@@ -605,6 +623,16 @@ fn validate_settings(settings: &Settings) -> Result<(), AppError> {
     if settings.hotkey.trim().is_empty() {
         return Err(AppError::Internal("trigger key must not be empty".into()));
     }
+    if should_migrate_windows_fn(&settings.hotkey) {
+        return Err(AppError::Internal(
+            "Windows does not expose Fn as a reliable global hotkey; use Ctrl+Shift+Space".into(),
+        ));
+    }
+    if should_migrate_windows_fn(&settings.compose_hotkey) {
+        return Err(AppError::Internal(
+            "Windows does not expose Fn as a reliable global hotkey".into(),
+        ));
+    }
     // 润色/改写键与写作键不能相同（前端 HotkeyRecorder 已实时拦，这里兜底防手改 toml）。
     let compose = settings.compose_hotkey.trim();
     if !compose.is_empty() && compose == settings.hotkey.trim() {
@@ -881,12 +909,12 @@ pub async fn test_doubao_streaming(app: AppHandle, wav_path: String) -> Result<S
 
     let pcm16 = read_wav_pcm16(&wav_path)?;
     let cfg = doubao_config_from_settings(&app)?;
-    log::info!(
-        "test_doubao_streaming: {} PCM bytes from {wav_path}",
-        pcm16.len()
-    );
+    log::info!("test_doubao_streaming: {} PCM bytes", pcm16.len());
     let text = client::transcribe_pcm16(&cfg, &pcm16).await?;
-    log::info!("test_doubao_streaming final text: {text}");
+    log::info!(
+        "test_doubao_streaming completed (chars={})",
+        text.chars().count()
+    );
     Ok(text)
 }
 
@@ -1024,6 +1052,18 @@ mod tests {
             settings.stepfun_endpoint,
             crate::asr::stepfun::config::ENDPOINT
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_normalize_migrates_legacy_fn_to_platform_default() {
+        let settings = normalize_settings(Settings {
+            hotkey: " fn ".into(),
+            ..Settings::default()
+        });
+
+        assert_eq!(settings.hotkey, "Ctrl+Shift+Space");
+        assert!(should_migrate_windows_fn("Fn"));
     }
 
     #[test]
@@ -1305,18 +1345,34 @@ mod tests {
     #[test]
     fn validate_allows_distinct_or_empty_compose_hotkey() {
         let distinct = Settings {
-            hotkey: "Fn".into(),
+            hotkey: DEFAULT_HOTKEY.into(),
             compose_hotkey: "F13".into(),
             ..Settings::default()
         };
         assert!(validate_settings(&distinct).is_ok());
 
         let empty_compose = Settings {
-            hotkey: "Fn".into(),
+            hotkey: DEFAULT_HOTKEY.into(),
             compose_hotkey: String::new(),
             ..Settings::default()
         };
         assert!(validate_settings(&empty_compose).is_ok());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn validate_rejects_fn_for_windows_hotkeys() {
+        let primary = Settings {
+            hotkey: "Fn".into(),
+            ..Settings::default()
+        };
+        assert!(validate_settings(&primary).is_err());
+
+        let compose = Settings {
+            compose_hotkey: "fn".into(),
+            ..Settings::default()
+        };
+        assert!(validate_settings(&compose).is_err());
     }
 
     #[test]

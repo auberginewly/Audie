@@ -25,7 +25,7 @@ export interface UseSettings {
   llmProviders: ProviderMetadata[];
   microphones: AudioDevice[];
   autoDevice: string | null;
-  update: (patch: Partial<Settings>) => Promise<void>;
+  update: (patch: Partial<Settings>) => Promise<boolean>;
 }
 
 export function useSettings(): UseSettings {
@@ -65,11 +65,15 @@ export function useSettings(): UseSettings {
     try {
       const raw = await invoke("update_settings", { patch });
       const parsed = SettingsSchema.safeParse(raw);
-      if (parsed.success) setSettings(parsed.data);
-      else console.error("settings parse failed (update):", parsed.error);
+      if (parsed.success) {
+        setSettings(parsed.data);
+        return true;
+      }
+      console.error("settings parse failed (update):", parsed.error);
     } catch (err) {
       console.error("update settings failed:", err);
     }
+    return false;
   };
 
   return {

@@ -12,7 +12,7 @@ import { getRuntimePlatform } from "../../lib/runtimePlatform";
 
 interface GeneralSectionProps {
   settings: Settings;
-  update: (patch: Partial<Settings>) => void;
+  update: (patch: Partial<Settings>) => Promise<boolean>;
   microphones: AudioDevice[];
   autoDevice: string | null;
 }
@@ -78,9 +78,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
           control={
             <HotkeyRecorder
               value={settings.hotkey}
-              onChange={(h: Hotkey) => {
-                update({ hotkey: h });
-              }}
+              onChange={(h: Hotkey) => update({ hotkey: h })}
               conflictWith={settings.compose_hotkey}
             />
           }
@@ -91,9 +89,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
           control={
             <HotkeyRecorder
               value={settings.compose_hotkey}
-              onChange={(h: Hotkey) => {
-                update({ compose_hotkey: h });
-              }}
+              onChange={(h: Hotkey) => update({ compose_hotkey: h })}
               conflictWith={settings.hotkey}
             />
           }
@@ -112,7 +108,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
               <Select
                 value={settings.ui_language}
                 onChange={(e) => {
-                  update({ ui_language: e.target.value as Language });
+                  void update({ ui_language: e.target.value as Language });
                 }}
               >
                 {LANGUAGES.map((language) => (
@@ -141,7 +137,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             devices={explicitDevices}
             value={settings.input_device || "auto"}
             onChange={(id) => {
-              update({ input_device: id === "auto" ? "" : id });
+              void update({ input_device: id === "auto" ? "" : id });
             }}
             level={micLevel}
           />
@@ -165,7 +161,7 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
             <Switch
               checked={settings.show_in_dock}
               onChange={(showInDock) => {
-                update({ show_in_dock: showInDock });
+                void update({ show_in_dock: showInDock });
               }}
             />
           }
