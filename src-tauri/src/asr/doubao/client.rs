@@ -14,8 +14,6 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, Stream, StreamExt};
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::handshake::client::Request;
-use tokio_tungstenite::tungstenite::http::{HeaderMap, HeaderValue};
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -33,41 +31,9 @@ const FINAL_TIMEOUT_SECS: u64 = 20;
 /// the already-upgraded session as accepted (auth is verified at the WS upgrade).
 const CONNECT_TEST_TIMEOUT_SECS: u64 = 8;
 
-/// Doubao auth mode. New console uses one API key; old console uses AppID plus
-/// Access Token.
-#[derive(Clone)]
-pub enum DoubaoAuth {
-    NewConsole {
-        api_key: String,
-    },
-    OldConsole {
-        app_id: String,
-        access_token: String,
-    },
-}
-
-impl DoubaoAuth {
-    pub fn from_settings(app_id: String, api_key_or_access_token: String) -> Self {
-        if app_id.trim().is_empty() {
-            Self::NewConsole {
-                api_key: api_key_or_access_token,
-            }
-        } else {
-            Self::OldConsole {
-                app_id,
-                access_token: api_key_or_access_token,
-            }
-        }
-    }
-}
-
-/// Connection parameters. Endpoint + resource id come from settings (non-secret).
-#[derive(Clone)]
-pub struct DoubaoStreamConfig {
-    pub endpoint: String,
-    pub auth: DoubaoAuth,
-    pub resource_id: String,
-}
+use super::codec::pcm16_from_samples;
+use super::config::{build_request, new_request_id};
+pub use super::config::{DoubaoAuth, DoubaoStreamConfig};
 
 pub struct DoubaoStreamingProvider {
     config: DoubaoStreamConfig,
@@ -306,44 +272,6 @@ where
     Ok(latest)
 }
 
-/// Build the WS handshake request carrying Doubao's auth headers. Old console
-/// uses AppID + Access Token; new console uses X-Api-Key only.
-fn build_request(cfg: &DoubaoStreamConfig) -> AppResult<Request> {
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-    let mut request = cfg
-        .endpoint
-        .as_str()
-        .into_client_request()
-        .map_err(|err| AppError::Network(format!("doubao endpoint invalid: {err}")))?;
-    let request_id = new_request_id();
-    let headers = request.headers_mut();
-    match &cfg.auth {
-        DoubaoAuth::NewConsole { api_key } => {
-            insert_header(headers, "X-Api-Key", api_key.trim())?;
-        }
-        DoubaoAuth::OldConsole {
-            app_id,
-            access_token,
-        } => {
-            insert_header(headers, "X-Api-App-Key", app_id.trim())?;
-            insert_header(headers, "X-Api-Access-Key", access_token.trim())?;
-        }
-    }
-    insert_header(headers, "X-Api-Resource-Id", &cfg.resource_id)?;
-    insert_header(headers, "X-Api-Request-Id", &request_id)?;
-    insert_header(headers, "X-Api-Connect-Id", &request_id)?;
-    insert_header(headers, "X-Api-Sequence", "-1")?;
-    Ok(request)
-}
-
-fn insert_header(headers: &mut HeaderMap, name: &'static str, value: &str) -> AppResult<()> {
-    let header_value = HeaderValue::from_str(value)
-        .map_err(|err| AppError::Internal(format!("doubao header {name} invalid: {err}")))?;
-    headers.insert(name, header_value);
-    Ok(())
-}
-
 /// Construct the full-client-request JSON. Streaming PCM uses pcm/raw @ 16k.
 /// No corpus/hotwords here — the personal dictionary is P3.
 fn build_full_request_payload(request_id: &str) -> AppResult<Vec<u8>> {
@@ -372,65 +300,6 @@ fn build_full_request_payload(request_id: &str) -> AppResult<Vec<u8>> {
 
 fn audio_chunk_to_pcm16(chunk: &AudioChunk) -> AppResult<Vec<u8>> {
     pcm16_from_samples(&chunk.samples, chunk.sample_rate, chunk.channels)
-}
-
-/// Downmix to mono, resample to Doubao's 16 kHz, and encode as little-endian
-/// 16-bit PCM. Shared by the live chunk path and the whole-buffer batch path.
-fn pcm16_from_samples(samples: &[f32], sample_rate: u32, channels: u16) -> AppResult<Vec<u8>> {
-    let mono = downmix_to_mono(samples, channels);
-    let resampled = resample_linear(&mono, sample_rate, config::STREAMING_SAMPLE_RATE)?;
-    let mut pcm = Vec::with_capacity(resampled.len() * 2);
-    for sample in resampled {
-        let value = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        pcm.extend_from_slice(&value.to_le_bytes());
-    }
-    Ok(pcm)
-}
-
-fn downmix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    let channels = channels.max(1) as usize;
-    if channels == 1 {
-        return samples.to_vec();
-    }
-
-    samples
-        .chunks(channels)
-        .map(|frame| frame.iter().copied().sum::<f32>() / frame.len() as f32)
-        .collect()
-}
-
-fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> AppResult<Vec<f32>> {
-    if from_rate == 0 {
-        return Err(AppError::Device("audio chunk sample rate is zero".into()));
-    }
-    if samples.is_empty() || from_rate == to_rate {
-        return Ok(samples.to_vec());
-    }
-
-    let output_len = ((samples.len() as u64 * to_rate as u64) / from_rate as u64) as usize;
-    if output_len == 0 {
-        return Ok(Vec::new());
-    }
-
-    let ratio = from_rate as f32 / to_rate as f32;
-    let mut output = Vec::with_capacity(output_len);
-    for index in 0..output_len {
-        let source = index as f32 * ratio;
-        let left = source.floor() as usize;
-        let right = (left + 1).min(samples.len() - 1);
-        let t = source - left as f32;
-        output.push(samples[left] * (1.0 - t) + samples[right] * t);
-    }
-    Ok(output)
-}
-
-fn new_request_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("audie-{nanos:032x}")
 }
 
 fn classify_ws_error(err: &WsError, cfg: &DoubaoStreamConfig) -> AppError {
@@ -486,87 +355,5 @@ fn classify_codec_error(err: codec::CodecError) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::asr::AudioChunk;
-
-    #[test]
-    fn full_request_payload_has_expected_audio_fields() {
-        let bytes = build_full_request_payload("req-123").expect("payload encodes");
-        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("valid json");
-
-        assert_eq!(value["audio"]["format"], config::STREAMING_AUDIO_FORMAT);
-        assert_eq!(value["audio"]["codec"], config::STREAMING_AUDIO_CODEC);
-        assert_eq!(value["audio"]["rate"], config::STREAMING_SAMPLE_RATE);
-        assert_eq!(value["request"]["reqid"], "req-123");
-        assert_eq!(value["request"]["model_name"], "bigmodel");
-        assert_eq!(value["request"]["enable_nonstream"], false);
-    }
-
-    #[test]
-    fn build_request_uses_new_console_api_key_when_app_id_is_blank() {
-        let cfg = DoubaoStreamConfig {
-            endpoint: config::DEFAULT_ENDPOINT.into(),
-            auth: DoubaoAuth::from_settings(" ".into(), "api-key".into()),
-            resource_id: config::DEFAULT_RESOURCE_ID.into(),
-        };
-
-        let request = build_request(&cfg).expect("request builds");
-        let headers = request.headers();
-
-        assert_eq!(headers["X-Api-Key"], "api-key");
-        assert!(!headers.contains_key("X-Api-App-Key"));
-        assert!(!headers.contains_key("X-Api-Access-Key"));
-        assert_eq!(headers["X-Api-Sequence"], "-1");
-    }
-
-    #[test]
-    fn build_request_uses_old_console_app_id_and_access_token_when_app_id_is_set() {
-        let cfg = DoubaoStreamConfig {
-            endpoint: config::DEFAULT_ENDPOINT.into(),
-            auth: DoubaoAuth::from_settings("app-id".into(), "access-token".into()),
-            resource_id: config::DEFAULT_RESOURCE_ID.into(),
-        };
-
-        let request = build_request(&cfg).expect("request builds");
-        let headers = request.headers();
-
-        assert_eq!(headers["X-Api-App-Key"], "app-id");
-        assert_eq!(headers["X-Api-Access-Key"], "access-token");
-        assert!(!headers.contains_key("X-Api-Key"));
-        assert_eq!(headers["X-Api-Sequence"], "-1");
-    }
-
-    #[test]
-    fn audio_chunk_to_pcm16_downmixes_stereo() {
-        let chunk = AudioChunk {
-            samples: vec![1.0, -1.0, 0.5, 0.5],
-            sample_rate: config::STREAMING_SAMPLE_RATE,
-            channels: 2,
-            sequence: 1,
-            is_final: false,
-        };
-
-        let pcm = audio_chunk_to_pcm16(&chunk).expect("chunk converts");
-
-        assert_eq!(pcm, vec![0, 0, 255, 63]);
-    }
-
-    #[test]
-    fn audio_chunk_to_pcm16_resamples_to_16k_mono() {
-        let chunk = AudioChunk {
-            samples: vec![0.0, 1.0, 0.0, -1.0],
-            sample_rate: 8_000,
-            channels: 1,
-            sequence: 1,
-            is_final: false,
-        };
-
-        let pcm = audio_chunk_to_pcm16(&chunk).expect("chunk converts");
-
-        assert_eq!(pcm.len(), 16);
-        assert_eq!(&pcm[0..2], &[0, 0]);
-        assert_eq!(&pcm[4..6], &[255, 127]);
-        assert_eq!(&pcm[12..14], &[1, 128]);
-    }
-}
+#[path = "client/tests.rs"]
+mod tests;

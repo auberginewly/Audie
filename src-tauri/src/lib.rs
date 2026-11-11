@@ -89,9 +89,9 @@ pub fn run() {
             commands::permissions::restart_app,
             commands::hotkeys::begin_trigger_capture,
             commands::hotkeys::end_trigger_capture,
-            provider_test::test_provider,
-            provider_test::list_provider_models,
-            provider_test::discover_local_llm,
+            provider_test::connection::test_provider,
+            provider_test::models::list_provider_models,
+            provider_test::models::discover_local_llm,
             commands::providers::test_doubao_connection,
             // Overlay capsule controls (fe.8b / fe.8c).
             commands::dictation::confirm_recording,
