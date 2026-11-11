@@ -13,7 +13,7 @@ P0–P3 主体及 onboarding/Home/History、触发键自定义、设备选择已
 
 ## 实现与验证范围
 
-- 🟡 **本轮 macOS 收尾核对**（2026-11-11）：本地 `0.2.1` Apple Silicon DMG 构建、CRC、包内及临时安装副本签名完整性、arm64/版本核对通过；临时副本已启动，设置文件摘要未变，原 `/Applications` 安装未覆盖。尚未完成真实升级/迁移验收。已确认发行版旧账户 LLM 凭据仍在，但模型卡片未识别该旧账户，不能据“未配置”标签判定凭据丢失；发行副本还需输入监控授权；润色、改写、写作及重启后授权/配置保持仍待原生验收，详见 [本轮验收记录](../openspec/changes/reconcile-macos-readiness/readiness-evidence.md)。
+- 🟡 **本轮 macOS 收尾核对**（2026-11-11）：本地 `0.2.1` Apple Silicon DMG 构建、CRC、包内及临时安装副本签名完整性、arm64/版本核对通过；临时副本已启动，设置文件摘要未变，原 `/Applications` 安装未覆盖。尚未完成真实升级/迁移验收。已确认发行版旧账户 LLM 凭据仍在，但模型卡片未识别该旧账户。原 ad-hoc 副本经 Launch Services 启动的输入监控问题仍未解决；稳定开发签名直接运行已注册 Fn。真人润色请求收到 HTTP 401，已核对原文兜底粘贴，不能标为润色成功；作者反馈反复钥匙串密码提示后已退出测试副本并恢复原应用。LLM 成功、改写、写作与授权保持仍待验收，详见 [本轮验收记录](../openspec/changes/reconcile-macos-readiness/readiness-evidence.md)。
 
 - ✅ **工程后续已实施**（2026-11-11；当前基线 `d8ce285` 的 [双平台 CI 42982804213](https://github.com/auberginewly/Audie/actions/runs/42982804213) 已通过）：修复 Windows 测试程序系统清单与退役 macOS runner，构建修复已获远端双平台 CI 通过；provider/前端诊断不再透传响应正文、凭据 URL、payload 或未知异常；新增 400 行/公共指南格式和链接检查，接入 CI，并在本机显式安装、实跑 pre-commit。pipeline 用中文解释生命周期边界并改为显式导入，76 个函数/测试正文不变。Rust 222 passed / 1 ignored、前端 47 passed、fmt/clippy、typecheck/lint（0 error / 11 既有模式 warning）/format/build、macOS 原生构建通过。已实跑原生录音、取消/撤销、空结果与终态；**真人普通听写（临时文档 24→48 字符）、录音中取消后撤销恢复粘贴（48→62 字符）已由作者反馈及实际日志/目标字段核对通过；改写/写作、处理中取消、失败重试及多屏等完整矩阵仍待核实**。详见 [集成记录](../openspec/changes/harden-engineering-checks/integration-evidence.md) 与 [原生记录](../openspec/changes/harden-engineering-checks/native-evidence.md)。
 
