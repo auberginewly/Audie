@@ -1,0 +1,36 @@
+$ node scripts/run-tests.mjs
+Discovered 7 test files.
+✔ sidebar version comes from packaged application metadata (0.422541ms)
+✔ offers the 7, 30, and 60 day windows (0.600333ms)
+✔ zero-fills a continuous local-date window across a month boundary (3.598542ms)
+✔ creates seven pixel-even ticks including both edges (0.147ms)
+✔ maps the first and last numeric ticks back to date labels (0.095084ms)
+✔ captures the Windows default shortcut in canonical order (0.640667ms)
+✔ captures supported letters, digits, function keys, and navigation keys (0.21875ms)
+✔ waits for a main key and ignores repeated keydown events (0.054917ms)
+✔ rejects Windows-key, Caps Lock, unsupported, and reserved combinations (0.07075ms)
+✔ a permission request stays incomplete until macOS reports it granted (0.638875ms)
+✔ a newly granted Input Monitoring permission requires a restart (0.064917ms)
+✔ an unanswered or denied request falls back to System Settings (0.050041ms)
+✔ macOS onboarding permissions require all three effective grants (0.053125ms)
+✔ Windows onboarding only requires the microphone permission (0.04175ms)
+✔ runtime platform detection distinguishes Windows and macOS webviews (0.041167ms)
+✔ ASR catalog does not offer Groq (3.945083ms)
+✔ application source contains no Groq ASR implementation (20.877ms)
+✔ active model badges require the model to be configured (1.334541ms)
+✔ parses all persisted ASR endpoints (1.237584ms)
+✔ rejects an empty provider endpoint (0.28075ms)
+✔ prints the shared stable release version (90.801667ms)
+✔ rejects mismatched version sources (63.622917ms)
+✔ rejects a non-stable semantic version (75.0955ms)
+✔ rejects release notes for another version (66.535041ms)
+✔ rejects release notes with Chinese before English (70.0715ms)
+✔ rejects an existing tag when an unreleased version is required (133.742833ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 589.68725

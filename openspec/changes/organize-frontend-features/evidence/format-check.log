@@ -1,0 +1,3 @@
+$ prettier --check "src/**/*.{ts,tsx,css,mjs}" "tests/**/*.mjs" "scripts/**/*.mjs"
+Checking formatting...
+All matched files use Prettier code style!

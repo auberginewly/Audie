@@ -1,0 +1,34 @@
+✔ offers the 7, 30, and 60 day windows (0.549792ms)
+✔ zero-fills a continuous local-date window across a month boundary (0.773333ms)
+✔ creates seven pixel-even ticks including both edges (0.136708ms)
+✔ maps the first and last numeric ticks back to date labels (0.091667ms)
+✔ ASR catalog does not offer Groq (2.000833ms)
+✔ application source contains no Groq ASR implementation (10.293083ms)
+✔ active model badges require the model to be configured (0.476ms)
+✔ a permission request stays incomplete until macOS reports it granted (0.647583ms)
+✔ a newly granted Input Monitoring permission requires a restart (0.062542ms)
+✔ an unanswered or denied request falls back to System Settings (0.048833ms)
+✔ macOS onboarding permissions require all three effective grants (0.0645ms)
+✔ Windows onboarding only requires the microphone permission (0.043541ms)
+✔ runtime platform detection distinguishes Windows and macOS webviews (0.047459ms)
+✔ prints the shared stable release version (66.1375ms)
+✔ rejects mismatched version sources (52.357416ms)
+✔ rejects a non-stable semantic version (53.383167ms)
+✔ rejects release notes for another version (52.055417ms)
+✔ rejects release notes with Chinese before English (51.716292ms)
+✔ rejects an existing tag when an unreleased version is required (86.096208ms)
+✔ parses all persisted ASR endpoints (1.201458ms)
+✔ rejects an empty provider endpoint (0.284792ms)
+✔ sidebar version comes from packaged application metadata (0.424208ms)
+✔ captures the Windows default shortcut in canonical order (0.593625ms)
+✔ captures supported letters, digits, function keys, and navigation keys (0.219875ms)
+✔ waits for a main key and ignores repeated keydown events (0.056208ms)
+✔ rejects Windows-key, Caps Lock, unsupported, and reserved combinations (0.07675ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 436.839208

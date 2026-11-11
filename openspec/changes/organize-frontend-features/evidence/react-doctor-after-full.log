@@ -1,0 +1,113 @@
+✔ Select projects › audie
+  
+Agent guidance
+  - Treat React Doctor diagnostics as starting hypotheses. Read the relevant code before confirming or suppressing each finding.
+  - For each group, decide true positive, false positive, or needs-human-review, then assign high/medium/low confidence.
+  - Do not suppress a finding without evidence from the file in question. Confidence requires code context.
+  - Understand the root cause before editing. Fix the underlying code instead of changing react-doctor config or suppressing rules unless explicitly asked.
+  - Investigate deeply where relevant: race conditions, security-sensitive flows, state propagation, multi-file refactors, and downstream dependency chains.
+  - Ignore pure style preferences, theoretical issues without real impact, missing features, and unrelated pre-existing code.
+  - Start with high-confidence fixes that preserve behavior. Leave low-confidence or product-dependent changes as notes.
+  - Run `npx react-doctor@latest --verbose --scope changed` before and after changes, plus relevant tests after each focused batch.
+  - When available, spawn subagents or isolated worktrees for independent rule families, then review and merge only the best safe fixes.
+  - Split unrelated, broad, or behavior-changing work into separate PRs/branches instead of one large cleanup.
+  - When one rule spans dozens of files (a migration-scale change), fix a representative sample first, confirm the recipe holds, and get the code owner's sign-off before changing the rest. Don't mass-fix a broad pattern in one unreviewed pass.
+  - For confirmed issues that cannot be fixed now, create GitHub issues with the rule, file/line, confidence, impact, and proposed fix.
+  - If a fix needs an API, UX, or architecture decision, stop and ask before editing.
+
+✔ Scanned 101 files in 3.9s
+
+React Doctor — audie
+Score: 52 / 100 Critical
+
+38 issues
+Security: 1 warning
+Accessibility: 18 warnings
+Maintainability: 6 warnings
+Bugs: 1 error, 9 warnings
+Performance: 3 warnings
+
+⚠ Plugin or updater trust boundary risk
+  react-doctor/plugin-update-trust-risk
+  .github/workflows/release.yml:138
+⚠ Interaction on static element ×5
+  react-doctor/no-static-element-interactions
+  src/components/ui/Dialog.tsx:22
+  src/components/ui/Menu.tsx:40
+  src/features/onboarding/SetupWizard.tsx:135
+  src/features/providers/ModelConfigDialog.tsx:112
+  src/features/settings/SettingsDialog.tsx:100
+⚠ Dialog without accessible name ×4
+  react-doctor/dialog-has-accessible-name
+  src/components/ui/Dialog.tsx:26
+  src/features/onboarding/SetupWizard.tsx:139
+  src/features/providers/ModelConfigDialog.tsx:116
+  src/features/settings/SettingsDialog.tsx:104
+⚠ Custom modal instead of dialog ×4
+  react-doctor/prefer-html-dialog
+  src/components/ui/Dialog.tsx:27
+  src/features/onboarding/SetupWizard.tsx:140
+  src/features/providers/ModelConfigDialog.tsx:117
+  src/features/settings/SettingsDialog.tsx:105
+⚠ Non-component export in component file ×3
+  react-doctor/only-export-components
+  src/components/ui/Icon.tsx:75
+  src/features/dictation/CapsuleToast.tsx:54
+  src/i18n/index.tsx:12
+⚠ Array index used as a key ×3
+  react-doctor/no-array-index-as-key
+  src/components/ui/Keycap.tsx:72
+  src/components/ui/Menu.tsx:66
+  src/features/home/HomeScreen.tsx:109
+⚠ Click handler missing keyboard handler
+  react-doctor/click-events-have-key-events
+  src/components/ui/Menu.tsx:40
+⚠ Control missing accessible label
+  react-doctor/control-has-associated-label
+  src/components/ui/Switch.tsx:22
+⚠ Heavy library loaded eagerly
+  react-doctor/prefer-dynamic-import
+  src/features/home/HomeScreen.tsx:8
+⚠ State adjusted after a prop changes ×5
+  react-doctor/no-adjust-state-on-prop-change
+  src/features/onboarding/SetupWizard.tsx:53
+  src/features/onboarding/useOnboarding.ts:36
+  src/features/providers/ModelConfigDialog.tsx:51
+  src/features/providers/ModelConfigDialog.tsx:52
+  src/features/settings/SettingsDialog.tsx:75
+⚠ React function has high control-flow complexity ×3
+  react-doctor/no-high-complexity-react-function
+  src/features/onboarding/steps/PermissionStep.tsx:8
+  src/features/onboarding/steps/TestStep.tsx:23
+  src/features/providers/ModelSection.tsx:148
+✖ Effect subscription or timer never cleaned up
+  react-doctor/effect-needs-cleanup
+  src/features/permissions/usePermissions.ts:98
+⚠ Label missing associated control ×3
+  react-doctor/label-has-associated-control
+  src/features/providers/model-config/ModelBody.tsx:32
+  src/features/providers/model-config/ModelBody.tsx:150
+  src/features/providers/model-config/RecommendedLocalModels.tsx:22
+⚠ await inside a loop
+  react-doctor/async-await-in-loop
+  src/features/providers/model-config/modelConfigActions.ts:107
+⚠ All state reset on prop change
+  react-doctor/no-reset-all-state-on-prop-change
+  src/features/settings/SettingsDialog.tsx:72
+⚠ Context value from an unmemoized local literal
+  react-doctor/context-provider-value-from-unmemoized-local-literal
+  src/i18n/index.tsx:38
+  Full diagnostics written to /var/folders/nj/h5ghbg792f3cqjjhml4z73p40000gn/T/react-doctor-065b07bc-07dc-4f71-82f0-1968c1008945
+
+  ────────────────────────────────────────────────────────────
+
+  Share: https://react.doctor/share?p=audie&s=52&e=1&w=37&f=20
+  Tell others how you did on socials
+
+  Docs: https://react.doctor/docs
+  Learn more about fixing issues, setting up CI/CD, and
+  configuring rules with a config file
+
+  GitHub: https://github.com/millionco/react-doctor
+  Report issues and star the repository!
+

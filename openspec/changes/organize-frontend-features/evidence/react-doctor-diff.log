@@ -1,0 +1,48 @@
+npm warn exec The following package was not found and will be installed: react-doctor@0.9.22
+The `--diff` flag is deprecated; use `--scope changed` (add `--base <ref>` to pin the base) instead.
+✔ Select projects › audie
+Scanning changes: codex/reorganize-modules → origin/main
+
+  
+Agent guidance
+  - Treat React Doctor diagnostics as starting hypotheses. Read the relevant code before confirming or suppressing each finding.
+  - For each group, decide true positive, false positive, or needs-human-review, then assign high/medium/low confidence.
+  - Do not suppress a finding without evidence from the file in question. Confidence requires code context.
+  - Understand the root cause before editing. Fix the underlying code instead of changing react-doctor config or suppressing rules unless explicitly asked.
+  - Investigate deeply where relevant: race conditions, security-sensitive flows, state propagation, multi-file refactors, and downstream dependency chains.
+  - Ignore pure style preferences, theoretical issues without real impact, missing features, and unrelated pre-existing code.
+  - Start with high-confidence fixes that preserve behavior. Leave low-confidence or product-dependent changes as notes.
+  - Run `npx react-doctor@latest --verbose --scope changed` before and after changes, plus relevant tests after each focused batch.
+  - When available, spawn subagents or isolated worktrees for independent rule families, then review and merge only the best safe fixes.
+  - Split unrelated, broad, or behavior-changing work into separate PRs/branches instead of one large cleanup.
+  - When one rule spans dozens of files (a migration-scale change), fix a representative sample first, confirm the recipe holds, and get the code owner's sign-off before changing the rest. Don't mass-fix a broad pattern in one unreviewed pass.
+  - For confirmed issues that cannot be fixed now, create GitHub issues with the rule, file/line, confidence, impact, and proposed fix.
+  - If a fix needs an API, UX, or architecture decision, stop and ask before editing.
+
+✔ Scanned 4 files in 6.1s
+
+React Doctor — audie
+Score: 100 / 100 Great
+
+✔ No issues found!
+  Full diagnostics written to /var/folders/nj/h5ghbg792f3cqjjhml4z73p40000gn/T/react-doctor-f0df16c1-5c3a-4548-a085-3c61081e8d50
+
+  ────────────────────────────────────────────────────────────
+
+  Share: https://react.doctor/share?p=audie&s=100
+  Tell others how you did on socials
+
+  Docs: https://react.doctor/docs
+  Learn more about fixing issues, setting up CI/CD, and
+  configuring rules with a config file
+
+  GitHub: https://github.com/millionco/react-doctor
+  Report issues and star the repository!
+
+
+React Doctor is not installed in this project.
+Ask the user if they would like to set it up, then run:
+
+  npx react-doctor install --yes
+
+This adds agent skill files, a `doctor` package script, and react-doctor as a dev dependency.

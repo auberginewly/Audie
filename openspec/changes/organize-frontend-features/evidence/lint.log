@@ -1,0 +1,155 @@
+$ eslint src/ tests/ scripts/
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/App.tsx
+  71:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/audio/DevicePicker.tsx
+  28:15  warning  Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read  @typescript-eslint/prefer-nullish-coalescing
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/audio/useMicMonitor.ts
+  29:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  33:68  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  41:51  warning  Unexpected empty arrow function                              @typescript-eslint/no-empty-function
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/dictation/Capsule.tsx
+  124:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/dictation/Capsule.tsx:124:7
+  122 |     if (state !== "RECORDING") {
+  123 |       startRef.current = null;
+> 124 |       setElapsed(0);
+      |       ^^^^^^^^^^ Avoid calling setState() directly within an effect
+  125 |       return;
+  126 |     }
+  127 |     let n = 0;  react-hooks/set-state-in-effect
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/dictation/overlayCommands.ts
+  6:27  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/dictation/useAudioLevels.ts
+  37:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/dictation/useRecordingFlow.ts
+  46:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  61:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  74:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/history/HistoryScreen.tsx
+   91:58  warning  Unexpected empty arrow function                              @typescript-eslint/no-empty-function
+  101:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/history/useHistory.ts
+  39:17  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  50:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/home/useUsageStats.ts
+  27:17  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  38:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/onboarding/SetupWizard.tsx
+  53:15  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/onboarding/SetupWizard.tsx:53:15
+  51 |
+  52 |   useEffect(() => {
+> 53 |     if (open) setStep(0);
+     |               ^^^^^^^ Avoid calling setState() directly within an effect
+  54 |   }, [open, welcome]);
+  55 |   if (!open) return null;
+  56 |  react-hooks/set-state-in-effect
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/permissions/useInputMonitoring.ts
+  27:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/providers/ModelConfigDialog.tsx
+  45:5   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/providers/ModelConfigDialog.tsx:45:5
+  43 |     const preset = llmPresetForModelId(model.id);
+  44 |     const active = llmModelIdForBaseUrl(settings.openai_compatible_base_url) === model.id;
+> 45 |     setLlmDraft({
+     |     ^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  46 |       baseUrl: active ? settings.openai_compatible_base_url : preset.baseUrl,
+  47 |       // Leave the model blank for a not-yet-active card — no guessed/hardcoded
+  48 |       // model. The user fetches the live list (获取最新模型) or types one in  react-hooks/set-state-in-effect
+  64:5   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/providers/ModelConfigDialog.tsx:64:5
+  62 |     let cancelled = false;
+  63 |     const baseUrl = llmPresetForModelId(model.id).baseUrl;
+> 64 |     setModelFetch({ tone: "pending", message: t("settings.config.fetching") });
+     |     ^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  65 |     listProviderModels(baseUrl, null)
+  66 |       .then((models) => {
+  67 |         if (cancelled) return;                                                                                                                                react-hooks/set-state-in-effect
+  76:15  warning  Prefer the safe `: unknown` for a `catch` callback variable                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/providers/ModelSection.tsx
+  178:15  warning  Prefer the safe `: unknown` for a `catch` callback variable                                                         @typescript-eslint/use-unknown-in-catch-callback-variable
+  308:55  warning  Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function  @typescript-eslint/no-confusing-void-expression
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/providers/model-config/ModelBody.tsx
+  160:10  warning  Prefer using an optional chain expression instead, as it's more concise and easier to read  @typescript-eslint/prefer-optional-chain
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/providers/useConfiguredModels.ts
+  35:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  52:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/settings/GeneralSection.tsx
+  43:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  64:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/settings/SettingsDialog.tsx
+  74:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/settings/SettingsDialog.tsx:74:7
+  72 |   useEffect(() => {
+  73 |     if (open) {
+> 74 |       setActiveId(SECTIONS[0].id);
+     |       ^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  75 |       setModelType("asr");
+  76 |     }
+  77 |   }, [open]);  react-hooks/set-state-in-effect
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/features/settings/useSettings.ts
+  53:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/lib/open.ts
+  6:28  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src/overlay.tsx
+  26:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+  38:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
+
+✖ 34 problems (0 errors, 34 warnings)
+

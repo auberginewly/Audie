@@ -6,10 +6,10 @@ import ReactDOM from "react-dom/client";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Capsule } from "./components/Overlay";
-import { useRecordingFlow } from "./hooks/useRecordingFlow";
+import { Capsule } from "./features/dictation/Capsule";
+import { useRecordingFlow } from "./features/dictation/useRecordingFlow";
 import { I18nProvider, isLanguage, type Language } from "./i18n";
-import { SettingsSchema } from "./types/settings";
+import { SettingsSchema } from "./features/settings/schema";
 import "./index.css";
 
 function OverlayRoot() {

@@ -1,0 +1,25 @@
+{
+  "method": "Headless Chrome CDP, production Vite preview, mocked Tauri IPC; no native OS or real provider validation",
+  "passed": 18,
+  "results": [
+    "main home mounts with settings and packaged version",
+    "history empty state mounts",
+    "model settings mounts",
+    "polish prompt editor mounts",
+    "rewrite prompt editor mounts",
+    "compose prompt editor mounts",
+    "general device picker mounts",
+    "about page mounts",
+    "rerun wizard opens from shared App coordinator",
+    "overlay registers state listener",
+    "recording waveform and controls mount",
+    "processing capsule mounts",
+    "polishing capsule mounts",
+    "success capsule mounts",
+    "cancel toast and undo action mount",
+    "undo action preserves command contract",
+    "error toast and retry action mount",
+    "retry action preserves command contract"
+  ],
+  "errors": []
+}

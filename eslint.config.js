@@ -37,5 +37,12 @@ export default tseslint.config(
       "react-hooks/refs": "warn",
     },
   },
+  {
+    extends: [js.configs.recommended],
+    files: ["src/**/__tests__/*.mjs", "tests/**/*.mjs", "scripts/**/*.mjs"],
+    languageOptions: {
+      globals: { console: "readonly", process: "readonly", URL: "readonly" },
+    },
+  },
   prettierConfig,
 );
