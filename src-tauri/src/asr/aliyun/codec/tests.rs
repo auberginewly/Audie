@@ -58,17 +58,16 @@ fn parse_task_failed_is_provider_error() {
     let raw = r#"{"header":{"event":"task-failed","error_message":"invalid api key"}}"#;
     let err = parse_server_event(raw).unwrap_err();
     assert!(matches!(err, AppError::Provider(_)));
-    assert!(err.message().contains("invalid api key"));
+    assert!(err.message().contains("API key"));
 }
 
 #[test]
 fn parse_error_event_is_provider_error() {
-    // A bare `error` event (vs `task-failed`) still maps to Provider, with the
-    // message pulled from `payload.message`.
+    // 裸 error 仍属于 Provider；正文可能回显用户内容，因此使用固定说明。
     let raw = r#"{"header":{"event":"error"},"payload":{"message":"model not found"}}"#;
     let err = parse_server_event(raw).unwrap_err();
     assert!(matches!(err, AppError::Provider(_)));
-    assert!(err.message().contains("model not found"));
+    assert!(err.message().contains("模型"));
 }
 
 #[test]
@@ -90,4 +89,27 @@ fn parse_missing_event_is_internal_error() {
 fn parse_invalid_json_is_internal_error() {
     let err = parse_server_event("not json").unwrap_err();
     assert!(matches!(err, AppError::Internal(_)));
+}
+
+#[test]
+fn privacy_server_failures_and_unknown_events_do_not_echo_payload() {
+    for raw in [
+        r#"{"header":{"event":"task-failed","error_message":"PRIVATE_AUTH_PROMPT"}}"#,
+        r#"{"header":{"event":"error"},"payload":{"message":"PRIVATE_SELECTION"}}"#,
+        r#"{"header":{"event":"PRIVATE_EVENT"}}"#,
+    ] {
+        let error = parse_server_event(raw).unwrap_err();
+        assert!(!error.to_string().contains("PRIVATE_"));
+    }
+}
+
+#[test]
+fn privacy_success_still_returns_transcript_content() {
+    let raw = r#"{"header":{"event":"task-finished"},"payload":{"output":{"text":"PRIVATE_TRANSCRIPT"}}}"#;
+    assert_eq!(
+        parse_server_event(raw).unwrap(),
+        ServerEvent::Finished {
+            text: Some("PRIVATE_TRANSCRIPT".into())
+        }
+    );
 }

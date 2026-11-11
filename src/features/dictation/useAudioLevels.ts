@@ -22,7 +22,7 @@ export function useAudioLevels(): LevelRing {
     listen<AudioLevel>(EVENT_AUDIO_LEVEL, (event) => {
       const parsed = AudioLevelSchema.safeParse(event.payload);
       if (!parsed.success) {
-        console.warn("invalid audio-level payload", parsed.error, event.payload);
+        console.warn("invalid audio-level payload");
         return;
       }
       setLevels((prev) => [parsed.data.level, prev[0], prev[1], prev[2]]);
@@ -34,8 +34,8 @@ export function useAudioLevels(): LevelRing {
           unlisten = fn;
         }
       })
-      .catch((err) => {
-        console.error("failed to subscribe audio-level:", err);
+      .catch(() => {
+        console.error("failed to subscribe audio-level:");
       });
 
     return () => {

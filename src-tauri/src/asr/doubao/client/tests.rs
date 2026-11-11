@@ -46,3 +46,35 @@ fn audio_chunk_to_pcm16_resamples_to_16k_mono() {
     assert_eq!(&pcm[4..6], &[255, 127]);
     assert_eq!(&pcm[12..14], &[1, 128]);
 }
+
+#[test]
+fn privacy_websocket_and_codec_failures_do_not_echo_private_context() {
+    let cfg = DoubaoStreamConfig {
+        endpoint: "wss://PRIVATE_USER:PRIVATE_KEY@example.test/?token=PRIVATE_QUERY".into(),
+        resource_id: "PRIVATE_RESOURCE".into(),
+        auth: config::DoubaoAuth::NewConsole {
+            api_key: "PRIVATE_KEY".into(),
+        },
+    };
+    let response = tokio_tungstenite::tungstenite::http::Response::builder()
+        .status(403)
+        .body(None)
+        .unwrap();
+    let error = classify_ws_error(&WsError::Http(response), &cfg);
+    assert_eq!(error.code(), "provider");
+    assert!(!error.to_string().contains("PRIVATE_"));
+    let error =
+        classify_ws_error_without_context(&WsError::Io(std::io::Error::other("PRIVATE_URL")));
+    assert_eq!(error.code(), "network");
+    assert!(!error.to_string().contains("PRIVATE_"));
+    for raw in [
+        codec::CodecError::ServerError {
+            code: Some(123),
+            message: "PRIVATE_BODY".into(),
+        },
+        codec::CodecError::Json("PRIVATE_JSON".into()),
+    ] {
+        let error = classify_codec_error(raw);
+        assert!(!error.to_string().contains("PRIVATE_"));
+    }
+}

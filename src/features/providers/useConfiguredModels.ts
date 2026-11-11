@@ -32,8 +32,8 @@ export function useConfiguredModels(): UseConfiguredModels {
       .then((pairs) => {
         setPresent(Object.fromEntries(pairs));
       })
-      .catch((err) => {
-        console.error("read secret presence failed:", err);
+      .catch(() => {
+        console.error("read secret presence failed:");
       });
   }, []);
 
@@ -49,8 +49,8 @@ export function useConfiguredModels(): UseConfiguredModels {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => {
-        console.error("focus subscribe failed:", err);
+      .catch(() => {
+        console.error("focus subscribe failed:");
       });
     return () => {
       cancelled = true;

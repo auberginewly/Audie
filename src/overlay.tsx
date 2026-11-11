@@ -23,8 +23,8 @@ function OverlayRoot() {
     };
     invoke("get_settings")
       .then(setFromRaw)
-      .catch((err) => {
-        console.error("overlay settings load failed:", err);
+      .catch(() => {
+        console.error("overlay settings load failed:");
       });
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -35,8 +35,8 @@ function OverlayRoot() {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => {
-        console.error("overlay settings subscribe failed:", err);
+      .catch(() => {
+        console.error("overlay settings subscribe failed:");
       });
     return () => {
       cancelled = true;

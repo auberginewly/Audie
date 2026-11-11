@@ -175,8 +175,8 @@ export function ModelSection({
         const parsed = DiscoveredLocalLlmSchema.array().safeParse(raw);
         if (parsed.success) setDiscovered(parsed.data);
       })
-      .catch((err) => {
-        console.error("discover local llm failed:", err);
+      .catch(() => {
+        console.error("discover local llm failed:");
       });
     return () => {
       cancelled = true;

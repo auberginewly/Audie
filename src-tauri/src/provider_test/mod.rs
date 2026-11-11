@@ -73,20 +73,19 @@ fn classify_reqwest_error(e: reqwest::Error) -> AppError {
     } else if e.is_connect() {
         AppError::Network("网络失败：无法连接 provider，请检查网络或代理".into())
     } else {
-        AppError::Network(format!("网络失败：provider 测试请求失败：{e}"))
+        AppError::Network("网络失败：provider 测试请求失败，请检查连接设置、网络或代理".into())
     }
 }
 
-fn classify_http_status(status: u16, body: &str) -> AppError {
+fn classify_http_status(status: u16, _body: &str) -> AppError {
     match status {
         401 => AppError::Provider("API key 无效，请检查设置".into()),
         403 => AppError::Network("provider 拒绝请求，可能是网络、代理或地区限制".into()),
         429 => AppError::Network("provider 请求过于频繁或额度受限，请稍后重试".into()),
         500..=599 => AppError::Network(format!("provider 服务端异常（{status}）")),
-        _ => {
-            let snippet: String = body.chars().take(200).collect();
-            AppError::Provider(format!("provider 拒绝请求（{status}）：{snippet}"))
-        }
+        _ => AppError::Provider(format!(
+            "provider 拒绝请求（{status}），请检查模型与连接设置"
+        )),
     }
 }
 

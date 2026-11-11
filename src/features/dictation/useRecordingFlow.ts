@@ -37,14 +37,14 @@ export function useRecordingFlow(): void {
       const parsed = StateChangeSchema.safeParse(event.payload);
       if (!parsed.success) {
         // Defensive: a malformed event means a Rust/TS contract drift.
-        console.warn("invalid state-change payload", parsed.error, event.payload);
+        console.warn("invalid state-change payload");
         return;
       }
       setState(parsed.data.to);
     })
       .then(track)
-      .catch((err) => {
-        console.error("failed to subscribe state-change:", err);
+      .catch(() => {
+        console.error("failed to subscribe state-change:");
       });
 
     // The ERROR state-change and this `error` event arrive as a pair; the latter
@@ -52,27 +52,27 @@ export function useRecordingFlow(): void {
     listen<AppErrorEvent>(EVENT_ERROR, (event) => {
       const parsed = AppErrorSchema.safeParse(event.payload);
       if (!parsed.success) {
-        console.warn("invalid error payload", parsed.error, event.payload);
+        console.warn("invalid error payload");
         return;
       }
       setError(parsed.data);
     })
       .then(track)
-      .catch((err) => {
-        console.error("failed to subscribe error:", err);
+      .catch(() => {
+        console.error("failed to subscribe error:");
       });
 
     listen<EnhanceProgressEvent>(EVENT_ENHANCE_PROGRESS, (event) => {
       const parsed = EnhanceProgressSchema.safeParse(event.payload);
       if (!parsed.success) {
-        console.warn("invalid enhance-progress payload", parsed.error, event.payload);
+        console.warn("invalid enhance-progress payload");
         return;
       }
       setEnhanceProgress(parsed.data);
     })
       .then(track)
-      .catch((err) => {
-        console.error("failed to subscribe enhance-progress:", err);
+      .catch(() => {
+        console.error("failed to subscribe enhance-progress:");
       });
 
     return () => {

@@ -83,8 +83,8 @@ export function usePermissions(): UsePermissions {
         if (!parsed.success) return null;
         applyStatus(key, parsed.data);
         return parsed.data;
-      } catch (error) {
-        console.error(`${key} status failed:`, error);
+      } catch {
+        console.error("permission status failed");
         return null;
       }
     },
@@ -129,8 +129,8 @@ export function usePermissions(): UsePermissions {
         if (cancelled) listener();
         else unlisten = listener;
       })
-      .catch((error: unknown) => {
-        console.error("focus subscribe failed:", error);
+      .catch(() => {
+        console.error("focus subscribe failed:");
       });
     return () => {
       cancelled = true;
@@ -163,8 +163,8 @@ export function usePermissions(): UsePermissions {
               openExternal(COMMANDS[key].settingsUrl);
             }
             startPolling(key);
-          } catch (error) {
-            console.error(`request ${key} failed:`, error);
+          } catch {
+            console.error("permission request failed");
             setPermissions((current) => ({
               ...current,
               [key]: { granted: false, phase: "needsSettings", loaded: true },

@@ -97,3 +97,10 @@ fn next_text_frame_maps_transport_error_to_network() {
         other => panic!("expected Network error, got {:?}", other.map(|_| "frame")),
     }
 }
+
+#[test]
+fn privacy_transport_failure_does_not_echo_nested_error() {
+    let error = classify_ws_error(WsError::Io(std::io::Error::other("PRIVATE_URL_QUERY_AUTH")));
+    assert_eq!(error.code(), "network");
+    assert!(!error.to_string().contains("PRIVATE_"));
+}

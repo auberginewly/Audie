@@ -58,8 +58,8 @@ export function TestStep({ hotkey, platform }: { hotkey?: Hotkey; platform: Runt
       }
     })
       .then(track)
-      .catch((e2: unknown) => {
-        console.error("test state-change subscribe failed:", e2);
+      .catch(() => {
+        console.error("test state-change subscribe failed:");
       });
 
     listen(EVENT_ERROR, (e) => {
@@ -70,8 +70,8 @@ export function TestStep({ hotkey, platform }: { hotkey?: Hotkey; platform: Runt
       }
     })
       .then(track)
-      .catch((e2: unknown) => {
-        console.error("test error subscribe failed:", e2);
+      .catch(() => {
+        console.error("test error subscribe failed:");
       });
 
     return () => {

@@ -21,11 +21,11 @@ export function useUsageStats(): UsageStats | null {
           if (parsed.success) {
             if (!cancelled) setStats(parsed.data);
           } else {
-            console.error("usage stats parse failed:", parsed.error);
+            console.error("usage stats parse failed:");
           }
         })
-        .catch((err) => {
-          console.error("load usage stats failed:", err);
+        .catch(() => {
+          console.error("load usage stats failed:");
         });
     };
 
@@ -35,8 +35,8 @@ export function useUsageStats(): UsageStats | null {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => {
-        console.error("subscribe history-updated failed:", err);
+      .catch(() => {
+        console.error("subscribe history-updated failed:");
       });
 
     return () => {

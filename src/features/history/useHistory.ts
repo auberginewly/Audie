@@ -33,11 +33,11 @@ export function useHistory(): UseHistory {
           if (parsed.success) {
             if (!cancelled) setEntries(parsed.data);
           } else {
-            console.error("history parse failed:", parsed.error);
+            console.error("history parse failed:");
           }
         })
-        .catch((err) => {
-          console.error("load history failed:", err);
+        .catch(() => {
+          console.error("load history failed:");
         });
     };
 
@@ -47,8 +47,8 @@ export function useHistory(): UseHistory {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => {
-        console.error("subscribe history-updated failed:", err);
+      .catch(() => {
+        console.error("subscribe history-updated failed:");
       });
 
     return () => {
@@ -60,16 +60,16 @@ export function useHistory(): UseHistory {
   const remove = async (id: number) => {
     try {
       await invoke("delete_history_entry", { id });
-    } catch (err) {
-      console.error("delete history entry failed:", err);
+    } catch {
+      console.error("delete history entry failed:");
     }
   };
 
   const clearAll = async () => {
     try {
       await invoke("clear_history");
-    } catch (err) {
-      console.error("clear history failed:", err);
+    } catch {
+      console.error("clear history failed:");
     }
   };
 

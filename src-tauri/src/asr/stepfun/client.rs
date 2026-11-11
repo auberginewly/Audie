@@ -58,7 +58,7 @@ impl AsrProvider for StepFunProvider {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()
-            .map_err(|e| AppError::Internal(format!("build stepfun http client: {e}")))?;
+            .map_err(|_| AppError::Internal("build stepfun http client".into()))?;
 
         let resp = client
             .post(&self.endpoint)
@@ -70,8 +70,7 @@ impl AsrProvider for StepFunProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            // Distinguish "server sent an empty error body" from "we failed to read
-            // the body" so logs/diagnostics aren't both rendered as an empty snippet.
+            // 消费响应但不将 provider 正文放入诊断；正文可能回显用户内容或凭据。
             let body = resp
                 .text()
                 .unwrap_or_else(|_| "<无法读取响应体>".to_string());
@@ -83,7 +82,7 @@ impl AsrProvider for StepFunProvider {
         // streaming because the product surfaces only the松手后 final (no partials).
         let raw = resp
             .text()
-            .map_err(|e| AppError::Network(format!("StepFun 读取响应失败：{e}")))?;
+            .map_err(|_| AppError::Network("StepFun 读取响应失败，请检查响应格式或重试".into()))?;
         parse_sse_stream(&raw)
     }
 }
@@ -151,7 +150,7 @@ pub fn parse_sse_data(data: &str) -> AppResult<Option<SseEvent>> {
     }
 
     let value: serde_json::Value = serde_json::from_str(data)
-        .map_err(|err| AppError::Internal(format!("stepfun SSE decode failed: {err}")))?;
+        .map_err(|_| AppError::Internal("stepfun SSE decode failed".into()))?;
 
     // Some StepFun errors arrive as a data-frame `error` object rather than a typed
     // event; check that first so a malformed `type` doesn't mask a real failure.
@@ -183,21 +182,11 @@ pub fn parse_sse_data(data: &str) -> AppResult<Option<SseEvent>> {
     }
 }
 
-/// Pull a human-readable message out of an `error` shape. StepFun's exact error
-/// schema is unverified, so accept both `{"error":{"message":...}}` and a flat
-/// `{"error":"..."}`/`{"message":...}`. TODO: confirm against official docs.
+/// 只判断服务端是否报告错误；provider 的 message 可能回显原文或凭据。
 fn extract_error_message(value: &serde_json::Value) -> Option<String> {
-    if let Some(err) = value.get("error") {
-        if let Some(message) = err.get("message").and_then(|m| m.as_str()) {
-            return Some(message.to_string());
-        }
-        if let Some(message) = err.as_str() {
-            return Some(message.to_string());
-        }
-        // An `error` object with no readable message still signals failure.
-        return Some(err.to_string());
-    }
-    None
+    value
+        .get("error")
+        .map(|_| "StepFun ASR 返回错误，请检查模型、额度或连接设置".into())
 }
 
 /// Walk a full SSE response body line by line, accumulating `delta` fragments and
@@ -283,21 +272,20 @@ fn classify_reqwest_error(e: reqwest::Error) -> AppError {
     } else if e.is_connect() {
         AppError::Network("无法连接 StepFun，请检查网络或代理".into())
     } else {
-        AppError::Network(format!("StepFun 请求失败：{e}"))
+        AppError::Network("StepFun 请求失败，请检查连接设置、网络或代理".into())
     }
 }
 
 /// Classify a StepFun HTTP status per §3.7: 401/403 = bad key (Provider), 429 /
 /// 5xx = transient (Network), other 4xx = Provider (rejected request).
-fn classify_http_status(status: u16, body: &str) -> AppError {
+fn classify_http_status(status: u16, _body: &str) -> AppError {
     match status {
         401 | 403 => AppError::Provider("StepFun API key 无效，请检查设置".into()),
         429 => AppError::Network("StepFun 请求过于频繁或额度受限，请稍后重试".into()),
         500..=599 => AppError::Network(format!("StepFun 服务端异常（{status}）")),
-        _ => {
-            let snippet: String = body.chars().take(200).collect();
-            AppError::Provider(format!("StepFun 拒绝请求（{status}）：{snippet}"))
-        }
+        _ => AppError::Provider(format!(
+            "StepFun 拒绝请求（{status}），请检查模型与连接设置"
+        )),
     }
 }
 

@@ -40,8 +40,8 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
       .then((enabled) => {
         if (alive) setLaunchAtLogin(enabled);
       })
-      .catch((err) => {
-        console.error("load launch-at-login failed:", err);
+      .catch(() => {
+        console.error("load launch-at-login failed:");
       })
       .finally(() => {
         if (alive) setLaunchAtLoginBusy(false);
@@ -61,8 +61,8 @@ export function GeneralSection({ settings, update, microphones, autoDevice }: Ge
       .then((enabled) => {
         setLaunchAtLogin(enabled);
       })
-      .catch((err) => {
-        console.error("update launch-at-login failed:", err);
+      .catch(() => {
+        console.error("update launch-at-login failed:");
         setLaunchAtLogin(previous);
       })
       .finally(() => {

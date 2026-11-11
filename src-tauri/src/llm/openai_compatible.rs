@@ -92,9 +92,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
             return Err(classify_http_status(status.as_u16(), &body));
         }
 
-        let parsed: ChatCompletionResponse = resp
-            .json()
-            .map_err(|e| AppError::Provider(format!("解析 OpenAI-compatible 响应失败：{e}")))?;
+        let parsed: ChatCompletionResponse = resp.json().map_err(|_| {
+            AppError::Provider("解析 OpenAI-compatible 响应失败，请检查响应格式或重试".into())
+        })?;
         let content = parsed
             .choices
             .into_iter()
@@ -126,20 +126,19 @@ fn classify_reqwest_error(e: reqwest::Error) -> AppError {
     } else if e.is_connect() {
         AppError::Network("无法连接 OpenAI-compatible，请检查网络或代理".into())
     } else {
-        AppError::Network(format!("OpenAI-compatible 请求失败：{e}"))
+        AppError::Network("OpenAI-compatible 请求失败，请检查连接设置、网络或代理".into())
     }
 }
 
-pub(crate) fn classify_http_status(status: u16, body: &str) -> AppError {
+pub(crate) fn classify_http_status(status: u16, _body: &str) -> AppError {
     match status {
         401 => AppError::Provider("OpenAI-compatible API key 无效，请检查设置".into()),
         403 => AppError::Network("OpenAI-compatible 拒绝请求，可能是网络、代理或地区限制".into()),
         429 => AppError::Network("OpenAI-compatible 请求过于频繁或额度受限，请稍后重试".into()),
         500..=599 => AppError::Network(format!("OpenAI-compatible 服务端异常（{status}）")),
-        _ => {
-            let snippet: String = body.chars().take(200).collect();
-            AppError::Provider(format!("OpenAI-compatible 拒绝请求（{status}）：{snippet}"))
-        }
+        _ => AppError::Provider(format!(
+            "OpenAI-compatible 拒绝请求（{status}），请检查模型与连接设置"
+        )),
     }
 }
 

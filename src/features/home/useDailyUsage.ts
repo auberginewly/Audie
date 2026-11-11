@@ -24,11 +24,11 @@ export function useDailyUsage(days: number): DailyUsage[] {
           if (parsed.success) {
             if (!cancelled) setRows(parsed.data);
           } else {
-            console.error("daily usage parse failed:", parsed.error);
+            console.error("daily usage parse failed:");
           }
         })
-        .catch((err: unknown) => {
-          console.error("load daily usage failed:", err);
+        .catch(() => {
+          console.error("load daily usage failed:");
         });
     };
 
@@ -38,8 +38,8 @@ export function useDailyUsage(days: number): DailyUsage[] {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err: unknown) => {
-        console.error("subscribe history-updated failed:", err);
+      .catch(() => {
+        console.error("subscribe history-updated failed:");
       });
 
     return () => {

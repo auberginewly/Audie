@@ -114,7 +114,7 @@ fn fetch_chat_model_ids(
     let client = reqwest::blocking::Client::builder()
         .timeout(timeout)
         .build()
-        .map_err(|err| AppError::Internal(format!("build model list client: {err}")))?;
+        .map_err(|_| AppError::Internal("build model list client".into()))?;
 
     let mut request = client.get(endpoint);
     // Local servers need no key; cloud providers do (401 surfaces as Provider).
@@ -131,7 +131,7 @@ fn fetch_chat_model_ids(
 
     let parsed: ModelsResponse = resp
         .json()
-        .map_err(|err| AppError::Provider(format!("解析模型列表失败：{err}")))?;
+        .map_err(|_| AppError::Provider("解析模型列表失败，请检查响应格式或重试".into()))?;
 
     let mut ids: Vec<String> = parsed
         .data

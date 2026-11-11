@@ -82,7 +82,7 @@ pub(super) fn build_request(cfg: &DoubaoStreamConfig) -> AppResult<Request> {
         .endpoint
         .as_str()
         .into_client_request()
-        .map_err(|err| AppError::Network(format!("doubao endpoint invalid: {err}")))?;
+        .map_err(|_| AppError::Network("doubao endpoint invalid".into()))?;
     let request_id = new_request_id();
     let headers = request.headers_mut();
     match &cfg.auth {
@@ -105,8 +105,9 @@ pub(super) fn build_request(cfg: &DoubaoStreamConfig) -> AppResult<Request> {
 }
 
 fn insert_header(headers: &mut HeaderMap, name: &'static str, value: &str) -> AppResult<()> {
-    let header_value = HeaderValue::from_str(value)
-        .map_err(|err| AppError::Internal(format!("doubao header {name} invalid: {err}")))?;
+    let header_value = HeaderValue::from_str(value).map_err(|_| {
+        AppError::Internal("doubao authentication header invalid; check credentials".into())
+    })?;
     headers.insert(name, header_value);
     Ok(())
 }

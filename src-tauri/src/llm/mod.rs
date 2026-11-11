@@ -40,9 +40,7 @@ pub(crate) fn build_provider(config: &EnhanceConfig) -> AppResult<Box<dyn LlmPro
                 )?,
             )))
         }
-        other => Err(AppError::Internal(format!(
-            "unsupported LLM provider: {other}"
-        ))),
+        _ => Err(AppError::Internal("unsupported LLM provider".into())),
     }
 }
 

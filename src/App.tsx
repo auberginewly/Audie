@@ -68,8 +68,8 @@ function App() {
         if (cancelled) fn();
         else unlisten = fn;
       })
-      .catch((err) => {
-        console.error("failed to subscribe open-settings:", err);
+      .catch(() => {
+        console.error("failed to subscribe open-settings:");
       });
     return () => {
       cancelled = true;

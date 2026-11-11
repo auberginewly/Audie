@@ -166,7 +166,7 @@ fn parse_server_error_is_routed_as_provider_error() {
     match err {
         CodecError::ServerError { code, message } => {
             assert_eq!(code, Some(45_000_001));
-            assert_eq!(message, "invalid token");
+            assert_eq!(message, "provider rejected request");
         }
         other => panic!("expected ServerError, got {other:?}"),
     }
@@ -235,4 +235,16 @@ fn build_synthetic_response(
     frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
     frame.extend_from_slice(body);
     frame
+}
+
+#[test]
+fn privacy_codec_error_display_and_debug_omit_server_body() {
+    let body = b"PRIVATE_TRANSCRIPT_KEY";
+    let mut frame = vec![0x11, msg_type::SERVER_ERROR_RESPONSE << 4, 0x00, 0x00];
+    frame.extend_from_slice(&123u32.to_be_bytes());
+    frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    frame.extend_from_slice(body);
+    let error = parse_server_packet(&frame).unwrap_err();
+    assert!(!error.to_string().contains("PRIVATE_"));
+    assert!(!format!("{error:?}").contains("PRIVATE_"));
 }

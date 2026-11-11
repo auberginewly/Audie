@@ -48,14 +48,14 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
         void onChange(next).then((saved) => {
           if (!saved) {
             setHint(t("settings.hotkey.saveFailed"));
-            void invoke("end_trigger_capture").catch((err: unknown) => {
-              console.error("restore trigger after failed save:", err);
+            void invoke("end_trigger_capture").catch(() => {
+              console.error("restore trigger after failed save:");
             });
           }
         });
       } else {
-        void invoke("end_trigger_capture").catch((err: unknown) => {
-          console.error("end capture failed:", err);
+        void invoke("end_trigger_capture").catch(() => {
+          console.error("end capture failed:");
         });
       }
     },
@@ -72,8 +72,8 @@ export function HotkeyRecorder({ value, onChange, conflictWith }: HotkeyRecorder
     () => () => {
       if (!active.current) return;
       active.current = false;
-      void invoke("end_trigger_capture").catch((err: unknown) => {
-        console.error("end capture on unmount failed:", err);
+      void invoke("end_trigger_capture").catch(() => {
+        console.error("end capture on unmount failed:");
       });
     },
     [],

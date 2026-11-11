@@ -44,7 +44,7 @@ pub fn build_run_task(task_id: &str, model: &str) -> AppResult<String> {
         }
     });
     serde_json::to_string(&frame)
-        .map_err(|err| AppError::Internal(format!("aliyun run-task encode failed: {err}")))
+        .map_err(|_| AppError::Internal("aliyun run-task encode failed".into()))
 }
 
 /// Build the `finish-task` frame telling DashScope the input stream is done so it
@@ -59,7 +59,7 @@ pub fn build_finish_task(task_id: &str) -> AppResult<String> {
         "payload": { "input": {} }
     });
     serde_json::to_string(&frame)
-        .map_err(|err| AppError::Internal(format!("aliyun finish-task encode failed: {err}")))
+        .map_err(|_| AppError::Internal("aliyun finish-task encode failed".into()))
 }
 
 /// A classified server event. `text` carries the latest recognition (may be empty);
@@ -79,7 +79,7 @@ pub enum ServerEvent {
 /// `Internal` (protocol violation, not the user's fault).
 pub fn parse_server_event(raw: &str) -> AppResult<ServerEvent> {
     let value: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|err| AppError::Internal(format!("aliyun event decode failed: {err}")))?;
+        .map_err(|_| AppError::Internal("aliyun event decode failed".into()))?;
 
     let event = value
         .get("header")
@@ -97,35 +97,11 @@ pub fn parse_server_event(raw: &str) -> AppResult<ServerEvent> {
         }),
         // Both `task-failed` and a bare `error` event carry a server-side rejection
         // (bad key / quota / model-not-found) → Provider per §3.7.
-        "task-failed" | "error" => Err(AppError::Provider(format!(
-            "aliyun {event}: {}",
-            error_message(&value)
-        ))),
-        other => Err(AppError::Internal(format!(
-            "aliyun unexpected event: {other}"
-        ))),
+        "task-failed" | "error" => Err(AppError::Provider(
+            "通义 ASR 任务失败，请检查 API key、模型与额度".into(),
+        )),
+        _ => Err(AppError::Internal("aliyun unexpected event".into())),
     }
-}
-
-/// Pull a human-readable error string from a failure frame. DashScope buries the
-/// message under different keys depending on the failure path, so try the known
-/// spots before falling back to a generic message.
-/// TODO: confirm the canonical error field(s) against official docs.
-fn error_message(value: &serde_json::Value) -> String {
-    let header = value.get("header");
-    for key in ["error_message", "message"] {
-        if let Some(msg) = header.and_then(|h| h.get(key)).and_then(|m| m.as_str()) {
-            return msg.to_string();
-        }
-    }
-    if let Some(msg) = value
-        .get("payload")
-        .and_then(|p| p.get("message"))
-        .and_then(|m| m.as_str())
-    {
-        return msg.to_string();
-    }
-    "通义 ASR 任务失败".to_string()
 }
 
 /// Pull recognized text from `payload.output.sentence.text` (the documented Fun-ASR

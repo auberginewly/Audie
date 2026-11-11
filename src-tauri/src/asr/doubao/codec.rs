@@ -65,7 +65,7 @@ pub enum CodecError {
     Gzip(String),
     #[error("doubao json decode failed: {0}")]
     Json(String),
-    #[error("doubao server error: {message}")]
+    #[error("doubao server error (code {code:?})")]
     ServerError { code: Option<u32>, message: String },
 }
 
@@ -220,8 +220,8 @@ pub fn parse_server_packet(data: &[u8]) -> Result<ServerPacket, CodecError> {
                     sequence: header_sequence,
                 });
             }
-            let value: serde_json::Value =
-                serde_json::from_slice(&payload).map_err(|e| CodecError::Json(e.to_string()))?;
+            let value: serde_json::Value = serde_json::from_slice(&payload)
+                .map_err(|_| CodecError::Json("invalid response format".into()))?;
             let text = extract_text(&value);
             // Doubao marks the closing recognition with `is_last_package: true`
             // (often nested under `result`/`audio_info`), NOT `is_final` — so search
@@ -252,8 +252,9 @@ pub fn parse_server_packet(data: &[u8]) -> Result<ServerPacket, CodecError> {
                 });
             }
             let raw = &data[cursor..cursor + payload_size];
-            let payload = decompress(raw, compression)?;
-            let message = String::from_utf8_lossy(&payload).into_owned();
+            // 保留压缩格式验证，但错误帧正文不进入可调试的错误对象。
+            decompress(raw, compression)?;
+            let message = "provider rejected request".into();
             Err(CodecError::ServerError {
                 code: Some(code),
                 message,
@@ -287,7 +288,7 @@ fn decompress(raw: &[u8], compression: u8) -> Result<Vec<u8>, CodecError> {
             let mut out = Vec::new();
             decoder
                 .read_to_end(&mut out)
-                .map_err(|e| CodecError::Gzip(e.to_string()))?;
+                .map_err(|_| CodecError::Gzip("invalid compressed response".into()))?;
             Ok(out)
         }
         other => Err(CodecError::UnsupportedCompression(other)),

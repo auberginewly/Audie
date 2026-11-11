@@ -27,3 +27,38 @@ fn local_llm_targets_map_to_picker_card_ids() {
         assert!(join_url(base, OPENAI_COMPATIBLE_MODELS_PATH).ends_with("/v1/models"));
     }
 }
+
+fn privacy_test_endpoint(status: u16, body: &'static str) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!(
+        "http://{}/?token=PRIVATE_URL_QUERY",
+        listener.local_addr().unwrap()
+    );
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 4096];
+        assert!(stream.read(&mut request).unwrap() > 0);
+        write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    });
+    (endpoint, server)
+}
+
+#[test]
+fn privacy_model_list_errors_omit_provider_body_and_url() {
+    for (status, body) in [
+        (400, "PRIVATE_RESPONSE_AUTH"),
+        (200, r#"{"data":"PRIVATE_MALFORMED_MODEL"}"#),
+    ] {
+        let (endpoint, server) = privacy_test_endpoint(status, body);
+        let error = fetch_chat_model_ids(
+            &endpoint,
+            Some("PRIVATE_KEY"),
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error.code(), "provider");
+        assert!(!error.to_string().contains("PRIVATE_"));
+    }
+}

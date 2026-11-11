@@ -78,8 +78,7 @@ impl AsrProvider for GlmProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            // Distinguish "server sent an empty error body" from "we failed to read
-            // the body" so logs/diagnostics aren't both rendered as an empty snippet.
+            // 消费响应但不将 provider 正文放入诊断；正文可能回显用户内容或凭据。
             let body = resp
                 .text()
                 .unwrap_or_else(|_| "<无法读取响应体>".to_string());
@@ -88,7 +87,7 @@ impl AsrProvider for GlmProvider {
 
         let body = resp
             .text()
-            .map_err(|e| AppError::Network(format!("读取 GLM 响应失败：{e}")))?;
+            .map_err(|_| AppError::Network("读取 GLM 响应失败，请检查响应格式或重试".into()))?;
         parse_transcript(&body)
     }
 }
@@ -99,7 +98,7 @@ fn build_form(model: &str, wav: Vec<u8>) -> AppResult<reqwest::blocking::multipa
     let file_part = reqwest::blocking::multipart::Part::bytes(wav)
         .file_name("audio.wav")
         .mime_str("audio/wav")
-        .map_err(|e| AppError::Internal(format!("build multipart part: {e}")))?;
+        .map_err(|_| AppError::Internal("build multipart part".into()))?;
 
     Ok(reqwest::blocking::multipart::Form::new()
         .text("model", model.to_string())
@@ -143,10 +142,9 @@ fn parse_transcript(body: &str) -> AppResult<String> {
     }
 
     if aggregate.trim().is_empty() {
-        let snippet: String = body.chars().take(200).collect();
-        return Err(AppError::Internal(format!(
-            "无法从 GLM 响应解析文本：{snippet}"
-        )));
+        return Err(AppError::Internal(
+            "无法从 GLM 响应解析文本，请检查模型与接口配置".into(),
+        ));
     }
     Ok(aggregate.trim().to_string())
 }
@@ -173,7 +171,7 @@ fn classify_reqwest_error(e: reqwest::Error) -> AppError {
     } else if e.is_connect() {
         AppError::Network("无法连接 GLM，请检查网络或代理".into())
     } else {
-        AppError::Network(format!("GLM 请求失败：{e}"))
+        AppError::Network("GLM 请求失败，请检查连接设置、网络或代理".into())
     }
 }
 
@@ -181,15 +179,12 @@ fn classify_reqwest_error(e: reqwest::Error) -> AppError {
 /// key is a Provider error (user must fix the key); 429/5xx are recoverable Network.
 /// TODO: cross-check against 智谱 official error-code table — these mappings mirror
 /// the OpenAI-compatible convention, not a confirmed GLM table.
-fn classify_http_status(status: u16, body: &str) -> AppError {
+fn classify_http_status(status: u16, _body: &str) -> AppError {
     match status {
         401 | 403 => AppError::Provider("GLM API key 无效或被拒绝，请检查设置".into()),
         429 => AppError::Network("GLM 请求过于频繁或额度受限，请稍后重试".into()),
         500..=599 => AppError::Network(format!("GLM 服务端异常（{status}）")),
-        _ => {
-            let snippet: String = body.chars().take(200).collect();
-            AppError::Provider(format!("GLM 拒绝请求（{status}）：{snippet}"))
-        }
+        _ => AppError::Provider(format!("GLM 拒绝请求（{status}），请检查模型与连接设置")),
     }
 }
 

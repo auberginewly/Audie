@@ -44,14 +44,14 @@ export function useSettings(): UseSettings {
         const mics = MicrophoneListSchema.safeParse(rawMics);
         const auto = AutoDeviceSchema.safeParse(rawAuto);
         if (parsed.success) setSettings(parsed.data);
-        else console.error("settings parse failed (load):", parsed.error);
+        else console.error("settings parse failed (load):");
         if (asr.success) setAsrProviders(asr.data);
         if (llm.success) setLlmProviders(llm.data);
         if (mics.success) setMicrophones(mics.data);
         if (auto.success) setAutoDevice(auto.data);
       })
-      .catch((err) => {
-        console.error("load settings failed:", err);
+      .catch(() => {
+        console.error("load settings failed:");
       });
   }, []);
 
@@ -63,9 +63,9 @@ export function useSettings(): UseSettings {
         setSettings(parsed.data);
         return true;
       }
-      console.error("settings parse failed (update):", parsed.error);
-    } catch (err) {
-      console.error("update settings failed:", err);
+      console.error("settings parse failed (update):");
+    } catch {
+      console.error("update settings failed:");
     }
     return false;
   };

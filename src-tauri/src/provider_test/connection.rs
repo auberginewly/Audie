@@ -55,9 +55,9 @@ fn validate_provider_target(kind: ProviderKind, provider_id: &str) -> AppResult<
     if providers.iter().any(|provider| provider.id == provider_id) {
         Ok(())
     } else {
-        Err(AppError::Internal(format!(
-            "unsupported provider test target: {provider_id}"
-        )))
+        Err(AppError::Internal(
+            "unsupported provider test target".into(),
+        ))
     }
 }
 
@@ -76,9 +76,9 @@ fn provider_test_endpoint(
                 .ok_or_else(|| AppError::Provider("请填写 OpenAI-compatible base URL".into()))?;
             Ok(join_url(base, OPENAI_COMPATIBLE_MODELS_PATH))
         }
-        _ => Err(AppError::Internal(format!(
-            "unsupported provider test target: {provider_id}"
-        ))),
+        _ => Err(AppError::Internal(
+            "unsupported provider test target".into(),
+        )),
     }
 }
 
@@ -86,7 +86,7 @@ fn test_models_endpoint(endpoint: &str, api_key: &str) -> AppResult<()> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(TEST_TIMEOUT_SECS))
         .build()
-        .map_err(|err| AppError::Internal(format!("build provider test client: {err}")))?;
+        .map_err(|_| AppError::Internal("build provider test client".into()))?;
 
     let mut request = client.get(endpoint);
     // No bearer for keyless local endpoints (empty key).

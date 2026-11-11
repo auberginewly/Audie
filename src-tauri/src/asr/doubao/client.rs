@@ -59,7 +59,7 @@ impl AsrProvider for DoubaoStreamingProvider {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|err| AppError::Internal(format!("build doubao runtime: {err}")))?
+            .map_err(|_| AppError::Internal("build doubao runtime".into()))?
             .block_on(transcribe_pcm16(&self.config, &pcm16))
     }
 
@@ -77,7 +77,7 @@ impl AsrProvider for DoubaoStreamingProvider {
                     });
                 let _ = tx.send(result);
             })
-            .map_err(|err| AppError::Internal(format!("spawn doubao stream: {err}")))?;
+            .map_err(|_| AppError::Internal("spawn doubao stream".into()))?;
         Ok(rx)
     }
 }
@@ -124,9 +124,7 @@ pub async fn transcribe_pcm16(cfg: &DoubaoStreamConfig, pcm16: &[u8]) -> AppResu
     // 5. Wait for the final recognition; fall back to a timeout error.
     match tokio::time::timeout(Duration::from_secs(FINAL_TIMEOUT_SECS), receiver).await {
         Ok(Ok(result)) => result,
-        Ok(Err(join_err)) => Err(AppError::Internal(format!(
-            "doubao receive task failed: {join_err}"
-        ))),
+        Ok(Err(_)) => Err(AppError::Internal("doubao receive task failed".into())),
         Err(_) => Err(AppError::Network(
             "doubao stream timed out waiting for final result".into(),
         )),
@@ -220,9 +218,7 @@ pub async fn transcribe_audio_chunks(
 
     match tokio::time::timeout(Duration::from_secs(FINAL_TIMEOUT_SECS), receiver).await {
         Ok(Ok(result)) => result,
-        Ok(Err(join_err)) => Err(AppError::Internal(format!(
-            "doubao receive task failed: {join_err}"
-        ))),
+        Ok(Err(_)) => Err(AppError::Internal("doubao receive task failed".into())),
         Err(_) => Err(AppError::Network(
             "doubao stream timed out waiting for final result".into(),
         )),
@@ -233,12 +229,11 @@ fn run_streaming_runtime(cfg: DoubaoStreamConfig, chunks: AudioChunkStream) -> A
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|err| AppError::Internal(format!("build doubao runtime: {err}")))?
+        .map_err(|_| AppError::Internal("build doubao runtime".into()))?
         .block_on(transcribe_audio_chunks(&cfg, chunks))
 }
 
-/// Read frames until the server marks the result final (or the socket closes),
-/// logging each non-empty text. Returns the latest recognized text.
+/// 读取至 final 或连接关闭并返回最新转写；诊断仅记录 final 标记与字符数。
 async fn receive_loop<S>(mut read: S) -> AppResult<String>
 where
     S: Stream<Item = Result<Message, WsError>> + Unpin + Send + 'static,
@@ -295,33 +290,16 @@ fn build_full_request_payload(request_id: &str) -> AppResult<Vec<u8>> {
         }
     });
     serde_json::to_vec(&payload)
-        .map_err(|err| AppError::Internal(format!("doubao request payload encode failed: {err}")))
+        .map_err(|_| AppError::Internal("doubao request payload encode failed".into()))
 }
 
 fn audio_chunk_to_pcm16(chunk: &AudioChunk) -> AppResult<Vec<u8>> {
     pcm16_from_samples(&chunk.samples, chunk.sample_rate, chunk.channels)
 }
 
-fn classify_ws_error(err: &WsError, cfg: &DoubaoStreamConfig) -> AppError {
-    match err {
-        // Handshake rejected: 401/403 means bad token/permissions (Provider),
-        // anything else is a transport-level failure (Network).
-        WsError::Http(response) => {
-            let code = response.status().as_u16();
-            if code == 401 || code == 403 {
-                AppError::Provider(format!(
-                    "doubao auth rejected (HTTP {code}); endpoint={}, resource_id={}",
-                    cfg.endpoint, cfg.resource_id
-                ))
-            } else {
-                AppError::Network(format!(
-                    "doubao handshake failed (HTTP {code}); endpoint={}, resource_id={}",
-                    cfg.endpoint, cfg.resource_id
-                ))
-            }
-        }
-        other => classify_ws_error_without_context(other),
-    }
+fn classify_ws_error(err: &WsError, _cfg: &DoubaoStreamConfig) -> AppError {
+    // endpoint/resource_id 可由用户输入，不能作为错误上下文回显。
+    classify_ws_error_without_context(err)
 }
 
 fn classify_ws_error_without_context(err: &WsError) -> AppError {
@@ -334,23 +312,27 @@ fn classify_ws_error_without_context(err: &WsError) -> AppError {
                 AppError::Network(format!("doubao handshake failed (HTTP {code})"))
             }
         }
-        WsError::Io(io_err) => AppError::Network(format!("doubao connection io: {io_err}")),
+        WsError::Io(_) => {
+            AppError::Network("doubao connection failed; check network or proxy".into())
+        }
         WsError::ConnectionClosed | WsError::AlreadyClosed => {
             AppError::Network("doubao connection closed".into())
         }
-        other => AppError::Network(format!("doubao websocket error: {other}")),
+        _ => AppError::Network("doubao websocket failed; check endpoint, network or proxy".into()),
     }
 }
 
 fn classify_codec_error(err: codec::CodecError) -> AppError {
     match err {
         // Server-side rejection (e.g. quota, bad request) → Provider.
-        codec::CodecError::ServerError { code, message } => {
+        codec::CodecError::ServerError { code, .. } => {
             let code = code.map(|c| format!(" {c}")).unwrap_or_default();
-            AppError::Provider(format!("doubao server error{code}: {message}"))
+            AppError::Provider(format!(
+                "doubao server error{code}; check credentials, model and quota"
+            ))
         }
         // Anything else is a protocol/invariant violation, not the user's fault.
-        other => AppError::Internal(format!("doubao protocol error: {other}")),
+        _ => AppError::Internal("doubao protocol error; check endpoint or retry".into()),
     }
 }
 

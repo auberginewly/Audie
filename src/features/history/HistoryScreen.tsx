@@ -98,8 +98,8 @@ export function HistoryScreen({ data }: { data: UseSettings }) {
       .then(() => {
         flash(t("history.reenhanced"));
       })
-      .catch((err) => {
-        console.error("reenhance failed:", err);
+      .catch(() => {
+        console.error("reenhance failed:");
         flash(t("history.reenhanceFailed"));
       })
       .finally(() => {

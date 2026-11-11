@@ -24,16 +24,16 @@ export function useInputMonitoring(): UseInputMonitoring {
   useEffect(() => {
     invoke("get_input_monitoring_status")
       .then(read)
-      .catch((err) => {
-        console.error("input monitoring status failed:", err);
+      .catch(() => {
+        console.error("input monitoring status failed:");
       });
   }, [read]);
 
   const request = useCallback(async () => {
     try {
       read(await invoke("request_input_monitoring_permission"));
-    } catch (err) {
-      console.error("request input monitoring failed:", err);
+    } catch {
+      console.error("request input monitoring failed:");
     }
   }, [read]);
 

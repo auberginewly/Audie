@@ -84,7 +84,7 @@ impl AsrProvider for AliyunProvider {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|err| AppError::Internal(format!("build aliyun runtime: {err}")))?
+            .map_err(|_| AppError::Internal("build aliyun runtime".into()))?
             .block_on(transcribe_pcm16(&self.config, &pcm16))
     }
 }
@@ -226,7 +226,7 @@ fn build_request(cfg: &AliyunStreamConfig) -> AppResult<Request> {
         .endpoint
         .as_str()
         .into_client_request()
-        .map_err(|err| AppError::Network(format!("通义 endpoint 无效: {err}")))?;
+        .map_err(|_| AppError::Network("通义 endpoint 无效".into()))?;
     let (name, value) = auth_header(cfg);
     insert_header(request.headers_mut(), name, &value)?;
     Ok(request)
@@ -234,7 +234,7 @@ fn build_request(cfg: &AliyunStreamConfig) -> AppResult<Request> {
 
 fn insert_header(headers: &mut HeaderMap, name: &'static str, value: &str) -> AppResult<()> {
     let header_value = HeaderValue::from_str(value)
-        .map_err(|err| AppError::Internal(format!("通义 header {name} 非法: {err}")))?;
+        .map_err(|_| AppError::Internal("通义鉴权配置无效，请检查 API key".into()))?;
     headers.insert(name, header_value);
     Ok(())
 }
@@ -264,11 +264,11 @@ fn new_task_id() -> String {
 fn classify_ws_error(err: WsError) -> AppError {
     match err {
         WsError::Http(response) => classify_upgrade_status(response.status().as_u16()),
-        WsError::Io(io_err) => AppError::Network(format!("通义连接 io 错误: {io_err}")),
+        WsError::Io(_) => AppError::Network("通义连接失败，请检查网络或代理".into()),
         WsError::ConnectionClosed | WsError::AlreadyClosed => {
             AppError::Network("通义连接已关闭".into())
         }
-        other => AppError::Network(format!("通义 websocket 错误: {other}")),
+        _ => AppError::Network("通义 WebSocket 连接失败，请检查连接设置、网络或代理".into()),
     }
 }
 
