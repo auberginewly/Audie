@@ -3,9 +3,9 @@ use super::*;
 #[test]
 fn openai_transcription_config_reads_only_openai_key() {
     let mut requested = Vec::new();
-    let settings = commands::Settings {
+    let settings = settings::Settings {
         asr_provider: "openai".into(),
-        ..commands::Settings::default()
+        ..settings::Settings::default()
     };
 
     let config = transcription_config_from_settings(&settings, |key_id| {
@@ -23,10 +23,10 @@ fn openai_transcription_config_reads_only_openai_key() {
 #[test]
 fn glm_transcription_config_reads_only_glm_key() {
     let mut requested = Vec::new();
-    let settings = commands::Settings {
+    let settings = settings::Settings {
         asr_provider: "glm".into(),
         glm_endpoint: "https://glm.example.test/audio/transcriptions".into(),
-        ..commands::Settings::default()
+        ..settings::Settings::default()
     };
 
     let config = transcription_config_from_settings(&settings, |key_id| {
@@ -47,9 +47,9 @@ fn glm_transcription_config_reads_only_glm_key() {
 #[test]
 fn aliyun_transcription_config_reads_only_aliyun_key() {
     let mut requested = Vec::new();
-    let settings = commands::Settings {
+    let settings = settings::Settings {
         asr_provider: "aliyun_fun".into(),
-        ..commands::Settings::default()
+        ..settings::Settings::default()
     };
 
     let config = transcription_config_from_settings(&settings, |key_id| {
@@ -72,9 +72,9 @@ fn aliyun_transcription_config_reads_only_aliyun_key() {
 #[test]
 fn stepfun_transcription_config_reads_only_stepfun_key() {
     let mut requested = Vec::new();
-    let settings = commands::Settings {
+    let settings = settings::Settings {
         asr_provider: "stepfun".into(),
-        ..commands::Settings::default()
+        ..settings::Settings::default()
     };
 
     let config = transcription_config_from_settings(&settings, |key_id| {
@@ -118,11 +118,11 @@ fn doubao_streaming_config_without_token_returns_none_for_batch_fallback() {
 #[test]
 fn doubao_batch_config_keeps_endpoint_and_reads_only_doubao_secrets() {
     let mut requested = Vec::new();
-    let settings = commands::Settings {
+    let settings = settings::Settings {
         asr_provider: "doubao_stream".into(),
         doubao_endpoint: "wss://doubao.example.test".into(),
         doubao_resource_id: "resource".into(),
-        ..commands::Settings::default()
+        ..settings::Settings::default()
     };
 
     let config = transcription_config_from_settings(&settings, |key_id| {

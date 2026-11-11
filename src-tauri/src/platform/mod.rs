@@ -9,6 +9,7 @@
 // in P0.4; keychain methods are filled in during P1.
 
 use tauri::AppHandle;
+mod overlay;
 
 use crate::error::AppResult;
 
@@ -29,6 +30,17 @@ pub enum HotkeySlot {
 
 #[allow(dead_code)] // Trait surface defined whole per SPEC §3.4; later slices fill in callers.
 pub trait Platform: Send + Sync {
+    /// Called during setup; native window operations stay behind Platform.
+    fn initialize_overlay(&self, app: &tauri::App) -> AppResult<()> {
+        overlay::position_overlay(app.handle())
+    }
+    fn show_overlay(&self, app: &AppHandle) -> AppResult<()> {
+        overlay::show_overlay(app)
+    }
+    /// Called on the main thread after the caller checks take ownership.
+    fn hide_overlay(&self, app: &AppHandle) -> AppResult<()> {
+        overlay::hide_overlay(app)
+    }
     /// Register the trigger key (e.g. "Fn", "F13", "Ctrl+Shift+Space"). The
     /// callback fires once per tap (press-to-toggle).
     fn register_hotkey(
@@ -167,3 +179,12 @@ pub mod macos;
 
 #[cfg(target_os = "windows")]
 pub mod windows;
+
+#[cfg(target_os = "windows")]
+pub const DEFAULT_HOTKEY: &str = "Ctrl+Shift+Space";
+#[cfg(not(target_os = "windows"))]
+pub const DEFAULT_HOTKEY: &str = "Fn";
+
+pub(crate) fn should_migrate_windows_fn(stored: &str) -> bool {
+    cfg!(target_os = "windows") && stored.trim().eq_ignore_ascii_case("fn")
+}

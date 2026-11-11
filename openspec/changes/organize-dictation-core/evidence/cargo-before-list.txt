@@ -1,0 +1,241 @@
+   Compiling objc2-exception-helper v0.1.1
+   Compiling ring v0.17.14
+   Compiling libsqlite3-sys v0.35.0
+   Compiling objc2 v0.6.4
+   Compiling block2 v0.6.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling dispatch2 v0.3.1
+   Compiling rustls v0.23.40
+   Compiling objc2-foundation v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling rustls-webpki v0.103.13
+   Compiling rusqlite v0.37.0
+   Compiling tokio-rustls v0.26.4
+   Compiling tungstenite v0.24.0
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling tokio-tungstenite v0.24.0
+   Compiling objc2-app-kit v0.3.2
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.35.3
+   Compiling muda v0.19.2
+   Compiling window-vibrancy v0.6.0
+   Compiling arboard v3.6.1
+   Compiling tauri-runtime v2.11.2
+   Compiling wry v0.55.1
+   Compiling tauri-runtime-wry v2.11.2
+   Compiling tauri v2.11.2
+   Compiling tauri-plugin-clipboard-manager v2.3.2
+   Compiling tauri-plugin-opener v2.5.4
+   Compiling tauri-plugin-autostart v2.5.1
+   Compiling tauri-plugin-log v2.9.0
+   Compiling tauri-nspanel v2.0.1 (https://github.com/ahkohd/tauri-nspanel?branch=v2#18ffb9a2)
+   Compiling tauri-plugin-macos-permissions v2.3.0
+   Compiling audie v0.2.1 (/Users/aubergine/.codex/worktrees/recovery-without-templates/Audie/src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.12s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (src-tauri/target/debug/deps/audie_lib-1cc434842ed248aa)
+asr::aliyun::client::tests::auth_header_is_bearer_token: test
+asr::aliyun::client::tests::build_request_sets_authorization_header: test
+asr::aliyun::client::tests::classify_upgrade_status_maps_auth_vs_network: test
+asr::aliyun::client::tests::new_falls_back_to_default_model_when_blank: test
+asr::aliyun::client::tests::new_keeps_explicit_endpoint: test
+asr::aliyun::client::tests::new_keeps_explicit_model: test
+asr::aliyun::client::tests::new_task_id_is_32_hex_chars: test
+asr::aliyun::client::tests::next_text_frame_maps_transport_error_to_network: test
+asr::aliyun::client::tests::next_text_frame_unwraps_text_and_ends_on_close: test
+asr::aliyun::codec::tests::finish_task_carries_action_and_task_id: test
+asr::aliyun::codec::tests::parse_error_event_is_provider_error: test
+asr::aliyun::codec::tests::parse_invalid_json_is_internal_error: test
+asr::aliyun::codec::tests::parse_missing_event_is_internal_error: test
+asr::aliyun::codec::tests::parse_result_generated_extracts_sentence_text: test
+asr::aliyun::codec::tests::parse_task_failed_is_provider_error: test
+asr::aliyun::codec::tests::parse_task_failed_without_message_falls_back: test
+asr::aliyun::codec::tests::parse_task_finished_extracts_text: test
+asr::aliyun::codec::tests::parse_task_started: test
+asr::aliyun::codec::tests::run_task_carries_action_task_id_and_default_model: test
+asr::aliyun::codec::tests::run_task_keeps_explicit_model: test
+asr::doubao::client::tests::audio_chunk_to_pcm16_downmixes_stereo: test
+asr::doubao::client::tests::audio_chunk_to_pcm16_resamples_to_16k_mono: test
+asr::doubao::client::tests::build_request_uses_new_console_api_key_when_app_id_is_blank: test
+asr::doubao::client::tests::build_request_uses_old_console_app_id_and_access_token_when_app_id_is_set: test
+asr::doubao::client::tests::full_request_payload_has_expected_audio_fields: test
+asr::doubao::codec::tests::audio_chunk_carries_raw_pcm_with_positive_sequence: test
+asr::doubao::codec::tests::final_audio_packet_uses_negative_sequence_and_empty_payload: test
+asr::doubao::codec::tests::final_sequence_clamps_to_minus_two: test
+asr::doubao::codec::tests::full_client_request_layout_matches_wire_format: test
+asr::doubao::codec::tests::parse_ack_returns_sequence_only: test
+asr::doubao::codec::tests::parse_gzip_response_decompresses_then_extracts_text: test
+asr::doubao::codec::tests::parse_rejects_truncated_frame_with_insufficient_data: test
+asr::doubao::codec::tests::parse_rejects_unknown_message_type: test
+asr::doubao::codec::tests::parse_rejects_unsupported_compression: test
+asr::doubao::codec::tests::parse_response_marks_final_when_is_last_package_nested: test
+asr::doubao::codec::tests::parse_response_marks_final_when_last_audio_flag_is_set: test
+asr::doubao::codec::tests::parse_response_marks_final_when_sequence_is_negative: test
+asr::doubao::codec::tests::parse_response_returns_none_text_for_empty_payload: test
+asr::doubao::codec::tests::parse_server_error_is_routed_as_provider_error: test
+asr::doubao::codec::tests::parse_uncompressed_response_extracts_result_text: test
+asr::glm::tests::build_form_succeeds_with_wav_bytes: test
+asr::glm::tests::classify_http_401_is_provider_error: test
+asr::glm::tests::classify_http_403_is_provider_error: test
+asr::glm::tests::classify_http_429_is_recoverable_network: test
+asr::glm::tests::classify_http_5xx_is_network: test
+asr::glm::tests::classify_http_unknown_status_is_provider_with_snippet: test
+asr::glm::tests::new_falls_back_to_default_model_when_blank: test
+asr::glm::tests::new_keeps_explicit_endpoint: test
+asr::glm::tests::new_keeps_explicit_model: test
+asr::glm::tests::parse_transcript_accepts_text_field_in_sse: test
+asr::glm::tests::parse_transcript_accumulates_sse_text_fragments: test
+asr::glm::tests::parse_transcript_errors_on_unparseable_body: test
+asr::glm::tests::parse_transcript_reads_non_stream_json: test
+asr::stepfun::client::tests::base64_encode_matches_rfc4648_vectors: test
+asr::stepfun::client::tests::build_request_body_has_base64_audio_and_pcm_format: test
+asr::stepfun::client::tests::build_request_body_threads_explicit_model: test
+asr::stepfun::client::tests::classify_http_status_maps_categories: test
+asr::stepfun::client::tests::new_falls_back_to_default_model_when_blank: test
+asr::stepfun::client::tests::new_keeps_explicit_endpoint: test
+asr::stepfun::client::tests::new_keeps_explicit_model: test
+asr::stepfun::client::tests::parse_delta_event: test
+asr::stepfun::client::tests::parse_done_event_with_full_text: test
+asr::stepfun::client::tests::parse_embedded_error_object_without_type_is_error: test
+asr::stepfun::client::tests::parse_explicit_error_event_carries_message: test
+asr::stepfun::client::tests::parse_invalid_json_is_internal_error: test
+asr::stepfun::client::tests::parse_sse_stream_falls_back_to_accumulated_deltas: test
+asr::stepfun::client::tests::parse_sse_stream_maps_error_event_to_provider: test
+asr::stepfun::client::tests::parse_sse_stream_prefers_done_text_over_deltas: test
+asr::stepfun::client::tests::parse_sse_stream_propagates_malformed_json: test
+asr::stepfun::client::tests::parse_sse_stream_skips_event_and_blank_lines: test
+asr::stepfun::client::tests::parse_sse_stream_without_text_is_internal_error: test
+asr::stepfun::client::tests::parse_stream_terminator_returns_none: test
+asr::stepfun::client::tests::parse_unknown_type_is_other: test
+asr::stepfun::client::tests::transcribe_rejects_empty_key_as_provider_error: test
+asr::tests::downmix_to_mono_averages_stereo_frames: test
+asr::tests::pcm16_mono_16k_bytes_downmixes_and_keeps_16k_passthrough: test
+asr::tests::pcm16_mono_16k_bytes_resamples_8k_to_16k: test
+asr::tests::resample_linear_rejects_zero_source_rate: test
+asr::tests::transcript_delta_can_represent_final_text: test
+asr::tests::transcript_delta_can_represent_partial_text: test
+commands::tests::hotkeys::validate_allows_distinct_or_empty_compose_hotkey: test
+commands::tests::hotkeys::validate_rejects_compose_hotkey_equal_to_primary: test
+commands::tests::providers::patch_sets_asr_model_and_empty_clears_to_adapter_default: test
+commands::tests::providers::patch_sets_provider_endpoints_and_blank_keeps_current_values: test
+commands::tests::providers::provider_lists_expose_voxt_style_metadata: test
+commands::tests::secrets::explicit_reveal_returns_saved_secret_value: test
+commands::tests::secrets::explicit_reveal_skips_data_read_when_secret_is_missing: test
+commands::tests::secrets::has_secret_maps_missing_secret_to_false: test
+commands::tests::secrets::has_secret_uses_presence_check_without_reading_secret_value: test
+commands::tests::secrets::secret_key_ids_are_strict_identifiers: test
+commands::tests::settings::default_settings_include_p1_provider_fields: test
+commands::tests::settings::legacy_doubao_resource_id_migrates_to_seed_asr_2_default: test
+commands::tests::settings::legacy_json_migrates_into_settings: test
+commands::tests::settings::normalize_clamps_invalid_and_keeps_doubao_stream: test
+commands::tests::settings::partial_toml_fills_missing_fields_from_default: test
+commands::tests::settings::patch_persists_onboarding_test_completion: test
+commands::tests::settings::settings_round_trip_through_toml: test
+llm::tests::classifies_openai_compatible_http_errors: test
+llm::tests::detects_local_endpoints: test
+llm::tests::joins_chat_completions_endpoint: test
+llm::tests::local_endpoint_allows_missing_key: test
+llm::tests::openai_compatible_requires_keychain_secret: test
+llm::tests::sanitize_extracts_after_preamble: test
+llm::tests::sanitize_falls_back_on_pure_reasoning: test
+llm::tests::sanitize_handles_length_changing_unicode_without_panic: test
+llm::tests::sanitize_passes_clean_text: test
+llm::tests::sanitize_strips_think_block: test
+llm::tests::sanitize_unwraps_code_fence: test
+managers::audio::tests::chunk_sink_finish_does_not_block_when_stream_queue_is_full: test
+managers::audio::tests::chunk_sink_sets_overflow_when_stream_queue_is_full: test
+managers::audio::tests::process_f32_below_memory_fuse_keeps_all_samples: test
+managers::audio::tests::process_f32_caps_batch_buffer_and_sets_overflow: test
+managers::audio::tests::process_f32_forwards_chunk_when_sink_present: test
+managers::audio::tests::process_f32_level_only_tracks_peak_without_buffering: test
+managers::audio::tests::process_f32_without_sink_only_fills_buffer: test
+managers::audio::tests::process_i16_caps_forwarded_chunk_to_retained_samples: test
+managers::audio::tests::process_i16_normalizes_and_forwards: test
+managers::audio::tests::process_u16_after_cap_tracks_peak_without_growing_buffer: test
+managers::audio::tests::recording_longer_than_120_seconds_is_still_retained: test
+managers::audio::tests::retained_sample_limit_equals_512_mib_of_f32_audio: test
+managers::enhance::tests::enhance_failure_falls_back_to_original_text: test
+managers::history::tests::cleanup_deletes_only_older_than_cutoff: test
+managers::history::tests::daily_buckets_by_local_day_and_split: test
+managers::history::tests::daily_empty_returns_no_rows: test
+managers::history::tests::daily_zero_days_returns_all_time: test
+managers::history::tests::enhanced_text_round_trips: test
+managers::history::tests::list_returns_newest_first: test
+managers::history::tests::migration_adds_mode_to_legacy_table: test
+managers::history::tests::migration_is_idempotent_on_fresh_table: test
+managers::history::tests::mode_round_trips: test
+managers::history::tests::reenhance_updates_enhanced_text_and_word_count: test
+managers::history::tests::retention_window_maps_known_ids_only: test
+managers::history::tests::stats_ai_output_excludes_rewrite_without_enhanced_text: test
+managers::history::tests::stats_are_zero_when_empty: test
+managers::history::tests::stats_split_spoken_vs_ai_output: test
+managers::transcription::tests::doubao_stream_requires_token_for_streaming_provider: test
+managers::transcription::tests::manager_stream_transcribe_exposes_p2_contract_without_provider_impl: test
+managers::transcription::tests::openai_requires_keychain_secret: test
+platform::macos::capture::tests::capture_bare_modifier_tap: test
+platform::macos::capture::tests::capture_combo_fn_combo_and_single: test
+platform::macos::capture::tests::capture_fn_tap: test
+platform::macos::capture::tests::capture_ignores_multi_modifier_without_key: test
+platform::macos::capture::tests::capture_rejects_capslock_and_system_combo: test
+platform::macos::hotkey::tests::fn_held_past_window_does_not_toggle: test
+platform::macos::hotkey::tests::fn_plain_tap_toggles: test
+platform::macos::hotkey::tests::fn_plus_key_does_not_toggle: test
+platform::macos::hotkey::tests::fn_tap_after_combo_still_toggles: test
+platform::macos::hotkey::tests::fn_up_without_down_is_ignored: test
+platform::macos::hotkey::tests::parse_accepts_letter_combo: test
+platform::macos::hotkey::tests::parse_bare_modifier_is_a_tap: test
+platform::macos::hotkey::tests::parse_combo_collects_mods_and_main_key: test
+platform::macos::hotkey::tests::parse_fn_combo: test
+platform::macos::hotkey::tests::parse_fn_is_case_insensitive: test
+platform::macos::hotkey::tests::parse_rejects_unknown_key_and_missing_main: test
+platform::macos::hotkey::tests::parse_single_function_key_has_no_mods: test
+platform::macos::hotkey::tests::relevant_mods_masks_capslock_noise: test
+platform::macos::keychain::tests::debug_and_release_builds_use_separate_keychain_services: test
+platform::macos::keychain::tests::keychain_add_item_uses_voxt_style_accessible_policy_without_access_acl: test
+platform::macos::keychain::tests::keychain_secret_round_trip_and_delete: test
+platform::macos::keychain::tests::keychain_update_attributes_use_voxt_style_accessible_policy_without_access_acl: test
+platform::macos::language::tests::language_code_maps_to_label: test
+provider_test::tests::cloud_requires_a_key: test
+provider_test::tests::http_401_maps_to_provider_error: test
+provider_test::tests::http_403_maps_to_network_error: test
+provider_test::tests::inline_api_key_is_trimmed: test
+provider_test::tests::is_chat_model_keeps_chat_drops_non_chat: test
+provider_test::tests::local_endpoint_needs_no_key: test
+provider_test::tests::local_llm_targets_map_to_picker_card_ids: test
+provider_test::tests::local_provider_action_never_reads_keychain: test
+provider_test::tests::openai_compatible_endpoint_joins_base_url_and_models_path: test
+provider_test::tests::openai_compatible_requires_base_url: test
+provider_test::tests::provider_action_prefers_inline_key_without_reading_keychain: test
+provider_test::tests::provider_action_reads_saved_key_only_when_needed: test
+recovery_tests::lifecycle::recovery_old_timer_cannot_clear_a_resumed_takes_cache: test
+recovery_tests::lifecycle::recovery_transcript_cache_rejects_old_workers_and_released_takes: test
+recovery_tests::processing::recovery_cancel_during_injection_suppresses_old_error_and_history: test
+recovery_tests::processing::recovery_cancel_during_llm_discards_success_and_failure: test
+recovery_tests::processing::recovery_preserves_each_modes_input_prompt_and_history: test
+recovery_tests::processing::recovery_raw_insertion_skips_llm_and_preserves_rewrite_source: test
+recovery_tests::processing::recovery_rewrite_retry_keeps_source_after_inject_failure: test
+recovery_tests::processing::recovery_stale_worker_never_calls_provider_or_injector: test
+recovery_tests::snapshots::recovery_prompt_and_rewrite_source_are_independent_state_types: test
+recovery_tests::snapshots::recovery_uses_original_prompt_for_each_mode_without_a_template_library: test
+tests::asr_config::aliyun_transcription_config_reads_only_aliyun_key: test
+tests::asr_config::doubao_batch_config_keeps_endpoint_and_reads_only_doubao_secrets: test
+tests::asr_config::doubao_streaming_config_reads_token_then_optional_app_id_by_default: test
+tests::asr_config::doubao_streaming_config_skips_when_provider_not_doubao_stream: test
+tests::asr_config::doubao_streaming_config_without_token_returns_none_for_batch_fallback: test
+tests::asr_config::glm_transcription_config_reads_only_glm_key: test
+tests::asr_config::openai_transcription_config_reads_only_openai_key: test
+tests::asr_config::stepfun_transcription_config_reads_only_stepfun_key: test
+tests::enhance_config::forced_enable_stays_on_without_key: test
+tests::enhance_config::polish_disabled_when_cloud_key_missing: test
+tests::enhance_config::polish_enabled_for_local_endpoint_without_key: test
+tests::enhance_config::polish_enabled_when_cloud_key_present: test
+tests::enhance_config::polish_toggle_off_skips_key_read_despite_cloud_key: test
+tests::take_and_stream::clearing_last_take_drops_terminal_audio: test
+tests::take_and_stream::last_take_clone_shares_audio_buffer: test
+tests::take_and_stream::rewrite_history_raw_pairs_instruction_with_quoted_source: test
+tests::take_and_stream::streaming_queue_overflow_falls_back_to_batch_resolution: test
+tests::take_and_stream::streaming_result_kept_when_queue_did_not_overflow: test
+
+201 tests, 0 benchmarks

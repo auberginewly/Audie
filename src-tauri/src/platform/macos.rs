@@ -16,6 +16,7 @@ mod dock;
 mod hotkey;
 mod keychain;
 mod language;
+mod overlay;
 mod permissions;
 
 #[derive(Default)]
@@ -40,6 +41,16 @@ impl MacosPlatform {
 }
 
 impl Platform for MacosPlatform {
+    fn initialize_overlay(&self, app: &tauri::App) -> AppResult<()> {
+        overlay::initialize_overlay(app)
+    }
+    fn show_overlay(&self, app: &AppHandle) -> AppResult<()> {
+        overlay::show_overlay(app)
+    }
+    fn hide_overlay(&self, app: &AppHandle) -> AppResult<()> {
+        overlay::hide_overlay(app)
+    }
+
     fn register_hotkey(
         &self,
         _app: &AppHandle,

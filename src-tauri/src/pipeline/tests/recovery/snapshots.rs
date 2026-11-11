@@ -2,11 +2,11 @@ use super::*;
 
 #[test]
 fn recovery_uses_original_prompt_for_each_mode_without_a_template_library() {
-    let mut settings = commands::Settings {
+    let mut settings = settings::Settings {
         enhance_prompt: "original polish".into(),
         rewrite_prompt: "original rewrite".into(),
         compose_prompt: "original compose".into(),
-        ..commands::Settings::default()
+        ..settings::Settings::default()
     };
     for (mode, original) in [
         (DictationMode::Polish, "original polish"),
@@ -15,7 +15,7 @@ fn recovery_uses_original_prompt_for_each_mode_without_a_template_library() {
     ] {
         let snapshot = prompt_from_snapshot(None, &settings, mode);
         assert_eq!(snapshot, original);
-        let changed = commands::Settings {
+        let changed = settings::Settings {
             enhance_prompt: "changed polish".into(),
             rewrite_prompt: "changed rewrite".into(),
             compose_prompt: "changed compose".into(),
