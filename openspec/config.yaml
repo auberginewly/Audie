@@ -1,0 +1,35 @@
+schema: spec-driven
+
+context: |
+  Language: zh-CN. 新建产物使用中文，保留 OpenSpec 结构标题及 SHALL/MUST 关键字。
+  Audie 是 BYOK 跨平台语音输入客户端：快捷键录音 → ASR → 可选润色 → 光标注入，无后端。
+  技术栈固定为 Tauri 2、Rust、React、TypeScript、Zustand、Tailwind v4；pnpm + cargo。
+  先读 AGENTS.md、docs/STATUS.md、docs/ROADMAP.md、PROJECT_SPEC.md 与 SESSION_PLAYBOOK 中断信号。
+  AGENTS.md 为最高项目规范；架构与取舍由作者决定，修改代码前说明文件、原因并取得确认。
+  沿用 Manager + Command/Event、Platform trait 和 provider trait；不擅自新增层、库或抽象。
+  系统功能先参考 Handy。API key 只进系统凭据存储，音频默认不落盘。
+  不做会议转录、移动端、实时翻译、agent/语音执行、账号/云同步或自建后端。
+  本地 ASR 已退役；本分支以 main 加恢复修复为基线。
+  作者已取消多模板管理和循环快捷键；沿用原三份提示词及设置字段，保留恢复上下文快照。
+  当前能力合同以 PROJECT_SPEC.md 为准；openspec/specs 只接收经验证、评审后的变更合同，逐步积累。
+
+rules:
+  proposal:
+    - 明确本切片目标、非目标、受影响文件与既有结构的关系；不借提案扩展产品范围。
+  design:
+    - 解释决策原因、替代方案和已有约束；架构未确认时不得进入实现。
+  specs:
+    - 使用可观察行为和可验收场景；不把设计内部类名写成需求。
+  tasks:
+    - 每个切片独立可运行、可演示；自动检查与真实应用验收分开记录。
+    - 仅有原始记录支持时才标为完成；待真机验收、Windows 未验证和已知失败必须保留。
+
+operations:
+  apply:
+    guidance:
+      - 先确认本次切片及文件范围已获作者同意；保护现有未提交修改。
+      - 热路径不使用 unwrap/expect；外部前端输入用 Zod；不新增未经批准的依赖。
+      - 收尾运行适当检查并演示，更新 docs/STATUS.md；不得把旧验证记录当作本轮结果。
+  archive:
+    guidance:
+      - 有未完成验收或已知失败时不因迁移自动归档；不得将 legacy 历史资料视为当前规格。
