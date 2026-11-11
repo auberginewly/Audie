@@ -196,7 +196,10 @@ fn recovery_rewrite_retry_keeps_source_after_inject_failure() {
         },
     )
     .unwrap();
-    assert_eq!(outcome, Some(EnhanceOutcome::Failed));
+    assert_eq!(
+        outcome,
+        Some(EnhanceOutcome::Failed("LLM failed on retry".into()))
+    );
 }
 
 #[test]

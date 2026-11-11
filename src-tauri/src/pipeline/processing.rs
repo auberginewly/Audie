@@ -116,15 +116,15 @@ pub(super) fn spawn_transcription(
         if take_gen.load(Ordering::SeqCst) != my_gen {
             return;
         }
-        match outcome {
+        match &outcome {
             EnhanceOutcome::Enhanced => emit_enhance_progress(&app, "completed", completed),
-            EnhanceOutcome::Failed => {
-                emit_enhance_progress(&app, "failed", "润色失败但已注入原文");
+            EnhanceOutcome::Failed(message) => {
+                emit_enhance_progress(&app, "failed", message);
             }
             EnhanceOutcome::Disabled => {}
         }
         state.transition(&app, AppState::Success, Some("injected"));
-        let hold = if matches!(outcome, EnhanceOutcome::Failed) {
+        let hold = if matches!(&outcome, EnhanceOutcome::Failed(_)) {
             TERMINAL_HOLD_MS
         } else {
             SUCCESS_HOLD_MS
@@ -209,7 +209,10 @@ pub(super) fn finish_pipeline_tail(
                     take.mode.as_str()
                 );
                 let fallback = fallback_after_enhance_failure(original, &err);
-                (fallback.text_to_inject, EnhanceOutcome::Failed)
+                (
+                    fallback.text_to_inject,
+                    EnhanceOutcome::Failed(fallback.message),
+                )
             }
         }
     };
@@ -221,7 +224,7 @@ pub(super) fn finish_pipeline_tail(
         return Ok(None);
     }
     injected?;
-    let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then_some(output);
+    let enhanced = matches!(&outcome, EnhanceOutcome::Enhanced).then_some(output);
     record(
         take.mode.as_str(),
         &take.history_raw(text),

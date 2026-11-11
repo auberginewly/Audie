@@ -90,9 +90,9 @@ pub(super) struct HotkeyContext<'a> {
 }
 
 /// 区分未启用、成功润色、失败回退：三者均可注入，但只有成功润色才存 enhanced_text。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum EnhanceOutcome {
     Disabled,
     Enhanced,
-    Failed,
+    Failed(String),
 }

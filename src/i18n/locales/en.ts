@@ -195,7 +195,7 @@ export const en: Messages = {
   "overlay.cancelled": "Transcription cancelled",
   "overlay.undo": "Undo",
   "overlay.rawInserted": "Inserted raw text",
-  "overlay.polishMissing": "Polish model not configured",
+  "overlay.polishFailed": "Polishing failed. Check your model connection settings.",
   "overlay.openSettings": "Settings",
   "overlay.modelError": "Model error",
   "overlay.cancel": "Cancel",

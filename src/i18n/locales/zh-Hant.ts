@@ -2,6 +2,7 @@ import { zhHans, type Messages } from "./zh-Hans";
 
 export const zhHant: Messages = {
   ...zhHans,
+  "overlay.polishFailed": "潤色失敗，請檢查模型連線設定",
   "setup.permission.enabled": "已開啟",
   "setup.permission.requesting": "等待確認…",
   "setup.permission.restart": "重新啟動 Audie",

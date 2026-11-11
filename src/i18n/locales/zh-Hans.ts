@@ -190,7 +190,7 @@ export const zhHans = {
   "overlay.cancelled": "转录已取消",
   "overlay.undo": "撤销操作",
   "overlay.rawInserted": "已插入原文",
-  "overlay.polishMissing": "未配置润色模型",
+  "overlay.polishFailed": "润色失败，请检查模型连接设置",
   "overlay.openSettings": "去设置",
   "overlay.modelError": "模型出错了",
   "overlay.cancel": "取消",

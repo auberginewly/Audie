@@ -156,11 +156,12 @@ export function Capsule() {
     );
   }
   if (view === "polish-unavailable") {
+    const reason = enhanceProgress?.message.trim();
     return (
       <ToastCard
         key="toast"
-        title={enhanceProgress?.message ?? t("overlay.rawInserted")}
-        subtitle={t("overlay.polishMissing")}
+        title={t("overlay.rawInserted")}
+        subtitle={reason?.length ? reason : t("overlay.polishFailed")}
         buttons={
           <CardButton
             label={t("overlay.openSettings")}
