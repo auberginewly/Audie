@@ -34,4 +34,6 @@
 
 整合后的生产代码已推送 main=abb12dd，[对应 CI 42979405201](https://github.com/auberginewly/Audie/actions/runs/42979405201) 已完成：Windows 与 macOS quality 均为 success，包含本轮完整生产代码和工程检查接线。收尾文档提交后将再次确认远端状态。
 
-收尾审查再次独立执行主 clone 工程检查及 21 个隐私/工程 fixture，全部通过，无剩余源代码或安全问题。真人口述反馈待补，原生完整矩阵继续开放。
+收尾审查再次独立执行主 clone 工程检查及 21 个隐私/工程 fixture，全部通过，无剩余源代码或安全问题。真人普通听写已由作者确认自动粘贴，并由临时目标长度 24→48 与真实 ASR final/state 独立核对；其他原生矩阵继续开放。
+
+收尾文档提交 5653f23 的 [CI 42980509316](https://github.com/auberginewly/Audie/actions/runs/42980509316) 同样 Windows/macOS success。随后仅补充真人验收证据，不改生产代码。

@@ -13,7 +13,7 @@ P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History �
 
 ## 能力清单（已可用）
 
-- ✅ **工程后续已实施**（2026-11-11）：修复 Windows 测试程序系统清单与退役 macOS runner，构建修复已获远端双平台 CI 通过；provider/前端诊断不再透传响应正文、凭据 URL、payload 或未知异常；新增 400 行/公共指南格式和链接检查，接入 CI，并在本机显式安装、实跑 pre-commit。pipeline 用中文解释生命周期边界并改为显式导入，76 个函数/测试正文不变。Rust 222 passed / 1 ignored、前端 47 passed、fmt/clippy、typecheck/lint（0 error / 11 既有模式 warning）/format/build、macOS 原生构建通过。已实跑原生录音、取消/撤销、空结果与终态；**有效口述的目标粘贴及完整三模式/多屏矩阵仍待核实，不将 Success 事件直接等同粘贴通过**。详见 [集成记录](../openspec/changes/harden-engineering-checks/integration-evidence.md) 与 [原生记录](../openspec/changes/harden-engineering-checks/native-evidence.md)。
+- ✅ **工程后续已实施**（2026-11-11）：修复 Windows 测试程序系统清单与退役 macOS runner，构建修复已获远端双平台 CI 通过；provider/前端诊断不再透传响应正文、凭据 URL、payload 或未知异常；新增 400 行/公共指南格式和链接检查，接入 CI，并在本机显式安装、实跑 pre-commit。pipeline 用中文解释生命周期边界并改为显式导入，76 个函数/测试正文不变。Rust 222 passed / 1 ignored、前端 47 passed、fmt/clippy、typecheck/lint（0 error / 11 既有模式 warning）/format/build、macOS 原生构建通过。已实跑原生录音、取消/撤销、空结果与终态；**真人普通听写已确认实际粘贴（临时文档 24→48 字符）；改写/写作、有效内容恢复及多屏等完整矩阵仍待核实**。详见 [集成记录](../openspec/changes/harden-engineering-checks/integration-evidence.md) 与 [原生记录](../openspec/changes/harden-engineering-checks/native-evidence.md)。
 
 - **工程规范补全**（2026-11-11）：新增公共 CONTRIBUTING 与 ENGINEERING，记录命名、中文注释、接口、错误日志、测试及按改动类型的验收要求；README 增加入口，架构导航补依赖边界。本机 AGENTS/CLAUDE 同步现有 TOML/SQLite/工作线程及检查流程，公共 OpenSpec 配置有不依赖本机私有文件的阅读入口。仅文档修改，验证结果见 [document-engineering-standards](../openspec/changes/document-engineering-standards/evidence.md)。
 
