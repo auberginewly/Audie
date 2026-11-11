@@ -1,7 +1,7 @@
 # Audie · 进度计划书（做到哪了）
 
 > 现在完成了什么的快照。公共规范在 [ENGINEERING.md](ENGINEERING.md)，开发入口在 [CONTRIBUTING.md](../CONTRIBUTING.md)，职责/依赖在 [ARCHITECTURE.md](ARCHITECTURE.md)；维护者本机的 [ROADMAP.md](ROADMAP.md) 记录未来方向。
-> 更新于 2026-11-11。
+> 更新于 2026-11-12。
 
 ---
 
@@ -12,6 +12,8 @@
 P0–P3 主体及 onboarding/Home/History、触发键自定义、设备选择已实现。三处版本均为 **0.2.1**，GitHub 已发布 [v0.2.1](https://github.com/auberginewly/Audie/releases/tag/v0.2.1)（Apple Silicon DMG + Windows x64 NSIS，历史 Release 标记为非 prerelease）。当前 [发布工作流](../.github/workflows/release.yml) 对未来版本创建 Pre-release：macOS ad-hoc 签名、Windows 无签名；尚无 Apple 公证或 updater。本地重打 0.2.1 测试包不构成新发布，下一版本号未定，流程见 [release-workflow.md](specs/release-workflow.md) 与 [VERSIONING.md](VERSIONING.md)。终态 toast 四态逐态走查已由作者于 2026-07-18 免除；Windows 编译、测试和 clippy 已过远端 CI，系统热键/剪贴板等仍待 Windows 实机验收。
 
 ## 实现与验证范围
+
+- 🟡 **macOS 稳定性验收与选区修复**（2026-11-12）：真实合成语音经麦克风、豆包和 DeepSeek，已核对 TextEdit、Chrome 与 VS Code 的目标内容；录音取消/撤销、取消到期不粘贴、受控 ASR 404 后重试与 LLM 连接失败原文兜底已有证据。发现并修复 VS Code 无选区复制整行被误判为改写：macOS 优先读取真实选区，确认空选区不再复制探测；原生模式由错误的 rewrite 恢复为 polish，真正选区仍可改写。Rust 226 passed / 1 ignored，前端51 passed、clippy与独立审查通过；固定安装包已更新、签名身份与设置保持，旧包完整备份。三条早期目标不一致记录仍待复现，未追溯标为通过；作者暂不方便配合，微信和真实睡眠唤醒保持待测，真实断网/超时等也未覆盖。详见[本轮证据](../openspec/changes/verify-macos-stability/evidence.md)。
 
 - 🟡 **残留问题已修复（本机）**（2026-11-11）：润色失败现在沿用已有事件保留具体原因，胶囊标题为已插入原文，副标题不再对全部失败硬编码未配置模型；Rust 库单测 223 passed / 1 ignored、前端 51 passed，独立代码审查通过。原 0.1.1 已完整备份，将本机开发签名的 0.2.1 修复构建安装到 `/Applications/Audie.app`；设置摘要未变。重新添加 canonical app 的输入监控授权后，Launch Services 正常启动及重启均注册 Fn；保存的 DeepSeek 凭据连接测试通过（237 ms）。辅助功能也已按固定路径重新添加；真实录音触发 LLM 404 后，原生胶囊显示具体原因，TextEdit 与转写原文逐字一致，作者确认通过。临时故障已恢复正常 endpoint。此为本机修复包，未新建公开 Release、公证或更新 CI 签名。方案与证据见 [错误反馈修复](../openspec/changes/fix-enhance-failure-feedback/evidence.md) 和 [安装身份修复](../openspec/changes/repair-macos-install-identity/evidence.md)。
 

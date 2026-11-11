@@ -1,5 +1,9 @@
 use std::time::Duration;
 
+use core_foundation::base::{CFType, CFTypeID, CFTypeRef, TCFType};
+use core_foundation::boolean::CFBoolean;
+use core_foundation::string::{CFString, CFStringRef};
+
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use tauri::AppHandle;
@@ -37,6 +41,10 @@ pub(super) fn inject_text(
 }
 
 pub(super) fn read_selection(app: &AppHandle) -> Option<String> {
+    selection_or_copy(focused_selection(), || read_selection_by_copy(app))
+}
+
+fn read_selection_by_copy(app: &AppHandle) -> Option<String> {
     const SENTINEL: &str = "\u{2063}AUDIE_SEL_PROBE\u{2063}";
     let original = app.clipboard().read_text().ok();
     if app.clipboard().write_text(SENTINEL.to_string()).is_err() {
@@ -147,3 +155,89 @@ fn restore_focus_if_stolen(target_pid: i32) -> bool {
         activated
     }
 }
+
+// 系统已确认的空选区也有意义：不能继续 Cmd+C，把编辑器复制整行误当成选区。
+fn selection_or_copy(
+    known: Option<String>,
+    copy: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    known.or_else(copy)
+}
+
+// 只读取焦点控件的选中文字，不读取整篇文档或其他应用内容。
+fn focused_selection() -> Option<String> {
+    let pid = current_frontmost_pid()?;
+    // SAFETY: Create 返回 +1 引用，由 CFType 负责释放；以下 API 只在 macOS 编译。
+    let app = unsafe { AXUIElementCreateApplication(pid) };
+    if app.is_null() {
+        return None;
+    }
+    let app = unsafe { CFType::wrap_under_create_rule(app) };
+    // 热键回调不能长时间等待无响应的其他应用。
+    unsafe { AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.05) };
+    if let Some(text) = ax_selected_text(&app) {
+        return Some(text);
+    }
+    let manual = CFString::new("AXManualAccessibility");
+    let enabled = CFBoolean::true_value();
+    // Electron 按需建立 AX 树；这是其官方辅助功能开关，不更改编辑器偏好设置。
+    let electron = unsafe {
+        AXUIElementSetAttributeValue(
+            app.as_CFTypeRef(),
+            manual.as_concrete_TypeRef(),
+            enabled.as_CFTypeRef(),
+        ) == 0
+    };
+    if electron {
+        // 首次建树可能尚未完成。无法确认选区时保守听写，不能回退 Cmd+C 复制整行。
+        Some(ax_selected_text(&app).unwrap_or_default())
+    } else {
+        None
+    }
+}
+
+fn ax_selected_text(app: &CFType) -> Option<String> {
+    let focused = ax_attribute(app, "AXFocusedUIElement")?;
+    // SAFETY: 只有确认类型为 AXUIElement 后，才能向该对象发送 AX 请求。
+    if focused.type_of() != unsafe { AXUIElementGetTypeID() } {
+        return None;
+    }
+    unsafe { AXUIElementSetMessagingTimeout(focused.as_CFTypeRef(), 0.05) };
+    ax_attribute(&focused, "AXSelectedText")?
+        .downcast::<CFString>()
+        .map(|text| text.to_string())
+}
+
+fn ax_attribute(element: &CFType, name: &str) -> Option<CFType> {
+    let name = CFString::new(name);
+    let mut value = std::ptr::null();
+    // SAFETY: element/name 在调用期间存活，out 指针有效；成功的 Copy 引用交给 CFType 释放。
+    let status = unsafe {
+        AXUIElementCopyAttributeValue(
+            element.as_CFTypeRef(),
+            name.as_concrete_TypeRef(),
+            &mut value,
+        )
+    };
+    if status != 0 || value.is_null() {
+        return None;
+    }
+    Some(unsafe { CFType::wrap_under_create_rule(value) })
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXUIElementCreateApplication(pid: i32) -> CFTypeRef;
+    fn AXUIElementGetTypeID() -> CFTypeID;
+    fn AXUIElementSetMessagingTimeout(element: CFTypeRef, seconds: f32) -> i32;
+    fn AXUIElementSetAttributeValue(element: CFTypeRef, name: CFStringRef, value: CFTypeRef)
+        -> i32;
+    fn AXUIElementCopyAttributeValue(
+        element: CFTypeRef,
+        name: CFStringRef,
+        value: *mut CFTypeRef,
+    ) -> i32;
+}
+
+#[cfg(test)]
+mod tests;
