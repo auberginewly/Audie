@@ -16,7 +16,9 @@
     "test": "node scripts/run-tests.mjs",
     "test:home-chart": "node scripts/run-tests.mjs src/features/home",
     "test:settings-schema": "node scripts/run-tests.mjs src/features/settings",
-    "test:onboarding-permissions": "node scripts/run-tests.mjs src/features/permissions"
+    "test:onboarding-permissions": "node scripts/run-tests.mjs src/features/permissions",
+    "check:engineering": "node scripts/check-engineering.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

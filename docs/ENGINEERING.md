@@ -18,7 +18,7 @@
 | Zod schema                | `XxxSchema`，优先从 schema 推导对应类型           | `SettingsSchema`                          |
 | 前端纯测试                | 功能目录中的 `__tests__/*.test.mjs`               | `home/__tests__/home-chart.test.mjs`      |
 
-- 手写 Rust/TS/TSX 业务文件目标不超过 400 个物理行，包含空行与注释。测试独立计算，过长同样按场景拆分；生成文件除外。
+- 手写 Rust/TS/TSX/MJS 源码、测试与工程脚本不超过 400 个物理行，包含空行与注释，末尾换行不另算空行。测试独立计算，过长同样按场景拆分；生成文件除外。`pnpm check:engineering` 检查 src、src-tauri、scripts、tests 及根目录同类文件，排除 node_modules、target、dist、dist-ssr 和 src-tauri/gen 构建/生成目录；零发现视为失败。
 - 按经常一起修改的职责拆分，不按固定行号分割。必要的超长例外先解释取舍并由维护者确认。
 - 测试、类型和纯逻辑靠近拥有它的功能；公共目录只接收确实跨功能使用、且不反向依赖业务的内容。
 - 类型最小可见：Rust 优先私有，再按实际协作需要用 `pub(super)` / `pub(crate)`；不为测试公开实现细节。
@@ -92,7 +92,7 @@ type TakeGen = Arc<AtomicU64>;
 
 ## 测试与验收
 
-Rust 单测放所属模块 `tests.rs` / `tests/`，由 `#[cfg(test)] mod tests;` 接入；前端纯测试放功能 `__tests__/*.test.mjs`。发布脚本测试留根 `tests/`。沿用现有 Cargo/Node runner，不为补规范替换测试框架。
+Rust 单测放所属模块 `tests.rs` / `tests/`，由 `#[cfg(test)] mod tests;` 接入；前端纯测试放功能 `__tests__/*.test.mjs`。发布及工程脚本测试留根 `tests/`。沿用现有 Cargo/Node runner，不为补规范替换测试框架。
 
 | 改动                         | 至少检查什么                                               | 补充验收                                                                 |
 | ---------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
@@ -115,6 +115,8 @@ Rust 单测放所属模块 `tests.rs` / `tests/`，由 `#[cfg(test)] mod tests;`
 - CONTRIBUTING 维护开发/提交步骤；本文维护工程细则；ARCHITECTURE 维护职责/依赖；STATUS 维护实际进度；OpenSpec 维护当次目标、取舍和验收。相同规则链接到所属文档，避免多处复制。
 - 新增约定与实际修复同步提交；遇到文档/实现冲突，先识别既有行为与已批准决策，再修正过期描述。不能因为代码已经不同就自行改变产品合同。
 - 本机 AGENTS/CLAUDE 可附加协作约束；公共工程规则和必要开发步骤应纳入 Git。不要为了公开规范把含个人信息或本机配置的文件全部提交。
+- `pnpm check:engineering` 自动检查源码规模，以及 CONTRIBUTING、ENGINEERING、ARCHITECTURE、两份 README 的 Markdown 格式与本地相对链接/锚点；直接读取文件，不受 Git ignore 影响。不联网检查外链，不默认格式化历史进度/验收材料；额外 Markdown 可通过命令参数指定。
+- 每个 clone 通过 `pnpm hooks:install` 显式启用静态检查 hook，安装器拒绝覆盖已有用户 hook/config；`pnpm install` 不自动安装。具体检查与手动验收命令见 CONTRIBUTING。
 - lint/format 等可自动检查的规则交给现有工具；语义、注释准确性和真实系统验收仍需审阅。新增工具或严厉化旧规则另作切片确认。
 
 本规范参考下列资料并按 Audie 规模取舍，不要求照搬它们的目录、库或全部流程：

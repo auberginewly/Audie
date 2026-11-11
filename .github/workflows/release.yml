@@ -45,6 +45,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - run: pnpm test
+      - run: pnpm check:engineering
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check

@@ -74,6 +74,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: node scripts/check-release-version.mjs
+      - run: pnpm check:engineering
       - name: Require an unused release version
         if: github.event_name == 'pull_request' && github.base_ref == 'release'
         run: node scripts/check-release-version.mjs --require-unreleased

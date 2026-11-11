@@ -45,6 +45,9 @@ OpenSpec CLI 是文档工作流工具，不是运行应用的依赖。维护变�
 以下命令均在仓库根目录运行；按 [验收矩阵](docs/ENGINEERING.md#测试与验收) 选择需要的检查。
 
 ```sh
+# 工程规范：源码规模、公共指南格式与相对链接（含锚点）
+pnpm check:engineering
+
 # 前端
 pnpm test
 pnpm typecheck
@@ -67,12 +70,18 @@ pnpm tauri build --debug --no-bundle
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-本地暂未自动安装 pre-commit hook，手动运行检查；CI 检查以 [ci.yml](.github/workflows/ci.yml) 为准。已有 warning 不等于本轮新增问题，记录来源，避免在当前切片混入无关清理。
-
-文档改动检查 Markdown 格式、相对链接、命令来源和 `git diff --check`；不为纯文档修改重跑录音、provider 或整个构建。macOS 可使用现有 Prettier 检查明确的文件（docs/ 被 Git 忽略，使用空 ignore 来源避免漏检）：
+每个 clone 需显式安装本地 pre-commit hook；`pnpm install` 不会自动安装：
 
 ```sh
-pnpm exec prettier --ignore-path /dev/null --check CONTRIBUTING.md docs/ENGINEERING.md docs/ARCHITECTURE.md
+pnpm hooks:install
+```
+
+安装器仅设置当前 clone 的 `core.hooksPath=.githooks`，重复运行安全；发现已有自定义 hooksPath 或默认 pre-commit 时拒绝覆盖，请先自行协调。已安装的 hook 依次运行工程检查、typecheck、lint、format:check、Rust fmt 和 `clippy --all-targets -D warnings`，任一失败阻止提交且保留退出码；不会修改文件或暂存区。测试、build 与真实系统验收仍按上表手动运行。CI 检查以 [ci.yml](.github/workflows/ci.yml) 为准。已有 warning 不等于本轮新增问题，记录来源，避免在当前切片混入无关清理。
+
+文档改动检查 Markdown 格式、相对链接、命令来源和 `git diff --check`；不为纯文档修改重跑录音、provider 或整个构建。`check:engineering` 使用现有 Prettier 配置，直接读取 CONTRIBUTING、ENGINEERING、ARCHITECTURE 与两份 README，不受 Git ignore 影响；历史 STATUS、OpenSpec 证据不默认纳入格式检查。额外修改的 Markdown 可显式追加（同样支持被忽略的 docs）：
+
+```sh
+pnpm check:engineering docs/VERSIONING.md
 ```
 
 ## 提交与 PR
