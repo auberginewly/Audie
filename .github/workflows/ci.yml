@@ -44,7 +44,7 @@ jobs:
 
   quality:
     name: CI / quality
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Require main as the release PR source
         if: >-

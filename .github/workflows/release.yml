@@ -15,7 +15,7 @@ jobs:
   validate:
     name: validate
     if: github.event.before != '0000000000000000000000000000000000000000'
-    runs-on: macos-14
+    runs-on: macos-15
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -59,7 +59,7 @@ jobs:
   build-macos:
     name: build / macOS
     needs: validate
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
 
