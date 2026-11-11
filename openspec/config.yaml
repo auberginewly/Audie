@@ -4,14 +4,16 @@ context: |
   Language: zh-CN. 新建产物使用中文，保留 OpenSpec 结构标题及 SHALL/MUST 关键字。
   Audie 是 BYOK 跨平台语音输入客户端：快捷键录音 → ASR → 可选润色 → 光标注入，无后端。
   技术栈固定为 Tauri 2、Rust、React、TypeScript、Zustand、Tailwind v4；pnpm + cargo。
-  先读 AGENTS.md、docs/STATUS.md、docs/ROADMAP.md、PROJECT_SPEC.md 与 SESSION_PLAYBOOK 中断信号。
+  公共入口先读 CONTRIBUTING.md、docs/ENGINEERING.md、docs/ARCHITECTURE.md 与 docs/STATUS.md。
+  若本机有 AGENTS.md、docs/ROADMAP.md、PROJECT_SPEC.md、docs/SESSION_PLAYBOOK.md，再读取协作约束、方向与中断信号；这些文件可能不随 clone 提供。
   AGENTS.md 为最高项目规范；架构与取舍由作者决定，修改代码前说明文件、原因并取得确认。
   沿用 Manager + Command/Event、Platform trait 和 provider trait；不擅自新增层、库或抽象。
   系统功能先参考 Handy。API key 只进系统凭据存储，音频默认不落盘。
   不做会议转录、移动端、实时翻译、agent/语音执行、账号/云同步或自建后端。
   本地 ASR 已退役；本分支以 main 加恢复修复为基线。
   作者已取消多模板管理和循环快捷键；沿用原三份提示词及设置字段，保留恢复上下文快照。
-  当前能力合同以 PROJECT_SPEC.md 为准；openspec/specs 只接收经验证、评审后的变更合同，逐步积累。
+  已确认行为以经验证的变更合同为准；维护者本地 PROJECT_SPEC.md 提供历史产品定义，过期描述先核对代码与作者决定，不自行改产品。
+  openspec/specs 只接收经验证、评审后的变更合同，逐步积累；文档切片不虚构产品能力。
 
 rules:
   proposal:

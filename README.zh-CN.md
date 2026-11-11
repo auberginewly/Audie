@@ -18,3 +18,5 @@
 ![Audie](assets/audie-showcase-v2.webp)
 
 Audie 是一款支持 macOS 和 Windows 的语音输入工具：录音时实时上传音频，结束录音即可获得最终文本，并可选择通过 AI 自动整理语气词、错字与标点。当前 Windows 版本以 x64 预览版形式提供。
+
+开发入口：[参与开发](CONTRIBUTING.md) · [工程规范](docs/ENGINEERING.md) · [代码导航](docs/ARCHITECTURE.md)。

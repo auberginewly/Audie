@@ -18,3 +18,5 @@ English | [简体中文](README.zh-CN.md)
 ![Audie](assets/audie-showcase-v2.webp)
 
 Audie is a voice input app for macOS and Windows. It streams audio while you speak, delivers the final text when you stop, and can optionally use AI to clean up filler words, typos, and punctuation. The current Windows release is available as an x64 preview.
+
+Development: [Contributing](CONTRIBUTING.md) · [Engineering standards (中文)](docs/ENGINEERING.md) · [Codebase guide (中文)](docs/ARCHITECTURE.md).
