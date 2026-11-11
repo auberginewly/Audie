@@ -57,3 +57,7 @@ lib.rs 从 1667 行缩为装配入口，commands.rs 1014 行拆为功能命令�
 - 最终文档提交更新总计划、STATUS 和代码导航；完整树再次核验后本地 fast-forward main，不推送。
 
 React Doctor 完整同范围扫描基线 50/100 → 当前 52/100，均 38 条诊断；没有分数回退。仅迁移已有模式，未把诊断改善作为本次架构整理之外的功能修改。
+
+## 工程后续（2026-11-11）
+
+本记录上方是搬迁时的历史结果。后续已完成 pipeline 中文注释/显式导入与诊断隐私收口；Rust 222 passed / 1 ignored、前端 47 passed，完整生产代码 Windows/macOS CI 均通过。详见 [新集成记录](../harden-engineering-checks/integration-evidence.md)。真实麦克风、取消/恢复、空结果已部分观察，但有效粘贴和完整系统矩阵仍待确认，详见 [原生记录](../harden-engineering-checks/native-evidence.md)，不以 Success 事件替代目标字段结果。

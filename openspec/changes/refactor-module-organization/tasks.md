@@ -108,7 +108,7 @@ Rust 检查组 R：cargo test --manifest-path src-tauri/Cargo.toml；cargo fmt -
 ## 18. S8 — 全部已实施范围的最终集成验收
 
 - [x] 18.1 对照设计审查模块依赖、入口职责、400 行目标和测试归属；逐项说明保留文件/超长例外，清理已完成迁移的薄转发，不删除其他未完成切片的代码或文档。
-- [ ] 18.2 执行 R/F/native build，核对全量测试发现清单与 Windows CI；实际未运行或不可访问的检查明确记未验证，不将编译成功当作 Windows 系统行为验收。
+- [x] 18.2 执行 R/F/native build，核对全量测试发现清单与 Windows CI；实际未运行或不可访问的检查明确记未验证，不将编译成功当作 Windows 系统行为验收。
 - [ ] 18.3 完成 design 中 macOS 手动矩阵，核对命令/事件、设置格式、历史数据和三模式恢复未变；更新 STATUS 与架构/协作文档的真实模块位置，记录提交，所有未验收项保留未勾选。
 
 ## Workflow follow-up
@@ -116,3 +116,7 @@ Rust 检查组 R：cargo test --manifest-path src-tauri/Cargo.toml；cargo fmt -
 - 代码范围按作者明确要求全部实施，分前端、Rust 入口/流程及能力实现提交，集成记录单独维护。
 - 每个关联 change 仅记录实际验证结果；真实录音、联网 provider、焦点、多屏和 Windows 未测项保持开放，不归档为全验收。
 - 本变更 skip_specs，不向 openspec/specs 同步虚构的产品能力。
+
+## 工程后续验证（2026-11-11）
+
+[工程收口记录](../harden-engineering-checks/integration-evidence.md) 已补 Rust 222 passed / 1 ignored、前端 47 passed、R/F/native build，以及完整生产代码 abb12dd 的 [Windows/macOS CI](https://github.com/auberginewly/Audie/actions/runs/42979405201) success，因此 18.2 已完成。原生只部分验证，见 [实际系统记录](../harden-engineering-checks/native-evidence.md)；真实粘贴、三模式/焦点/多屏等未证实项仍不勾选，历史基线 1.3 不补造。

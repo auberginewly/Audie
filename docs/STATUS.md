@@ -9,9 +9,11 @@
 
 **核心听写闭环已跑通、真机验证全链路通**：按快捷键 toggle 录音 → 豆包流式 ASR 出 final → 智能润色 → 注入到当前光标处。差异化（真流式 + 润色 + BYOK）已兑现。
 
-P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History 已接真、触发键自定义、设备选择、README 产品展示）。剩下：终态 toast 四态验收、真分发（dmg+签名+公证）；P4 跨平台刚起步——Windows 平台层第一块已写但**未编译验证**。
+P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History 已接真、触发键自定义、设备选择、README 产品展示）。剩下：终态 toast 四态验收、真分发（dmg+签名+公证）；P4 跨平台刚起步——Windows 平台层已通过远端 CI 编译、测试和 clippy，热键/剪贴板等系统行为仍待 Windows 实机验收。
 
 ## 能力清单（已可用）
+
+- ✅ **工程后续已实施**（2026-11-11）：修复 Windows 测试程序系统清单与退役 macOS runner，构建修复已获远端双平台 CI 通过；provider/前端诊断不再透传响应正文、凭据 URL、payload 或未知异常；新增 400 行/公共指南格式和链接检查，接入 CI，并在本机显式安装、实跑 pre-commit。pipeline 用中文解释生命周期边界并改为显式导入，76 个函数/测试正文不变。Rust 222 passed / 1 ignored、前端 47 passed、fmt/clippy、typecheck/lint（0 error / 11 既有模式 warning）/format/build、macOS 原生构建通过。已实跑原生录音、取消/撤销、空结果与终态；**有效口述的目标粘贴及完整三模式/多屏矩阵仍待核实，不将 Success 事件直接等同粘贴通过**。详见 [集成记录](../openspec/changes/harden-engineering-checks/integration-evidence.md) 与 [原生记录](../openspec/changes/harden-engineering-checks/native-evidence.md)。
 
 - **工程规范补全**（2026-11-11）：新增公共 CONTRIBUTING 与 ENGINEERING，记录命名、中文注释、接口、错误日志、测试及按改动类型的验收要求；README 增加入口，架构导航补依赖边界。本机 AGENTS/CLAUDE 同步现有 TOML/SQLite/工作线程及检查流程，公共 OpenSpec 配置有不依赖本机私有文件的阅读入口。仅文档修改，验证结果见 [document-engineering-standards](../openspec/changes/document-engineering-standards/evidence.md)。
 
@@ -35,7 +37,7 @@ P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History �
 - ✅ **ASR endpoint 设置贯穿**（未 commit，方案见 [asr-endpoint-settings.md](specs/asr-endpoint-settings.md)）：GLM / 通义 Fun-ASR / StepFun 的 endpoint 已贯穿 `settings.toml`、Rust `TranscriptionConfig`、provider adapter、前端 Zod 与配置弹窗；旧配置自动补官方默认值。同步修复豆包流式队列 overflow 转 batch 时丢失 endpoint/resource_id/key 的兼容缺口，避免误报「Doubao endpoint 未配置」。验证：Rust 187 通过、1 ignored，默认 target clippy、TypeScript、build、Prettier、schema 测试通过；lint 0 error / 40 个既有 warning。
 - ✅ **Home 字数趋势收尾**（`bd300af` / `a116930`）：真实日聚合支持近 7/30/60 天；X 轴固定 7 个像素等距日期且折线首尾贴边；双线分别取主题亮紫 `--accent-text` / 深紫 `--accent-fill`；Recharts 固定 3.8.1 消除 7 天生长动画末帧 dash 切换；关闭图表焦点层，点击不再出现蓝框。README 已收敛为极简产品介绍并使用 Desktop「展示图2」（`9f13d26`）。验证：Node 图表测试 4/4、HistoryManager 14/14、`fmt` / `clippy -D warnings` / `typecheck` / `lint` / `build` 通过，React Doctor 对本切片文件零诊断；Playwright 实测三档请求、7 个等距日期、首尾路径、主题色、55 帧动画与点击焦点均符合验收。
 - ✅ **模态弹窗 stroke 统一**（未 commit，方案见 [dialog-stroke-consistency.md](specs/dialog-stroke-consistency.md)）：设置、模型配置、首次配置向导和 History 清空确认统一使用 `1px gray-alpha-100` 外边框；菜单、下拉、toast 与录音胶囊保持不变。
-- 🟡 **Windows 平台层第一块**（`9964919`，**未编译验证**）：hotkey（RegisterHotKey + 消息线程，主/写作双 slot）、剪贴板法注入、Credential Manager 存 key、系统语言；windows-sys 按 target 门控。本机 Homebrew Rust 无 rustup 装不了 windows-msvc target，cfg 门控下默认 target 不编译它——待 Windows 真机或 CI 多平台验证，验证前不算收尾切片
+- 🟡 **Windows 平台层**（始于 `9964919`；2026-11-11 已通过远端 Windows build/test/clippy）：hotkey（RegisterHotKey + 消息线程，主/写作双 slot）、剪贴板法注入、Credential Manager 存 key、系统语言；windows-sys 按 target 门控。本机 macOS 不代替 Windows 验收；当前编译/测试已由 CI 验证，系统热键/注入/凭据行为仍待真实 Windows 设备，验证前不标系统验收完成。
 - ✅ 配置导入导出（敏感字段占位）、错误态分类、AirPods/Continuity 设备绕开
 
 ## 真实 / mock / 待办
