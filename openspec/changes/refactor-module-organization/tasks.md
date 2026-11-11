@@ -8,14 +8,14 @@ Rust 检查组 R：cargo test --manifest-path src-tauri/Cargo.toml；cargo fmt -
 
 ## 1. S0 — 保存并验证基线
 
-- [ ] 1.1 记录当前分支、HEAD、dirty/untracked 文件及可恢复基线，将既有恢复/文档修改与本重构区分；验证基线能还原且没有丢弃用户改动。
-- [ ] 1.2 记录 Rust --lib -- --list 与 Node 测试用例清单，运行 R/F 及 pnpm tauri build --debug --no-bundle；逐项记录真实通过、失败或环境限制，不自动修复无关失败。
+- [x] 1.1 记录当前分支、HEAD、dirty/untracked 文件及可恢复基线，将既有恢复/文档修改与本重构区分；验证基线能还原且没有丢弃用户改动。
+- [x] 1.2 记录 Rust --lib -- --list 与 Node 测试用例清单，运行 R/F 及 pnpm tauri build --debug --no-bundle；逐项记录真实通过、失败或环境限制，不自动修复无关失败。
 - [ ] 1.3 在 macOS 演示普通听写、改写/写作、提示词编辑和取消/重试基线；将实际覆盖、既有失败和未测场景写入本 change 实施记录与 STATUS，确认后才进入搬迁。
 
 ## 2. S1 — 测试与业务分文件
 
-- [ ] 2.1 将 lib.rs 测试迁至 src/tests/lib_tests.rs，commands.rs 测试迁至 src/tests/commands_tests.rs，通过各自 cfg(test)/path 保留原子模块访问；验证非测试编译不包含这些文件、没有为测试扩大生产可见性。
-- [ ] 2.2 拆开超过 400 行的测试文件时按已有恢复/配置/提示词等场景分文件；运行 R，对照忽略模块前缀的用例清单，确认无丢失和意外新增 ignored。
+- [x] 2.1 将 lib.rs 测试迁至 src/tests/lib_tests.rs，commands.rs 测试迁至 src/tests/commands_tests.rs，通过各自 cfg(test)/path 保留原子模块访问；验证非测试编译不包含这些文件、没有为测试扩大生产可见性。
+- [x] 2.2 拆开超过 400 行的测试文件时按已有恢复/配置/提示词等场景分文件；运行 R，对照忽略模块前缀的用例清单，确认无丢失和意外新增 ignored。
 - [ ] 2.3 演示一次快捷键听写与胶囊收尾；检查本片 diff 仅测试位置和模块声明，更新 STATUS 并独立提交，记录后续随业务迁移的测试落点。
 
 ## 3. S2 — 设置数据、规则及持久化

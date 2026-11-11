@@ -13,6 +13,8 @@ P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History �
 
 ## 能力清单（已可用）
 
+- ✅ **仓库整理 S1：测试独立文件**（2026-11-11，见 [separate-rust-tests](../openspec/changes/separate-rust-tests/evidence.md)）：37 个原有 lib/commands 测试函数按职责迁入 tests/lib/ 与 tests/commands/，每个新文件少于 400 行，生产正文与测试断言逐字核对不变；lib.rs 2054→1667 行，commands.rs 1595→1014 行。201 个 Cargo 用例身份未变，Rust 200 passed / 1 ignored、前端 26 passed、fmt/clippy/typecheck/lint/format/build 与原生构建通过。**只完成测试分离；设置、听写流程和前端按功能整理尚未实施；原真实录音/跨 App 待验状态不变**。
+
 - 🟡 **保留恢复修复、取消多模板**（2026-11-11，方案与证据见 [preserve-recovery-without-templates](../openspec/changes/preserve-recovery-without-templates/evidence.md)）：作者已取消多模板管理和循环快捷键；基于 main 仅迁入三模式上下文快照、转写复用、正确原文插入与取消/旧定时器隔离，保留原三份提示词及前端配置。新增 10 个独立文件回归测试，Rust 200 passed / 1 ignored，前端 26 passed，fmt/clippy/typecheck/lint（0 error / 34 条既有 warning）/format/build、原生构建与 OpenSpec 校验通过；取消、定时器负对照如预期失败，恢复后通过。**真实录音及跨 App 粘贴待手动验收，Windows 未实测；后续架构重构尚未开始**。
 
 - ✅ 快捷键 **toggle** 录音（单击开始、再击结束）+ 底部胶囊状态机
