@@ -34,4 +34,4 @@
 ## 5. 收尾
 
 - [x] 5.1 readiness-evidence 与 STATUS/任务记录一致，检查 doc diff 无生产代码/版本/密钥改动。
-- [ ] 5.2 既有 pre-commit 通过后独立提交，fast-forward 合入 main 并推送；真实未验收项保持开放。
+- [x] 5.2 既有 pre-commit 通过后独立提交，fast-forward 合入 main 并推送；真实未验收项保持开放。
