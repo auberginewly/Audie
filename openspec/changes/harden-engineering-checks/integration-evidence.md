@@ -37,3 +37,5 @@
 收尾审查再次独立执行主 clone 工程检查及 21 个隐私/工程 fixture，全部通过，无剩余源代码或安全问题。真人普通听写已由作者确认自动粘贴，并由临时目标长度 24→48 与真实 ASR final/state 独立核对；其他原生矩阵继续开放。
 
 收尾文档提交 5653f23 的 [CI 42980509316](https://github.com/auberginewly/Audie/actions/runs/42980509316) 同样 Windows/macOS success。随后仅补充真人验收证据，不改生产代码。
+
+真人恢复验收补充：作者确认录音中取消后点击撤销，恢复处理并自动粘贴。日志 Recording → Cancel → Processing → Success → Idle 与临时文档 48→62 字符相互印证；具体范围见 [原生记录](native-evidence.md)。本次仅补充证据与 STATUS/任务进度，不修改生产代码；其余系统矩阵仍开放。
