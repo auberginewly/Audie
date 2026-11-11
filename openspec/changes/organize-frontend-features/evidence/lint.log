@@ -152,4 +152,3 @@ Calling setState synchronously within an effect body causes cascading renders th
   38:15  warning  Prefer the safe `: unknown` for a `catch` callback variable  @typescript-eslint/use-unknown-in-catch-callback-variable
 
 ✖ 34 problems (0 errors, 34 warnings)
-

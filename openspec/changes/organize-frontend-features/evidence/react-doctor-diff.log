@@ -3,7 +3,7 @@ The `--diff` flag is deprecated; use `--scope changed` (add `--base <ref>` to pi
 ✔ Select projects › audie
 Scanning changes: codex/reorganize-modules → origin/main
 
-  
+
 Agent guidance
   - Treat React Doctor diagnostics as starting hypotheses. Read the relevant code before confirming or suppressing each finding.
   - For each group, decide true positive, false positive, or needs-human-review, then assign high/medium/low confidence.

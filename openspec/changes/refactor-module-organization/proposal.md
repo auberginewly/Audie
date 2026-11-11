@@ -35,4 +35,4 @@ Audie 的听写闭环已可用，但入口、设置与测试混放，功能相�
 | 测试与工具 | tests/*.test.mjs、package.json、tsconfig、ESLint/Prettier、CI | 修复路径、测试发现和覆盖范围，不引入测试框架或新依赖 |
 | 文档 | docs/STATUS.md、PROJECT_SPEC.md、AGENTS.md/CLAUDE.md | 实施每片时记录结果及模块位置；不把规划状态写成已完成 |
 
-本次请求仅产出规划文件。实施前必须保护工作区已有恢复等改动，建立可回退基线，不捆绑其他功能提交，不覆盖旧验收边界。目录、迁移映射、依赖与验收见 [design.md](design.md)，分片清单见 [tasks.md](tasks.md)。
+原规划阶段已结束；2026-11-11 作者明确授权连续完成全部代码整理。实施保留已合入的恢复修复，独立提交，不覆盖旧验收边界。目录、迁移映射、依赖与验收见 [design.md](design.md)，分片清单见 [tasks.md](tasks.md)。

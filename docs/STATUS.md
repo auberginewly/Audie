@@ -1,7 +1,7 @@
 # Audie · 进度计划书（做到哪了）
 
 > 现在完成了什么的快照。规范在 [CLAUDE.md](../CLAUDE.md)，接口/架构在 [PROJECT_SPEC.md](../PROJECT_SPEC.md)，未来方向在 [ROADMAP.md](ROADMAP.md)。
-> 更新于 2026-07-22。
+> 更新于 2026-11-11。
 
 ---
 
@@ -13,9 +13,10 @@ P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History �
 
 ## 能力清单（已可用）
 
-- ✅ **仓库整理 S1：测试独立文件**（2026-11-11，见 [separate-rust-tests](../openspec/changes/separate-rust-tests/evidence.md)）：37 个原有 lib/commands 测试函数按职责迁入 tests/lib/ 与 tests/commands/，每个新文件少于 400 行，生产正文与测试断言逐字核对不变；lib.rs 2054→1667 行，commands.rs 1595→1014 行。201 个 Cargo 用例身份未变，Rust 200 passed / 1 ignored、前端 26 passed、fmt/clippy/typecheck/lint/format/build 与原生构建通过。**只完成测试分离；设置、听写流程和前端按功能整理尚未实施；原真实录音/跨 App 待验状态不变**。
+- ✅ **仓库代码组织已全部实施**（2026-11-11）：Rust 设置核心、功能 command、快捷键、听写 pipeline、平台窗口、Audio/History、LLM/ASR/provider test 均按职责拆分；前端十个功能就近组织 UI/hook/schema/store，文案按语言拆分；全部 Rust 单测独立且就近，前端纯测试迁入 __tests__，发现器兼容根发布测试。217 个手写业务及测试源码全部 ≤400 行（最大 387）；lib.rs 1667→157 行，原 commands.rs 1014 行拆为薄命令与 settings。Rust 200 passed / 1 ignored，前端 26/26，fmt、clippy --all-targets -D warnings、F 组及 macOS 原生 build 通过；40 个 command、209 个含平台门控的源码测试/201 个本机发现身份、768 个有效翻译映射保留；production preview + 模拟 IPC 的 18 项浏览器断言通过，两阶段独立审查无剩余问题。**本轮真实麦克风/联网、跨 App 焦点/注入、多屏/Space 与 Windows 系统验收未进行，OpenSpec 相关任务保持开放**。代码导航见 [ARCHITECTURE.md](ARCHITECTURE.md)，完整证据与待测矩阵见 [organize-dictation-core](../openspec/changes/organize-dictation-core/evidence.md)、[能力模块](../openspec/changes/organize-rust-capabilities/evidence.md)、[前端](../openspec/changes/organize-frontend-features/evidence.md)。
 
-- 🟡 **保留恢复修复、取消多模板**（2026-11-11，方案与证据见 [preserve-recovery-without-templates](../openspec/changes/preserve-recovery-without-templates/evidence.md)）：作者已取消多模板管理和循环快捷键；基于 main 仅迁入三模式上下文快照、转写复用、正确原文插入与取消/旧定时器隔离，保留原三份提示词及前端配置。新增 10 个独立文件回归测试，Rust 200 passed / 1 ignored，前端 26 passed，fmt/clippy/typecheck/lint（0 error / 34 条既有 warning）/format/build、原生构建与 OpenSpec 校验通过；取消、定时器负对照如预期失败，恢复后通过。**真实录音及跨 App 粘贴待手动验收，Windows 未实测；后续架构重构尚未开始**。
+- ✅ **仓库整理 S1 历史切片**（[separate-rust-tests](../openspec/changes/separate-rust-tests/evidence.md)）：先将 lib/commands 测试从业务分离，本轮已随业务搬至 pipeline/tests、settings/tests 和 commands/secrets/tests.rs，旧 src/tests 暂存目录已撤除。
+- 🟡 **保留恢复修复、取消多模板**（2026-11-11，方案与证据见 [preserve-recovery-without-templates](../openspec/changes/preserve-recovery-without-templates/evidence.md)）：作者已取消多模板管理和循环快捷键；基于 main 仅迁入三模式上下文快照、转写复用、正确原文插入与取消/旧定时器隔离，保留原三份提示词及前端配置。新增 10 个独立文件回归测试，Rust 200 passed / 1 ignored，前端 26 passed，fmt/clippy/typecheck/lint（0 error / 34 条既有 warning）/format/build、原生构建与 OpenSpec 校验通过；取消、定时器负对照如预期失败，恢复后通过。**真实录音及跨 App 粘贴待手动验收，Windows 未实测**；后续代码组织已在上条完成。
 
 - ✅ 快捷键 **toggle** 录音（单击开始、再击结束）+ 底部胶囊状态机
 - ✅ **豆包流式 WebSocket ASR**，松手 `is_final` sentinel 确定性收尾出 final

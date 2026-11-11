@@ -1,5 +1,5 @@
 ✔ Select projects › audie
-  
+
 Agent guidance
   - Treat React Doctor diagnostics as starting hypotheses. Read the relevant code before confirming or suppressing each finding.
   - For each group, decide true positive, false positive, or needs-human-review, then assign high/medium/low confidence.
@@ -110,4 +110,3 @@ Performance: 3 warnings
 
   GitHub: https://github.com/millionco/react-doctor
   Report issues and star the repository!
-

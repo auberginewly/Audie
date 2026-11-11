@@ -45,3 +45,7 @@ Applied react-doctor skill, tool **0.9.22**, installed only into npx cache; no p
 ## Remaining
 
 Frontend implementation and automated/browser checks are ready for coordinator review and controlled commit. Native/manual scenarios remain explicitly unverified by this frontend worker. No source file exceeds the line target. STATUS and parent change updates belong to the coordinator.
+
+## Coordinator integration
+
+两阶段只读集成审查通过，原生 macOS debug build 通过，STATUS 已记录真实边界。前端源码以 5813965 独立提交；原生手动矩阵在 organize-dictation-core/evidence.md 保持开放。证据日志仅移除行尾空白以通过 git diff --check，诊断/退出结果未改。
