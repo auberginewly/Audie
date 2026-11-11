@@ -13,6 +13,8 @@ P0–P3 主体完成 + release-v1 外围大部落地（onboarding/Home/History �
 
 ## 能力清单（已可用）
 
+- 🟡 **保留恢复修复、取消多模板**（2026-11-11，方案与证据见 [preserve-recovery-without-templates](../openspec/changes/preserve-recovery-without-templates/evidence.md)）：作者已取消多模板管理和循环快捷键；基于 main 仅迁入三模式上下文快照、转写复用、正确原文插入与取消/旧定时器隔离，保留原三份提示词及前端配置。新增 10 个独立文件回归测试，Rust 200 passed / 1 ignored，前端 26 passed，fmt/clippy/typecheck/lint（0 error / 34 条既有 warning）/format/build、原生构建与 OpenSpec 校验通过；取消、定时器负对照如预期失败，恢复后通过。**真实录音及跨 App 粘贴待手动验收，Windows 未实测；后续架构重构尚未开始**。
+
 - ✅ 快捷键 **toggle** 录音（单击开始、再击结束）+ 底部胶囊状态机
 - ✅ **豆包流式 WebSocket ASR**，松手 `is_final` sentinel 确定性收尾出 final
 - ✅ **智能润色**（OpenAICompatible `/chat/completions`），失败兜底注入原文

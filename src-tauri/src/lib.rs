@@ -52,6 +52,19 @@ struct LastTake {
     audio: Arc<AudioData>,
     transcript: Option<String>,
     duration_ms: u64,
+    generation: u64,
+    mode: DictationMode,
+    prompt: Option<String>,
+    rewrite_source: Option<String>,
+}
+
+impl LastTake {
+    fn history_raw(&self, text: &str) -> String {
+        match (self.mode, self.rewrite_source.as_deref()) {
+            (DictationMode::Rewrite, Some(source)) => rewrite_history_raw(text, source),
+            _ => text.to_string(),
+        }
+    }
 }
 
 type LastTakeSlot = Arc<parking_lot::Mutex<Option<LastTake>>>;
@@ -94,6 +107,11 @@ pub(crate) enum HotkeyRole {
 /// The in-flight take's mode, set when recording starts (which trigger fired) and
 /// read by the pipeline tail. A toggle keeps it across the start→finish gap.
 type ActiveModeSlot = Arc<parking_lot::Mutex<DictationMode>>;
+
+/// Keep the mode's original prompt even if settings change before a retry.
+// Tauri keys state by concrete type: a type alias of RewriteSourceSlot would
+// share its storage, so the prompt needs a distinct wrapper.
+struct ActivePromptSlot(parking_lot::Mutex<Option<String>>);
 
 /// 改写模式抓到的选中文字：start_recording 探选中时存，finish 拼进 LLM 输入后用。
 type RewriteSourceSlot = Arc<parking_lot::Mutex<Option<String>>>;
@@ -278,6 +296,7 @@ pub fn run() {
             app.manage(Arc::new(AtomicU64::new(0)));
             // 写作/润色 mode of the in-flight take (set on the press that starts it).
             app.manage::<ActiveModeSlot>(Arc::new(parking_lot::Mutex::new(DictationMode::Polish)));
+            app.manage(ActivePromptSlot(parking_lot::Mutex::new(None)));
             app.manage::<RewriteSourceSlot>(Arc::new(parking_lot::Mutex::new(None)));
 
             let presentation_app = app_handle.clone();
@@ -429,6 +448,13 @@ fn handle_hotkey(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
 /// Recording state → overlay. No ASR happens until finish, because P1 uses
 /// batch transcription.
 fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
+    // Invalidate delayed workers/timers before they can touch a new recording.
+    let my_gen = {
+        let mut cached = ctx.last_take.lock();
+        let generation = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        *cached = None;
+        generation
+    };
     let platform = ctx.app.state::<Arc<dyn Platform>>();
     // Snapshot the frontmost app NOW — before probing the selection (read_selection's
     // synthetic Cmd+C targets it), before the permission gate (whose first-run TCC
@@ -452,6 +478,9 @@ fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
         *ctx.app.state::<RewriteSourceSlot>().lock() = None;
     }
     *ctx.active_mode.lock() = mode;
+    let settings = commands::load_settings(ctx.app);
+    *ctx.app.state::<ActivePromptSlot>().0.lock() =
+        Some(prompt_from_snapshot(None, &settings, mode));
 
     // Gate on mic permission before recording: a denial otherwise captures silence
     // and the user only sees a Whisper hallucination. Flash red instead (§3.7).
@@ -462,6 +491,7 @@ fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
             ctx.app.clone(),
             ctx.state.clone(),
             AppError::Permission("请授予麦克风权限".into()),
+            my_gen,
         );
         return;
     }
@@ -480,7 +510,7 @@ fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
         log::error!("start capture: {err:?}");
         clear_streaming_session(ctx.streaming);
         let _ = show_overlay(ctx.app);
-        enter_error(ctx.app.clone(), ctx.state.clone(), err);
+        enter_error(ctx.app.clone(), ctx.state.clone(), err, my_gen);
         return;
     }
     if ctx
@@ -504,42 +534,65 @@ fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
 /// tail. The overlay stays visible through Processing/Success/Error so the
 /// user sees the result; it's hidden only when we settle back to Idle.
 fn finish_recording(ctx: &HotkeyContext<'_>) {
-    if !ctx
-        .state
-        .transition(ctx.app, AppState::Processing, Some("toggle-finish"))
-    {
-        return;
-    }
-    let streaming_result = take_streaming_session(ctx.streaming);
-    // Claim a fresh take id: this worker injects only while the counter still
-    // equals it, so a mid-Processing ✕ (which bumps the counter) supersedes it.
-    let my_gen = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
-    let mode = *ctx.active_mode.lock();
-    match ctx.audio.stop_capture() {
-        Ok(recorded) => {
-            let streaming_result = streaming_result_after_capture(
-                streaming_result,
-                recorded.streaming_queue_overflowed,
-            );
-            spawn_transcription(
-                ctx.app.clone(),
-                ctx.state.clone(),
-                ctx.transcription.clone(),
-                ctx.enhance.clone(),
-                ctx.inject.clone(),
-                ctx.last_take.clone(),
-                ctx.take_gen.clone(),
-                my_gen,
-                recorded.audio,
-                streaming_result,
-                mode,
-            );
+    let (my_gen, stopped) = {
+        // Serialize this handoff with cancel/resume/terminal cleanup. In
+        // particular, a cancel cannot observe Processing before its cache exists.
+        // Only stopping capture happens here; provider calls always run unlocked.
+        let mut cached = ctx.last_take.lock();
+        if ctx.state.current() != AppState::Recording {
+            return;
         }
+        let generation = ctx.take_gen.load(Ordering::SeqCst);
+        if !ctx
+            .state
+            .transition(ctx.app, AppState::Processing, Some("toggle-finish"))
+        {
+            return;
+        }
+        let streaming = take_streaming_session(ctx.streaming);
+        let stopped = ctx.audio.stop_capture().map(|recorded| {
+            let streaming =
+                streaming_result_after_capture(streaming, recorded.streaming_queue_overflowed);
+            let take = recorded_take(ctx, recorded.audio, generation);
+            *cached = Some(take.clone());
+            (take, streaming)
+        });
+        if stopped.is_err() {
+            *cached = None;
+        }
+        (generation, stopped)
+    };
+    match stopped {
+        Ok((take, streaming)) => spawn_transcription(
+            ctx.app.clone(),
+            ctx.state.clone(),
+            ctx.transcription.clone(),
+            ctx.enhance.clone(),
+            ctx.inject.clone(),
+            ctx.last_take.clone(),
+            ctx.take_gen.clone(),
+            my_gen,
+            take,
+            streaming,
+            false,
+        ),
         Err(err) => {
             log::error!("stop capture: {err:?}");
-            clear_last_take(ctx.last_take);
-            enter_error(ctx.app.clone(), ctx.state.clone(), err);
+            enter_error(ctx.app.clone(), ctx.state.clone(), err, my_gen);
         }
+    }
+}
+
+fn recorded_take(ctx: &HotkeyContext<'_>, audio: AudioData, generation: u64) -> LastTake {
+    let audio = Arc::new(audio);
+    LastTake {
+        duration_ms: duration_ms(&audio),
+        audio,
+        transcript: None,
+        generation,
+        mode: *ctx.active_mode.lock(),
+        prompt: ctx.app.state::<ActivePromptSlot>().0.lock().take(),
+        rewrite_source: ctx.app.state::<RewriteSourceSlot>().lock().take(),
     }
 }
 
@@ -586,47 +639,40 @@ fn confirm_recording(app: AppHandle) {
 /// resume it. The toast auto-settles to Idle after `TERMINAL_HOLD_MS`.
 #[tauri::command]
 fn cancel_recording(app: AppHandle) {
-    with_hotkey_ctx(&app, |ctx| match ctx.state.current() {
-        AppState::Recording => {
-            // Lazy cancel: stop capture and keep the raw buffer; undo re-runs batch
-            // ASR on it, so we don't burn a transcription the user may not want.
-            clear_streaming_session(ctx.streaming);
-            match ctx.audio.stop_capture() {
-                Ok(recorded) => {
-                    let audio = Arc::new(recorded.audio);
-                    let duration_ms = duration_ms(&audio);
-                    *ctx.last_take.lock() = Some(LastTake {
-                        audio,
-                        transcript: None,
-                        duration_ms,
-                    });
-                }
-                Err(err) => {
-                    log::warn!("cancel stop_capture: {err:?}");
-                    clear_last_take(ctx.last_take);
+    with_hotkey_ctx(&app, |ctx| {
+        let generation = {
+            let mut cached = ctx.last_take.lock();
+            let phase = ctx.state.current();
+            if !matches!(phase, AppState::Recording | AppState::Processing) {
+                return;
+            }
+            let generation = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
+            if phase == AppState::Recording {
+                // Lazy cancel: keep the audio, without paying for another ASR call.
+                clear_streaming_session(ctx.streaming);
+                match ctx.audio.stop_capture() {
+                    Ok(recorded) => *cached = Some(recorded_take(ctx, recorded.audio, generation)),
+                    Err(err) => {
+                        log::warn!("cancel stop_capture: {err:?}");
+                        *cached = None;
+                    }
                 }
             }
-            if ctx
+            if !ctx
                 .state
                 .transition(ctx.app, AppState::Cancel, Some("overlay-cancel"))
             {
-                record_cancelled_transcript(ctx.app, ctx.last_take);
-                spawn_settle_after(ctx.app.clone(), ctx.state.clone(), TERMINAL_HOLD_MS);
+                return;
             }
-        }
-        AppState::Processing => {
-            // Mid-pipeline: bump the take id so the in-flight worker skips injection
-            // (it already stored the take), then show the cancelled toast.
-            ctx.take_gen.fetch_add(1, Ordering::SeqCst);
-            if ctx
-                .state
-                .transition(ctx.app, AppState::Cancel, Some("overlay-cancel-processing"))
-            {
-                record_cancelled_transcript(ctx.app, ctx.last_take);
-                spawn_settle_after(ctx.app.clone(), ctx.state.clone(), TERMINAL_HOLD_MS);
-            }
-        }
-        _ => {}
+            generation
+        };
+        record_cancelled_transcript(ctx.app, ctx.last_take);
+        spawn_settle_after(
+            ctx.app.clone(),
+            ctx.state.clone(),
+            TERMINAL_HOLD_MS,
+            generation,
+        );
     });
 }
 
@@ -635,77 +681,38 @@ fn cancel_recording(app: AppHandle) {
 /// transcript verbatim, skipping enhance. Re-enters via Cancel/Error → Processing.
 fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
     with_hotkey_ctx(app, |ctx| {
-        let take = match ctx.last_take.lock().clone() {
-            Some(take) => take,
-            None => return,
-        };
-        if !ctx
-            .state
-            .transition(ctx.app, AppState::Processing, Some("resume"))
-        {
-            return;
-        }
-        // Fresh take id so a ✕ during this resume can supersede it too.
-        let my_gen = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
-        let app = ctx.app.clone();
-        let state = ctx.state.clone();
-        let transcription = ctx.transcription.clone();
-        let enhance = ctx.enhance.clone();
-        let inject = ctx.inject.clone();
-        let take_gen = ctx.take_gen.clone();
-        thread::spawn(move || {
-            let text = match take.transcript {
-                Some(text) => text,
-                None => {
-                    // Re-transcribe with the SAME model the live path picks: doubao
-                    // when configured, else the user's batch asr_provider. Never
-                    // silently swap to a different model (单模型不降级).
-                    let config =
-                        doubao_streaming_config(&app).unwrap_or_else(|| transcription_config(&app));
-                    match transcription.transcribe(&take.audio, &config) {
-                        Ok(text) => text,
-                        Err(err) => {
-                            log::error!("resume transcription failed: {err:?}");
-                            enter_error(app, state, err);
-                            return;
-                        }
-                    }
-                }
-            };
-            if take_gen.load(Ordering::SeqCst) != my_gen {
-                return; // superseded by a ✕ during the resume
-            }
-            // Mirror a normal finish: surface the raw transcript before enhance, so
-            // undo / retry log + emit it the same way the first pass would have.
-            let _ = app.emit(
-                "final-transcript",
-                FinalTranscript {
-                    text: text.clone(),
-                    duration_ms: take.duration_ms,
-                },
-            );
-            let (to_inject, outcome) = if raw_only {
-                (text.clone(), EnhanceOutcome::Disabled)
-            } else {
-                maybe_enhance_text(&app, &enhance, &text)
-            };
-            if let Err(err) = inject.inject(&app, &to_inject) {
-                log::error!("resume inject failed: {err:?}");
-                enter_error(app, state, err);
+        let (take, my_gen) = {
+            let mut cached = ctx.last_take.lock();
+            if !matches!(ctx.state.current(), AppState::Cancel | AppState::Error) {
                 return;
             }
-            let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| to_inject.clone());
-            // resume (撤销/重试) re-runs the polish pipeline, so it records as polish.
-            record_history(&app, "success", "polish", &text, enhanced, take.duration_ms);
-            state.transition(&app, AppState::Success, Some("resumed"));
-            let hold = if matches!(outcome, EnhanceOutcome::Failed) {
-                TERMINAL_HOLD_MS
-            } else {
-                SUCCESS_HOLD_MS
+            let Some(mut take) = cached.clone() else {
+                return;
             };
-            thread::sleep(Duration::from_millis(hold));
-            settle_to_idle(&app, &state, "done");
-        });
+            if !ctx
+                .state
+                .transition(ctx.app, AppState::Processing, Some("resume"))
+            {
+                return;
+            }
+            let generation = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
+            take.generation = generation;
+            *cached = Some(take.clone());
+            (take, generation)
+        };
+        spawn_transcription(
+            ctx.app.clone(),
+            ctx.state.clone(),
+            ctx.transcription.clone(),
+            ctx.enhance.clone(),
+            ctx.inject.clone(),
+            ctx.last_take.clone(),
+            ctx.take_gen.clone(),
+            my_gen,
+            take,
+            None,
+            raw_only,
+        );
     });
 }
 
@@ -772,81 +779,122 @@ fn spawn_transcription(
     last_take: LastTakeSlot,
     take_gen: TakeGen,
     my_gen: u64,
-    audio: AudioData,
+    take: LastTake,
     streaming_result: Option<TranscriptStream>,
-    mode: DictationMode,
+    raw_only: bool,
 ) {
     thread::spawn(move || {
-        let audio = Arc::new(audio);
-        let duration_ms = duration_ms(&audio);
-
-        // Keep the take from the start so a terminal toast can always resume it,
-        // even if ASR fails (重试 re-transcribes) or the user cancels mid-flight.
-        *last_take.lock() = Some(LastTake {
-            audio: audio.clone(),
-            transcript: None,
-            duration_ms,
-        });
-
-        // AirPods on A2DP (no HFP switch yet) and a few other broken-mic states
-        // produce a buffer of literal zeros — nothing recognizable. Detect digital
-        // silence here (avoids an API call that returns "Thank you." hallucinations)
-        // and treat it as "no content recognized". Threshold is "any sample exceeds
-        // 1e-4" — real mic noise floor sits well above that, so a healthy 200ms
-        // recording always passes.
-        if duration_ms >= 200 && is_digital_silence(&audio) {
-            enter_no_content(app, state, duration_ms);
-            return;
-        }
-
-        let text = match resolve_transcript(&app, &transcription, &audio, streaming_result) {
-            Ok(text) => text,
-            Err(err) => {
-                log::error!("transcription failed: {err:?}");
-                enter_error(app, state, err);
-                return;
-            }
-        };
-
-        // ASR ran but found no speech — record a "没有识别到内容" entry, don't inject.
-        if text.trim().is_empty() {
-            enter_no_content(app, state, duration_ms);
-            return;
-        }
-
-        // Fill the transcript in so 插入原文 / 重试 (after an inject failure) and
-        // 撤销操作 (after a mid-Processing cancel) resume without re-transcribing.
-        if let Some(take) = last_take.lock().as_mut() {
-            take.transcript = Some(text.clone());
-        }
-
-        // Superseded by a ✕ during Processing — keep the take, skip injection, and
-        // stay in the cancelled toast (which offers 撤销操作).
         if take_gen.load(Ordering::SeqCst) != my_gen {
             return;
         }
-
-        let polish_unavailable =
-            match finish_pipeline_tail(&app, &enhance, &inject, &text, duration_ms, mode) {
-                Ok(failed) => failed,
-                Err(err) => {
-                    log::error!("inject failed: {err:?}");
-                    enter_error(app, state, err);
+        let duration_ms = take.duration_ms;
+        let text = match take.transcript.as_ref() {
+            Some(text) => text.clone(),
+            None => {
+                // Literal zeros indicate a broken/silent device; do not send them
+                // to ASR, which may hallucinate speech from digital silence.
+                if duration_ms >= 200 && is_digital_silence(&take.audio) {
+                    enter_no_content(app, state, duration_ms, take.mode, my_gen);
                     return;
                 }
-            };
+                match resolve_transcript(&app, &transcription, &take.audio, streaming_result) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        log::error!("transcription failed: {err:?}");
+                        enter_error(app, state, err, my_gen);
+                        return;
+                    }
+                }
+            }
+        };
 
+        // A cancelled take may keep its own late transcript for undo, but an old
+        // worker must never fill a resumed/new take or recreate a released one.
+        cache_transcript(&last_take, my_gen, &text);
+        if take_gen.load(Ordering::SeqCst) != my_gen {
+            return;
+        }
+        if text.trim().is_empty() {
+            enter_no_content(app, state, duration_ms, take.mode, my_gen);
+            return;
+        }
+        log::info!(
+            "transcription completed (duration_ms={duration_ms}, chars={})",
+            text.chars().count()
+        );
+        let _ = app.emit(
+            "final-transcript",
+            FinalTranscript {
+                text: text.clone(),
+                duration_ms,
+            },
+        );
+        // Connection settings remain current so a corrected endpoint/key can be
+        // retried. Only the take's template text and rewrite source stay frozen.
+        let config = if raw_only {
+            EnhanceConfig::default()
+        } else {
+            enhance_config(&app, take.mode, take.prompt.clone())
+        };
+        let (started, completed) = match take.mode {
+            DictationMode::Polish => ("润色中…", "润色完成"),
+            DictationMode::Rewrite => ("改写中…", "改写完成"),
+            DictationMode::Compose => ("写作中…", "写作完成"),
+        };
+        if config.enhance_enabled && take_gen.load(Ordering::SeqCst) == my_gen {
+            emit_enhance_progress(&app, "started", started);
+        }
+        let outcome = match finish_pipeline_tail(
+            &take,
+            &text,
+            raw_only,
+            &config,
+            &take_gen,
+            my_gen,
+            |input, config| enhance.enhance(input, config),
+            |output| inject.inject(&app, output),
+            |mode, raw, enhanced, duration| {
+                record_history(&app, "success", mode, raw, enhanced, duration);
+            },
+        ) {
+            Ok(Some(outcome)) => outcome,
+            Ok(None) => return,
+            Err(err) => {
+                log::error!("inject failed: {err:?}");
+                enter_error(app, state, err, my_gen);
+                return;
+            }
+        };
+        let _cached = last_take.lock();
+        if take_gen.load(Ordering::SeqCst) != my_gen {
+            return;
+        }
+        match outcome {
+            EnhanceOutcome::Enhanced => emit_enhance_progress(&app, "completed", completed),
+            EnhanceOutcome::Failed => {
+                emit_enhance_progress(&app, "failed", "润色失败但已注入原文");
+            }
+            EnhanceOutcome::Disabled => {}
+        }
         state.transition(&app, AppState::Success, Some("injected"));
-        // polish-unavailable is a Success that shows the amber 去设置 toast, so it
-        // needs the longer hold; a clean success just flashes ✓.
-        let hold = if polish_unavailable {
+        let hold = if matches!(outcome, EnhanceOutcome::Failed) {
             TERMINAL_HOLD_MS
         } else {
             SUCCESS_HOLD_MS
         };
-        thread::sleep(Duration::from_millis(hold));
-        settle_to_idle(&app, &state, "done");
+        spawn_settle_after(app, state, hold, my_gen);
     });
+}
+
+fn cache_transcript(last_take: &LastTakeSlot, generation: u64, text: &str) -> bool {
+    let mut slot = last_take.lock();
+    match slot.as_mut() {
+        Some(take) if take.generation == generation => {
+            take.transcript = Some(text.to_string());
+            true
+        }
+        _ => false,
+    }
 }
 
 fn resolve_transcript(
@@ -871,67 +919,72 @@ fn resolve_transcript(
     transcription.transcribe(audio, &config)
 }
 
-/// Returns `true` when enhance fell back to the raw transcript (polish-unavailable
-/// → the amber 去设置 toast); `false` for a clean inject.
+/// Shared by first processing and every resume. Effects are passed in like the
+/// settings mapper's key reader, so tests can cancel inside a real LLM/inject
+/// boundary without a WebView, credentials, or keystrokes in the user's apps.
+/// None means cancelled; callers must not publish a terminal state in that case.
+#[allow(clippy::too_many_arguments)]
 fn finish_pipeline_tail(
-    app: &AppHandle,
-    enhance: &EnhanceManager,
-    inject: &InjectManager,
+    take: &LastTake,
     text: &str,
-    duration_ms: u64,
-    mode: DictationMode,
-) -> AppResult<bool> {
-    log::info!(
-        "transcription completed (duration_ms={duration_ms}, chars={})",
-        text.chars().count()
-    );
-    let _ = app.emit(
-        "final-transcript",
-        FinalTranscript {
-            text: text.to_string(),
-            duration_ms,
-        },
-    );
-
-    // 润色 cleans the transcript (配了 LLM 才润色，没配静默纯转写); 写作 generates from it
-    // (写作键按下即生成). On LLM failure both fall back to raw text + the amber "去设置"
-    // toast (Failed). 没配 LLM 的润色走 Disabled —— 静默注入原文、无 toast。
-    // 改写：peek（不 take）start 时探到的选中文字 —— rewrite_text 之后还会 take 它拼 LLM
-    // 输入；这里先留一份，让 History 的「原文」既含口述指令、又含被改写的引用内容。
-    let rewrite_source = if matches!(mode, DictationMode::Rewrite) {
-        app.state::<RewriteSourceSlot>().lock().clone()
+    raw_only: bool,
+    config: &EnhanceConfig,
+    take_gen: &AtomicU64,
+    my_gen: u64,
+    enhance: impl FnOnce(&str, &EnhanceConfig) -> AppResult<String>,
+    inject: impl FnOnce(&str) -> AppResult<()>,
+    record: impl FnOnce(&str, &str, Option<String>, u64),
+) -> AppResult<Option<EnhanceOutcome>> {
+    if take_gen.load(Ordering::SeqCst) != my_gen {
+        return Ok(None);
+    }
+    let original = if take.mode == DictationMode::Rewrite {
+        take.rewrite_source.as_deref().unwrap_or_default()
     } else {
-        None
+        text
     };
-
-    let (text_to_inject, outcome) = match mode {
-        DictationMode::Polish => maybe_enhance_text(app, enhance, text),
-        DictationMode::Rewrite => rewrite_text(app, enhance, text),
-        DictationMode::Compose => compose_text(app, enhance, text),
+    let (output, outcome) = if raw_only || !config.enhance_enabled {
+        (original.to_string(), EnhanceOutcome::Disabled)
+    } else {
+        let input = if take.mode == DictationMode::Rewrite {
+            format!("原文：\n{original}\n\n指令：\n{text}")
+        } else {
+            text.to_string()
+        };
+        let enhanced = enhance(&input, config);
+        // Cancellation while the blocking provider runs invalidates both its
+        // success and its failure; neither is allowed to initiate a paste.
+        if take_gen.load(Ordering::SeqCst) != my_gen {
+            return Ok(None);
+        }
+        match enhanced {
+            Ok(output) => (output, EnhanceOutcome::Enhanced),
+            Err(err) => {
+                log::warn!(
+                    "{} failed, using original text: {err:?}",
+                    take.mode.as_str()
+                );
+                let fallback = fallback_after_enhance_failure(original, &err);
+                (fallback.text_to_inject, EnhanceOutcome::Failed)
+            }
+        }
     };
-
-    // P0.4: inject at the caret. On failure the text is still on the
-    // clipboard (§3.7 fallback) — flash Error so the user knows to paste.
-    inject.inject(app, &text_to_inject)?;
-
-    // Record the dictation (Home/History): 原文 = the transcript, except 改写 records
-    // 指令 + 引用的选中内容 (rewrite_history_raw) so the entry shows what was rewritten.
-    // enhanced is kept whenever enhance/改写/写作 actually ran (so both boxes show). A
-    // history failure must not break injection.
-    let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then(|| text_to_inject.clone());
-    let raw_to_record = match rewrite_source.as_deref() {
-        Some(source) if !source.trim().is_empty() => rewrite_history_raw(text, source),
-        _ => text.to_string(),
-    };
-    record_history(
-        app,
-        "success",
-        mode.as_str(),
-        &raw_to_record,
+    if take_gen.load(Ordering::SeqCst) != my_gen {
+        return Ok(None);
+    }
+    let injected = inject(&output);
+    if take_gen.load(Ordering::SeqCst) != my_gen {
+        return Ok(None);
+    }
+    injected?;
+    let enhanced = matches!(outcome, EnhanceOutcome::Enhanced).then_some(output);
+    record(
+        take.mode.as_str(),
+        &take.history_raw(text),
         enhanced,
-        duration_ms,
+        take.duration_ms,
     );
-    Ok(matches!(outcome, EnhanceOutcome::Failed))
+    Ok(Some(outcome))
 }
 
 /// Persist one dictation outcome to the History store. Best-effort: a DB error only
@@ -956,108 +1009,59 @@ fn record_history(
 /// usual mid-recording ✕) records nothing. Best-effort; no change to the cancel path.
 fn record_cancelled_transcript(app: &AppHandle, last_take: &LastTakeSlot) {
     let take = match last_take.lock().as_ref() {
-        Some(take) => match &take.transcript {
-            Some(text) if !text.trim().is_empty() => (text.clone(), take.duration_ms),
-            _ => return,
-        },
-        None => return,
+        Some(take)
+            if take
+                .transcript
+                .as_ref()
+                .is_some_and(|text| !text.trim().is_empty()) =>
+        {
+            take.clone()
+        }
+        _ => return,
     };
-    record_history(app, "success", "polish", &take.0, None, take.1);
+    if let Some(text) = take.transcript.as_deref() {
+        record_history(
+            app,
+            "success",
+            take.mode.as_str(),
+            &take.history_raw(text),
+            None,
+            take.duration_ms,
+        );
+    }
 }
 
 /// "No content recognized" outcome: record a `kind=empty` history entry and surface
 /// it on the overlay. Reuses the ERROR toast (which renders as a neutral card with no
 /// action buttons for this category — not the scary red device-error treatment), so
 /// the user gets immediate feedback plus a history row.
-fn enter_no_content(app: AppHandle, state: Arc<StateMachine>, duration_ms: u64) {
-    record_history(&app, "empty", "polish", "", None, duration_ms);
-    enter_error(app, state, AppError::Device("没有识别到内容".into()));
+fn enter_no_content(
+    app: AppHandle,
+    state: Arc<StateMachine>,
+    duration_ms: u64,
+    mode: DictationMode,
+    generation: u64,
+) {
+    if app.state::<TakeGen>().load(Ordering::SeqCst) != generation {
+        return;
+    }
+    record_history(&app, "empty", mode.as_str(), "", None, duration_ms);
+    enter_error(
+        app,
+        state,
+        AppError::Device("没有识别到内容".into()),
+        generation,
+    );
 }
 
 /// What happened to the transcript on the enhance step — distinguishes "polishing
 /// was off" from "polished" (both inject the text, but only the latter has an
 /// enhanced version worth storing) from "polish failed → raw fallback".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EnhanceOutcome {
     Disabled,
     Enhanced,
     Failed,
-}
-
-/// Returns the text to inject and the enhance outcome.
-fn maybe_enhance_text(
-    app: &AppHandle,
-    enhance: &EnhanceManager,
-    text: &str,
-) -> (String, EnhanceOutcome) {
-    let config = enhance_config(app);
-    if !config.enhance_enabled {
-        return (text.to_string(), EnhanceOutcome::Disabled);
-    }
-
-    emit_enhance_progress(app, "started", "润色中…");
-    match enhance.enhance(text, &config) {
-        Ok(enhanced) => {
-            emit_enhance_progress(app, "completed", "润色完成");
-            (enhanced, EnhanceOutcome::Enhanced)
-        }
-        Err(err) => {
-            log::warn!("enhance failed, injecting original transcript: {err:?}");
-            let fallback = fallback_after_enhance_failure(text, &err);
-            emit_enhance_progress(app, "failed", &fallback.message);
-            (fallback.text_to_inject, EnhanceOutcome::Failed)
-        }
-    }
-}
-
-/// 写作 compose: generate prose from the spoken points via the compose prompt
-/// (生成立场; compose_config sets force_enabled=true). Mirrors `maybe_enhance_text` but
-/// always runs the LLM (写作键按下即生成). On failure, inject the raw points + Failed so
-/// the "去设置" toast surfaces (片1 reuses 润色's fallback text).
-fn compose_text(app: &AppHandle, enhance: &EnhanceManager, text: &str) -> (String, EnhanceOutcome) {
-    let config = compose_config(app);
-    emit_enhance_progress(app, "started", "写作中…");
-    match enhance.enhance(text, &config) {
-        Ok(generated) => {
-            emit_enhance_progress(app, "completed", "写作完成");
-            (generated, EnhanceOutcome::Enhanced)
-        }
-        Err(err) => {
-            log::warn!("compose failed, injecting raw points: {err:?}");
-            let fallback = fallback_after_enhance_failure(text, &err);
-            emit_enhance_progress(app, "failed", &fallback.message);
-            (fallback.text_to_inject, EnhanceOutcome::Failed)
-        }
-    }
-}
-
-/// 改写 rewrite: 把 start 探到的选中文字（RewriteSource）+ 口述指令拼成一段喂 rewrite
-/// prompt，结果替换选中（inject 的 Cmd+V 落在仍选中的文本上）。失败兜底注入选中原文本身
-/// （替换成它自己、无变化），而不是把指令插进去。
-fn rewrite_text(
-    app: &AppHandle,
-    enhance: &EnhanceManager,
-    instruction: &str,
-) -> (String, EnhanceOutcome) {
-    let source = app
-        .state::<RewriteSourceSlot>()
-        .lock()
-        .take()
-        .unwrap_or_default();
-    let input = format!("原文：\n{source}\n\n指令：\n{instruction}");
-    let config = rewrite_config(app);
-    emit_enhance_progress(app, "started", "改写中…");
-    match enhance.enhance(&input, &config) {
-        Ok(result) => {
-            emit_enhance_progress(app, "completed", "改写完成");
-            (result, EnhanceOutcome::Enhanced)
-        }
-        Err(err) => {
-            log::warn!("rewrite failed, re-injecting the original selection: {err:?}");
-            let fallback = fallback_after_enhance_failure(&source, &err);
-            emit_enhance_progress(app, "failed", &fallback.message);
-            (fallback.text_to_inject, EnhanceOutcome::Failed)
-        }
-    }
 }
 
 /// 改写历史的「原文」展示文本：口述指令 + 被改写的引用内容，分两段带小标题。History 原文框
@@ -1228,19 +1232,26 @@ fn prepend_language(app: &AppHandle, settings: &commands::Settings, prompt: &str
     format!("用户主要语言：{language}\n\n{prompt}")
 }
 
-fn enhance_prompt_with_language(app: &AppHandle, settings: &commands::Settings) -> String {
-    prepend_language(app, settings, &settings.enhance_prompt)
+fn prompt_from_snapshot(
+    snapshot: Option<String>,
+    settings: &commands::Settings,
+    mode: DictationMode,
+) -> String {
+    snapshot.unwrap_or_else(|| match mode {
+        DictationMode::Polish => settings.enhance_prompt.clone(),
+        DictationMode::Rewrite => settings.rewrite_prompt.clone(),
+        DictationMode::Compose => settings.compose_prompt.clone(),
+    })
 }
 
-fn enhance_config(app: &AppHandle) -> EnhanceConfig {
+fn enhance_config(app: &AppHandle, mode: DictationMode, snapshot: Option<String>) -> EnhanceConfig {
     let settings = commands::load_settings(app);
-    let enhance_prompt = enhance_prompt_with_language(app, &settings);
+    let prompt = prompt_from_snapshot(snapshot, &settings, mode);
+    let enhance_prompt = prepend_language(app, &settings, &prompt);
     let platform = app.state::<Arc<dyn Platform>>();
-
     enhance_config_from_settings(
         settings.llm_provider,
-        // polish：不强制；启用 = 「AI 润色」开关开 且 配了 LLM（见 enhance_config_from_settings）。
-        false,
+        mode != DictationMode::Polish,
         settings.enhance_enabled,
         enhance_prompt,
         settings.openai_compatible_base_url,
@@ -1255,7 +1266,7 @@ fn enhance_config(app: &AppHandle) -> EnhanceConfig {
 /// auto-trigger; a missing key then surfaces as a failure rather than silence.
 fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
     let settings = commands::load_settings(app);
-    let enhance_prompt = enhance_prompt_with_language(app, &settings);
+    let enhance_prompt = prepend_language(app, &settings, &settings.enhance_prompt);
     let platform = app.state::<Arc<dyn Platform>>();
 
     enhance_config_from_settings(
@@ -1264,46 +1275,6 @@ fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
         // 显式触发：force 已 short-circuit，polish_toggle 不参与（不看「AI 润色」开关）。
         true,
         enhance_prompt,
-        settings.openai_compatible_base_url,
-        settings.openai_compatible_model,
-        settings.llm_api_key_id,
-        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
-    )
-}
-
-/// 写作 config: same LLM provider/key as 润色, but the compose prompt (生成立场) and
-/// `force_enabled` true (写作键按下即生成；没配 key 则失败兜底，不静默).
-fn compose_config(app: &AppHandle) -> EnhanceConfig {
-    let settings = commands::load_settings(app);
-    let compose_prompt = prepend_language(app, &settings, &settings.compose_prompt);
-    let platform = app.state::<Arc<dyn Platform>>();
-
-    enhance_config_from_settings(
-        settings.llm_provider,
-        true,
-        // 显式触发：force 已 short-circuit，polish_toggle 不参与（不看「AI 润色」开关）。
-        true,
-        compose_prompt,
-        settings.openai_compatible_base_url,
-        settings.openai_compatible_model,
-        settings.llm_api_key_id,
-        |key_id| read_optional_secret(platform.inner().as_ref(), key_id),
-    )
-}
-
-/// 改写 config: 同 LLM provider/key，用 rewrite prompt（改写立场）+ force_enabled true
-/// （改写键触发即执行；没配 key 则失败兜底，不静默）。
-fn rewrite_config(app: &AppHandle) -> EnhanceConfig {
-    let settings = commands::load_settings(app);
-    let rewrite_prompt = prepend_language(app, &settings, &settings.rewrite_prompt);
-    let platform = app.state::<Arc<dyn Platform>>();
-
-    enhance_config_from_settings(
-        settings.llm_provider,
-        true,
-        // 显式触发：force 已 short-circuit，polish_toggle 不参与（不看「AI 润色」开关）。
-        true,
-        rewrite_prompt,
         settings.openai_compatible_base_url,
         settings.openai_compatible_model,
         settings.llm_api_key_id,
@@ -1371,26 +1342,33 @@ fn read_optional_secret(platform: &dyn Platform, key_id: &str) -> Option<String>
 /// Emit the error, flash the Error toast, and auto-settle to Idle after the
 /// terminal hold (the toast's 重试 / 插入原文 can act first). Spawns its own thread
 /// so callers on the hotkey path don't block.
-fn enter_error(app: AppHandle, state: Arc<StateMachine>, err: AppError) {
-    let _ = app.emit(
-        "error",
-        ErrorPayload {
-            code: err.code(),
-            message: err.message().to_string(),
-            recoverable: err.recoverable(),
-        },
-    );
-    state.transition(&app, AppState::Error, Some("error"));
-    spawn_settle_after(app, state, TERMINAL_HOLD_MS);
+fn enter_error(app: AppHandle, state: Arc<StateMachine>, err: AppError, generation: u64) {
+    {
+        let last_take = app.state::<LastTakeSlot>();
+        let _cached = last_take.lock();
+        if app.state::<TakeGen>().load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let _ = app.emit(
+            "error",
+            ErrorPayload {
+                code: err.code(),
+                message: err.message().to_string(),
+                recoverable: err.recoverable(),
+            },
+        );
+        state.transition(&app, AppState::Error, Some("error"));
+    }
+    spawn_settle_after(app, state, TERMINAL_HOLD_MS, generation);
 }
 
 /// Auto-settle a terminal state to Idle after a hold. If the user acts first
 /// (撤销 / 重试 → Processing), `settle_to_idle` finds a non-terminal state and
 /// the timer is a no-op, so the live capsule isn't yanked away mid-resume.
-fn spawn_settle_after(app: AppHandle, state: Arc<StateMachine>, hold_ms: u64) {
+fn spawn_settle_after(app: AppHandle, state: Arc<StateMachine>, hold_ms: u64, generation: u64) {
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(hold_ms));
-        settle_to_idle(&app, &state, "recovered");
+        settle_to_idle(&app, &state, "recovered", generation);
     });
 }
 
@@ -1398,17 +1376,33 @@ fn spawn_settle_after(app: AppHandle, state: Arc<StateMachine>, hold_ms: u64) {
 /// pipeline — overlay visibility mirrors "not Idle". Hides ONLY when the Idle
 /// transition actually applied: a stale settle timer firing after the user tapped
 /// 撤销 / 重试 (now Processing) must not hide the capsule out from under them.
-fn settle_to_idle(app: &AppHandle, state: &Arc<StateMachine>, reason: &str) {
-    if state.transition(app, AppState::Idle, Some(reason)) {
-        if let Some(last_take) = app.try_state::<LastTakeSlot>() {
-            clear_last_take(last_take.inner());
-        }
-        if let Err(err) = hide_overlay(app) {
+fn settle_to_idle(app: &AppHandle, state: &Arc<StateMachine>, reason: &str, generation: u64) {
+    let last_take = app.state::<LastTakeSlot>();
+    let take_gen = app.state::<TakeGen>();
+    if settle_take(&last_take, &take_gen, generation, || {
+        state.transition(app, AppState::Idle, Some(reason))
+    }) {
+        if let Err(err) = hide_overlay(app, generation) {
             log::error!("hide overlay: {err:?}");
         }
     }
 }
 
+fn settle_take(
+    last_take: &LastTakeSlot,
+    take_gen: &AtomicU64,
+    generation: u64,
+    transition: impl FnOnce() -> bool,
+) -> bool {
+    let mut cached = last_take.lock();
+    if take_gen.load(Ordering::SeqCst) != generation || !transition() {
+        return false;
+    }
+    *cached = None;
+    true
+}
+
+#[cfg(test)]
 fn clear_last_take(last_take: &LastTakeSlot) {
     let _ = last_take.lock().take();
 }
@@ -1619,9 +1613,15 @@ fn show_overlay(app: &AppHandle) -> AppResult<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn hide_overlay(app: &AppHandle) -> AppResult<()> {
+fn hide_overlay(app: &AppHandle, generation: u64) -> AppResult<()> {
     let handle = app.clone();
     app.run_on_main_thread(move || {
+        // A new recording can start before this queued AppKit operation runs.
+        if handle.state::<TakeGen>().load(Ordering::SeqCst) != generation
+            || handle.state::<Arc<StateMachine>>().current() != AppState::Idle
+        {
+            return;
+        }
         use tauri_nspanel::ManagerExt;
         match handle.get_webview_panel(OVERLAY_WINDOW_LABEL) {
             Ok(panel) => panel.order_out(None),
@@ -1643,7 +1643,12 @@ fn show_overlay(app: &AppHandle) -> AppResult<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn hide_overlay(app: &AppHandle) -> AppResult<()> {
+fn hide_overlay(app: &AppHandle, generation: u64) -> AppResult<()> {
+    if app.state::<TakeGen>().load(Ordering::SeqCst) != generation
+        || app.state::<Arc<StateMachine>>().current() != AppState::Idle
+    {
+        return Ok(());
+    }
     let overlay = app
         .get_webview_window(OVERLAY_WINDOW_LABEL)
         .ok_or_else(|| AppError::Internal("overlay window not found".into()))?;
@@ -1993,6 +1998,10 @@ mod tests {
             audio: audio.clone(),
             transcript: None,
             duration_ms: 0,
+            generation: 1,
+            mode: DictationMode::Polish,
+            prompt: None,
+            rewrite_source: None,
         };
 
         let cloned = take.clone();
@@ -2010,6 +2019,10 @@ mod tests {
             }),
             transcript: None,
             duration_ms: 0,
+            generation: 1,
+            mode: DictationMode::Polish,
+            prompt: None,
+            rewrite_source: None,
         })));
 
         clear_last_take(&slot);
@@ -2035,3 +2048,7 @@ mod tests {
         assert!(selected.is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "tests/recovery/mod.rs"]
+mod recovery_tests;
