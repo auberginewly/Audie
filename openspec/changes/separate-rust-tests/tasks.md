@@ -8,7 +8,7 @@
 ## 2. 验证与进度
 
 - [x] 2.1 完整 Rust 测试、fmt/clippy、前端测试/typecheck/lint/build 和 native build 通过；逐个 Cargo 测试身份与基线一致。
-- [ ] 2.2 更新本片证据、STATUS 和父计划中实际完成的自动任务，独立提交；尚未完成的真机验收与后续业务整理保持未完成。
+- [x] 2.2 更新本片证据、STATUS 和父计划中实际完成的自动任务，独立提交；尚未完成的真机验收与后续业务整理保持未完成。
 
 ## Workflow follow-up
 
