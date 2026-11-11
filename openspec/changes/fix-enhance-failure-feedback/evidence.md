@@ -12,6 +12,7 @@
 - Rust 全库：223 passed / 1 ignored，包含取消/恢复及错误分类隐私回归。
 - 前端全量：51 passed；修复后再次单跑真实胶囊渲染 4/4 通过。
 - typecheck、工程检查（230 个手写源码）、clippy all-targets -D warnings、严格 OpenSpec 校验通过。定向 lint 只有 Capsule 原有 setState-in-effect warning；本轮没有新增 warning。
+- 额外把两份历史长文档整体纳入格式/链接扫描时，发现原有格式差异及 STATUS 附录中的旧失效链接；已核对新增段落格式，附录保持字节不变。这不属于默认公共指南检查的通过范围。
 - 独立代码/方案审查 PASS，无剩余发现。失败历史仍不存 enhanced_text，generation 检查和终态时序保留。
 - 使用现有 Apple Development 身份构建完整 release .app，codesign 严格验证通过，标识符和 DR 与原可用稳定副本一致。固定安装后的原生结果见下节。
 

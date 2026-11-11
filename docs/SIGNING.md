@@ -209,3 +209,20 @@ open /Applications/Audie.app
 | Apple Development 证书 | 只给**自己机器**开发用（我们 dev 在用的） |
 | Developer ID 证书 | 给**对外分发**用（发版要的） |
 | minisign | Tauri 自动更新用的签名，跟 Apple 签名无关 |
+
+## 本机安装与多副本排查（2026-11-11）
+
+默认打包和当前 CI 的 ad-hoc 签名不能提供跨构建稳定的授权身份。本机已有开发证书时，可通过 [Tauri 官方签名入口](https://v2.tauri.app/distribute/sign/macos/)的环境变量 `APPLE_SIGNING_IDENTITY` 构建本机使用的包：
+
+```sh
+APPLE_SIGNING_IDENTITY='<本机证书身份>' pnpm tauri build --bundles app
+codesign --verify --deep --strict src-tauri/target/release/bundle/macos/Audie.app
+```
+
+开发 runner 的 `scripts/dev-sign-run.sh` 和 `.cargo/config.toml` 在维护者本机通过 `.git/info/exclude` 忽略；新 clone/worktree 不会自动继承它们。不得据现有本机 runner 宣称所有开发者均有稳定签名。签名身份可由上述环境变量显式传入，不将证书或私有配置提交。
+
+同标识符的旧 `/Applications/Audie.app` 与临时测试副本并存时，系统可能混用代码身份。本轮系统日志确实将临时副本关联到旧安装的静态摘要并拒绝权限。应完整备份旧安装，再在固定安装路径使用稳定签名包，通过 Finder/Launch Services 启动后验证；不以终端父进程继承的权限代替 app 本身授权，不反复重签临时副本或清空全机权限。
+
+此流程用于本机开发验收，未配置 Developer ID、公证或公开发布。正式分发仍按上文的独立签名流程处理。
+
+---
