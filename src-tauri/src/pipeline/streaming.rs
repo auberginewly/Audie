@@ -1,4 +1,12 @@
-use super::*;
+use super::config::doubao_streaming_config;
+use super::context::ActiveStreamingSession;
+use super::STREAMING_AUDIO_QUEUE_CAPACITY;
+use crate::asr::TranscriptStream;
+use crate::error::AppResult;
+use crate::managers::transcription::TranscriptionManager;
+use std::sync::mpsc;
+use tauri::AppHandle;
+
 pub(super) fn start_streaming_session(
     app: &AppHandle,
     transcription: &TranscriptionManager,

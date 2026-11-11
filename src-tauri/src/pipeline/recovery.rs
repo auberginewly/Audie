@@ -1,8 +1,20 @@
-use super::*;
-/// ✕ on the capsule — cancel into a "已取消" toast that offers 撤销操作. The take
-/// is always kept (lazy: from Recording we just stash the raw audio without
-/// transcribing; mid-Processing the worker already stored it), so undo can
-/// resume it. The toast auto-settles to Idle after `TERMINAL_HOLD_MS`.
+use super::context::{LastTakeSlot, TakeGen};
+use super::events::ErrorPayload;
+use super::processing::{record_history, spawn_transcription};
+use super::recording::recorded_take;
+use super::streaming::clear_streaming_session;
+use super::{hide_overlay, with_hotkey_ctx, TERMINAL_HOLD_MS};
+use crate::error::AppError;
+use crate::state::{AppState, StateMachine};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
+
+/// 录音中取消只缓存音频，撤销时再转写；处理中取消保留已有结果，
+/// 未完成的转写可能在恢复时重做。
+/// 终态保留窗口供用户操作，超时后统一清理。
 pub(crate) fn cancel_recording(app: AppHandle) {
     with_hotkey_ctx(&app, |ctx| {
         let generation = {
@@ -13,7 +25,7 @@ pub(crate) fn cancel_recording(app: AppHandle) {
             }
             let generation = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
             if phase == AppState::Recording {
-                // Lazy cancel: keep the audio, without paying for another ASR call.
+                // 只缓存音频，用户没有撤销时不额外支付一次 ASR 请求。
                 clear_streaming_session(ctx.streaming);
                 match ctx.audio.stop_capture() {
                     Ok(recorded) => *cached = Some(recorded_take(ctx, recorded.audio, generation)),
@@ -41,9 +53,8 @@ pub(crate) fn cancel_recording(app: AppHandle) {
     });
 }
 
-/// Resume the kept take from a terminal toast: 撤销操作 / 重试 run the full pipeline
-/// (transcribe if needed → enhance → inject); `raw_only` (插入原文) injects the
-/// transcript verbatim, skipping enhance. Re-enters via Cancel/Error → Processing.
+/// 撤销与重试共用恢复入口，复用已完成的转写；插入原文则跳过润色。
+/// 只允许从 Cancel/Error 恢复，避免处理中重复提交。
 pub(super) fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
     with_hotkey_ctx(app, |ctx| {
         let (take, my_gen) = {
@@ -81,25 +92,23 @@ pub(super) fn resume_from_last_take(app: &AppHandle, raw_only: bool) {
     });
 }
 
-/// 撤销操作 on the cancelled toast — resume the kept take through the full pipeline.
+/// 撤销取消操作，沿原模式恢复完整链路。
 pub(crate) fn undo_last(app: AppHandle) {
     resume_from_last_take(&app, false);
 }
 
-/// 重试 on the error toast — re-run the full pipeline on the kept take.
+/// 失败后重试保留的音频与上下文。
 pub(crate) fn retry_last(app: AppHandle) {
     resume_from_last_take(&app, false);
 }
 
-/// 插入原文 on the error toast — inject the raw transcript, skipping enhance.
+/// 跳过润色；改写模式保留原选区，其他模式使用转写原文。
 pub(crate) fn insert_raw_last(app: AppHandle) {
     resume_from_last_take(&app, true);
 }
 
-/// On cancel, preserve the transcript if one already exists (a mid-Processing cancel
-/// where ASR returned, or streaming had a final) as a normal history entry — the user
-/// keeps the text even though it wasn't injected. A cancel with no transcript (the
-/// usual mid-recording ✕) records nothing. Best-effort; no change to the cancel path.
+/// 已取消但已有转写时仍存历史，让用户找回文字；没有转写则不建空记录。
+/// 历史失败只记诊断，不改变取消状态。
 pub(super) fn record_cancelled_transcript(app: &AppHandle, last_take: &LastTakeSlot) {
     let take = match last_take.lock().as_ref() {
         Some(take)
@@ -124,9 +133,7 @@ pub(super) fn record_cancelled_transcript(app: &AppHandle, last_take: &LastTakeS
     }
 }
 
-/// Emit the error, flash the Error toast, and auto-settle to Idle after the
-/// terminal hold (the toast's 重试 / 插入原文 can act first). Spawns its own thread
-/// so callers on the hotkey path don't block.
+/// 错误统一通过事件发布并定时回到 Idle；重试或插入原文可以先接管状态。
 pub(super) fn enter_error(
     app: AppHandle,
     state: Arc<StateMachine>,
@@ -152,9 +159,7 @@ pub(super) fn enter_error(
     spawn_settle_after(app, state, TERMINAL_HOLD_MS, generation);
 }
 
-/// Auto-settle a terminal state to Idle after a hold. If the user acts first
-/// (撤销 / 重试 → Processing), `settle_to_idle` finds a non-terminal state and
-/// the timer is a no-op, so the live capsule isn't yanked away mid-resume.
+/// 操作后状态已变成 Processing，旧定时器会被 settle_to_idle 拒绝，不能隐藏正在恢复的胶囊。
 pub(super) fn spawn_settle_after(
     app: AppHandle,
     state: Arc<StateMachine>,
@@ -167,10 +172,7 @@ pub(super) fn spawn_settle_after(
     });
 }
 
-/// Transition to Idle and hide the overlay window. The single exit point for the
-/// pipeline — overlay visibility mirrors "not Idle". Hides ONLY when the Idle
-/// transition actually applied: a stale settle timer firing after the user tapped
-/// 撤销 / 重试 (now Processing) must not hide the capsule out from under them.
+/// 只有本轮确实切到 Idle 才隐藏胶囊；旧轮次或旧定时器不能打断新录音与恢复。
 pub(super) fn settle_to_idle(
     app: &AppHandle,
     state: &Arc<StateMachine>,

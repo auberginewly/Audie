@@ -1,8 +1,26 @@
-use super::*;
+use super::config::prompt_from_snapshot;
+use super::context::{
+    ActivePromptSlot, DictationMode, HotkeyContext, HotkeyRole, LastTake, RewriteSourceSlot,
+};
+use super::processing::spawn_transcription;
+use super::recovery::enter_error;
+use super::streaming::{
+    clear_streaming_session, start_streaming_session, streaming_result_after_capture,
+    take_streaming_session,
+};
+use super::{show_overlay, with_hotkey_ctx};
+use crate::asr::AudioData;
+use crate::error::AppError;
+use crate::platform::Platform;
+use crate::settings;
+use crate::state::AppState;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tauri::{AppHandle, Manager};
+
 pub(super) fn handle_hotkey(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
-    // Toggle control model: each trigger tap starts a take (from Idle) or finishes
-    // it (from Recording). A tap mid-pipeline (Processing/Success/Error/Cancel) is
-    // a no-op. `role` (which key fired) only matters when starting — it picks the mode.
+    // toggle 模式两次按键分别开始、结束；处理或终态期间忽略按键，防止重入。
+    // 只有开始时需要 role 来决定本轮模式。
     match ctx.state.current() {
         AppState::Idle => start_recording(ctx, role),
         AppState::Recording => finish_recording(ctx),
@@ -10,11 +28,9 @@ pub(super) fn handle_hotkey(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
     }
 }
 
-/// Enter the front half of the pipeline: permission gate → open cpal stream →
-/// Recording state → overlay. No ASR happens until finish, because P1 uses
-/// batch transcription.
+/// 先确认权限并成功打开音频，再进入 Recording；可用时同时建立流式 ASR 会话。
 pub(super) fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
-    // Invalidate delayed workers/timers before they can touch a new recording.
+    // 先推进轮次，让旧任务和旧定时器无法影响这次录音。
     let my_gen = {
         let mut cached = ctx.last_take.lock();
         let generation = ctx.take_gen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -22,14 +38,12 @@ pub(super) fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
         generation
     };
     let platform = ctx.app.state::<Arc<dyn Platform>>();
-    // Snapshot the frontmost app NOW — before probing the selection (read_selection's
-    // synthetic Cmd+C targets it), before the permission gate (whose first-run TCC
-    // prompt changes frontmost), and before the overlay. inject restores focus here.
+    // 必须在选区探测、权限弹窗、胶囊显示之前记住前台 App。
+    // 合成 Cmd+C 和最终注入都要回到这个目标，权限弹窗可能改变当前焦点。
     platform.capture_focus_target();
 
-    // Which trigger fired + the selection state decide the mode. 写作键 → 写作; fn with a
-    // selection → 改写 (grab the selected text now, replace it on finish); fn with no
-    // selection → 润色. read_selection probes via the clipboard (片2).
+    // 写作键直接进入写作；主键用开始时的选区决定改写或润色。
+    // 改写选区此时就冻结，避免处理结束时取到别的内容。
     let mode = match role {
         HotkeyRole::Compose => DictationMode::Compose,
         HotkeyRole::Primary => match platform.read_selection(ctx.app) {
@@ -48,8 +62,7 @@ pub(super) fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
     *ctx.app.state::<ActivePromptSlot>().0.lock() =
         Some(prompt_from_snapshot(None, &settings, mode));
 
-    // Gate on mic permission before recording: a denial otherwise captures silence
-    // and the user only sees a Whisper hallucination. Flash red instead (§3.7).
+    // 拒绝麦克风权限时立即反馈，避免静音被 ASR 误识别成文字。
 
     if !platform.ensure_microphone_permission() {
         let _ = show_overlay(ctx.app);
@@ -61,11 +74,9 @@ pub(super) fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
         );
         return;
     }
-    // Start capture BEFORE the Idle→Recording transition: a cpal failure
-    // (no input device, build_input_stream blew up, etc.) needs to surface
-    // as Idle→Error (§3.7 Device) which is only legal from Idle. Doing the
-    // transition first would strand us in Recording with a dead stream.
-    // Free the mic if the Settings preview monitor is running — recording owns it.
+    // 先打开设备再切 Recording：设备失败需要走 Idle → Error，
+    // 若先改状态，可能留下没有音频流的 Recording。
+    // 同时先停设置页的预览监听，录音独占麦克风。
     ctx.audio.stop_monitor();
     let streaming_start = start_streaming_session(ctx.app, ctx.transcription, ctx.streaming);
     let capture_result = match streaming_start {
@@ -87,8 +98,7 @@ pub(super) fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
             log::error!("show overlay: {err:?}");
         }
     } else {
-        // Transition rejected (shouldn't happen — we just confirmed Idle).
-        // Tear down the capture we just opened.
+        // 状态切换若被拒绝，释放刚打开的音频流，避免资源泄漏。
         clear_streaming_session(ctx.streaming);
         if let Err(err) = ctx.audio.stop_capture() {
             log::warn!("rollback stop_capture: {err:?}");
@@ -96,14 +106,11 @@ pub(super) fn start_recording(ctx: &HotkeyContext<'_>, role: HotkeyRole) {
     }
 }
 
-/// Close the audio session and hand one complete utterance to the pipeline
-/// tail. The overlay stays visible through Processing/Success/Error so the
-/// user sees the result; it's hidden only when we settle back to Idle.
+/// 结束录音后胶囊继续展示处理与终态；统一到 Idle 时才隐藏，避免中途闪退。
 pub(super) fn finish_recording(ctx: &HotkeyContext<'_>) {
     let (my_gen, stopped) = {
-        // Serialize this handoff with cancel/resume/terminal cleanup. In
-        // particular, a cancel cannot observe Processing before its cache exists.
-        // Only stopping capture happens here; provider calls always run unlocked.
+        // 与取消、恢复、终态清理共用锁，保证进入 Processing 时缓存已就绪。
+        // 锁内只做录音交接；网络 provider 调用在释放锁之后执行。
         let mut cached = ctx.last_take.lock();
         if ctx.state.current() != AppState::Recording {
             return;
@@ -178,7 +185,7 @@ pub(super) fn duration_ms(audio: &AudioData) -> u64 {
         .unwrap_or_default()
 }
 
-/// ✓ on the capsule — finish the current take (same as a second hotkey press).
+/// 胶囊确认按钮复用第二次快捷键的结束流程。
 pub(crate) fn confirm_recording(app: AppHandle) {
     with_hotkey_ctx(&app, |ctx| {
         if ctx.state.current() == AppState::Recording {

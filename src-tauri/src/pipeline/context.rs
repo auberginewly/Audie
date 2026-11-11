@@ -1,9 +1,18 @@
-use super::*;
+use super::processing::rewrite_history_raw;
+use crate::asr::{AudioData, TranscriptStream};
+use crate::managers::audio::AudioManager;
+use crate::managers::enhance::EnhanceManager;
+use crate::managers::inject::InjectManager;
+use crate::managers::transcription::TranscriptionManager;
+use crate::state::StateMachine;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use tauri::AppHandle;
+
 pub(super) type ActiveStreamingSession = Arc<parking_lot::Mutex<Option<TranscriptStream>>>;
 
-/// The last utterance, kept so a terminal toast can resume it: 撤销操作 (after a
-/// cancel), 重试 (after an error), or 插入原文. Stored the moment recording
-/// finishes; `transcript` fills in once ASR returns (None if it never got there).
+/// 终态保留上一轮音频和上下文，让取消后撤销、失败后重试仍沿用原模式。
+/// ASR 返回后才填 transcript；未获得转写时保留音频供恢复。
 #[derive(Clone)]
 pub(super) struct LastTake {
     pub(super) audio: Arc<AudioData>,
@@ -26,14 +35,11 @@ impl LastTake {
 
 pub(super) type LastTakeSlot = Arc<parking_lot::Mutex<Option<LastTake>>>;
 
-/// Monotonic id of the take that may still inject. A worker captures its id when
-/// it spawns and only injects while the shared counter still equals it; tapping ✕
-/// mid-Processing bumps the counter, superseding the worker without racing it.
+/// 单调递增的录音轮次。取消会推进轮次，让后台任务即使晚返回也不能继续粘贴。
 pub(super) type TakeGen = Arc<AtomicU64>;
 
-/// What to do with the current take. `Polish` cleans the transcript (default fn key;
-/// 「AI 润色」开关开且配了 LLM 才润色，否则纯转写); `Compose` generates prose from spoken points (写作键).
-/// `Rewrite` applies spoken instructions to the captured selection.
+/// 润色清理转写；改写执行口述指令处理选区；写作根据口述要点生成内容。
+/// 润色开关只约束 Polish，另外两种模式需要显式调用 LLM。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum DictationMode {
     Polish,
@@ -42,7 +48,7 @@ pub(super) enum DictationMode {
 }
 
 impl DictationMode {
-    /// Stable history `mode` column value.
+    /// 历史记录使用稳定字符串，避免 Rust 枚举名变动影响已有数据。
     pub(super) fn as_str(self) -> &'static str {
         match self {
             DictationMode::Polish => "polish",
@@ -52,25 +58,22 @@ impl DictationMode {
     }
 }
 
-/// Which trigger fired — set on the press that starts a take. `start_recording`
-/// resolves it to a `DictationMode` from the captured selection. Hotkey wiring
-/// shares this type without accessing the in-flight context.
+/// 这里只表示哪个快捷键触发；是否有选区要到录音开始时判断，快捷键层不接触录音上下文。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum HotkeyRole {
     Primary,
     Compose,
 }
 
-/// The in-flight take's mode, set when recording starts (which trigger fired) and
-/// read by the pipeline tail. A toggle keeps it across the start→finish gap.
+/// toggle 的开始和结束是两次独立调用，模式必须保存到本轮结束。
 pub(super) type ActiveModeSlot = Arc<parking_lot::Mutex<DictationMode>>;
 
-/// Keep the mode's original prompt even if settings change before a retry.
-// Tauri keys state by concrete type: a type alias of RewriteSourceSlot would
-// share its storage, so the prompt needs a distinct wrapper.
+/// 冻结本轮提示词，避免修改设置后重试改变原意。
+// Tauri 按具体类型区分 state；若与 RewriteSourceSlot 使用相同的类型别名，
+// 两份数据会共用存储，所以提示词使用独立包装类型。
 pub(super) struct ActivePromptSlot(pub(super) parking_lot::Mutex<Option<String>>);
 
-/// 改写模式抓到的选中文字：start_recording 探选中时存，finish 拼进 LLM 输入后用。
+/// 开始时保存选区，结束后作为 LLM 的改写来源；不再探测可能已变化的当前选区。
 pub(super) type RewriteSourceSlot = Arc<parking_lot::Mutex<Option<String>>>;
 
 pub(super) struct HotkeyContext<'a> {
@@ -86,9 +89,7 @@ pub(super) struct HotkeyContext<'a> {
     pub(super) active_mode: &'a ActiveModeSlot,
 }
 
-/// What happened to the transcript on the enhance step — distinguishes "polishing
-/// was off" from "polished" (both inject the text, but only the latter has an
-/// enhanced version worth storing) from "polish failed → raw fallback".
+/// 区分未启用、成功润色、失败回退：三者均可注入，但只有成功润色才存 enhanced_text。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EnhanceOutcome {
     Disabled,

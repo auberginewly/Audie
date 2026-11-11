@@ -1,4 +1,12 @@
-use super::*;
+use super::context::DictationMode;
+use crate::asr::doubao::config as doubao_config;
+use crate::managers::enhance::EnhanceConfig;
+use crate::managers::transcription::TranscriptionConfig;
+use crate::platform::Platform;
+use crate::settings;
+use std::sync::Arc;
+use tauri::{AppHandle, Manager};
+
 pub(super) fn transcription_config(app: &AppHandle) -> TranscriptionConfig {
     let settings = settings::load_settings(app);
     let platform = app.state::<Arc<dyn Platform>>();
@@ -22,8 +30,7 @@ pub(super) fn transcription_config_from_settings(
     let doubao_app_id = (asr_provider == "doubao_stream")
         .then(|| read_secret(doubao_config::SECRET_APP_ID))
         .flatten();
-    // Each new cloud ASR reads only its own keychain key (and only when selected),
-    // so picking another provider never touches an unrelated secret.
+    // 只读当前 ASR 的钥匙串条目，切换 provider 不应触碰无关密钥。
     let glm_api_key = (asr_provider == "glm")
         .then(|| read_secret(crate::asr::glm::SECRET_API_KEY))
         .flatten();
@@ -68,9 +75,7 @@ pub(super) fn doubao_streaming_config_from_settings(
     resource_id: String,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> Option<TranscriptionConfig> {
-    // Doubao streaming is opt-in: it only kicks in when the user explicitly picks
-    // doubao in the model selector (asr_provider == "doubao_stream"). A saved token
-    // alone must NOT hijack every recording — the explicit provider choice wins.
+    // 选中豆包才启用流式；仅有已保存 token 不能抢占用户选择的 ASR。
     if asr_provider != "doubao_stream" {
         return None;
     }
@@ -79,8 +84,7 @@ pub(super) fn doubao_streaming_config_from_settings(
 
     Some(TranscriptionConfig {
         asr_provider: "doubao_stream".into(),
-        // Doubao uses resource_id, not model; asr_model stays blank for it (left
-        // for a future provider-specific variant mapping if豆包 ever needs one).
+        // 豆包通过 resource_id 选择服务，不使用通用的 asr_model 字段。
         asr_model: String::new(),
         openai_api_key: None,
         doubao_endpoint: Some(endpoint),
@@ -96,9 +100,8 @@ pub(super) fn doubao_streaming_config_from_settings(
     })
 }
 
-/// Prepend the main language as one line so the LLM knows it, without exposing a
-/// {{placeholder}} in the editable prompt. The dropdown wins; empty = follow the
-/// system locale; 中文 as a last resort. Shared by 润色 and 写作.
+/// 把主要语言前置到提示词，用户不必在编辑器里维护占位符。
+/// 未选择时跟随系统，读不到系统语言才回退中文。
 pub(super) fn prepend_language(
     app: &AppHandle,
     settings: &settings::Settings,
@@ -148,9 +151,7 @@ pub(super) fn enhance_config(
     )
 }
 
-/// Enhance config for the History 重试 — same prompt/provider. `force_enabled` is true
-/// (the user explicitly asked to polish this entry), so it runs even when 润色 wouldn't
-/// auto-trigger; a missing key then surfaces as a failure rather than silence.
+/// 历史记录的重试属于显式操作，不受自动润色开关限制；缺 key 要显示失败。
 pub(crate) fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
     let settings = settings::load_settings(app);
     let enhance_prompt = prepend_language(app, &settings, &settings.enhance_prompt);
@@ -159,7 +160,7 @@ pub(crate) fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
     enhance_config_from_settings(
         settings.llm_provider,
         true,
-        // 显式触发：force 已 short-circuit，polish_toggle 不参与（不看「AI 润色」开关）。
+        // 显式重试已由 force_enabled 决定，不受润色开关影响。
         true,
         enhance_prompt,
         settings.openai_compatible_base_url,
@@ -169,9 +170,8 @@ pub(crate) fn reenhance_config(app: &AppHandle) -> EnhanceConfig {
     )
 }
 
-// 8 args = a flat 1:1 map of the settings fields driving enhance, plus a read_secret
-// injection point for tests. Grouping into a struct would shuffle the same fields for
-// no clarity gain on a pure mapper, so allow the extra arg here.
+// 参数与设置字段一一对应，并允许测试注入密钥读取函数；
+// 单为减少参数再包装一层只会增加映射，保留这个局部例外。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn enhance_config_from_settings(
     llm_provider: String,
@@ -183,14 +183,10 @@ pub(super) fn enhance_config_from_settings(
     llm_api_key_id: String,
     mut read_secret: impl FnMut(&str) -> Option<String>,
 ) -> EnhanceConfig {
-    // Skip the keychain read entirely when 润色 can't run anyway (toggle off and not
-    // forced) — only touch the secret store when the key is actually needed (CLAUDE.md
-    // keychain note). force_enabled (compose / rewrite / History 重试) always wants it.
+    // 自动润色关闭时不访问钥匙串；写作、改写、历史重试则按显式意图读取。
     let want_enhance = force_enabled || polish_toggle;
 
-    // Read the active provider's own key (4b). Empty id = key-optional local
-    // provider (Ollama / LM Studio) → no key; build_provider allows that for
-    // localhost endpoints.
+    // 本地 Ollama / LM Studio 允许免 key，空 id 不触发钥匙串读取。
     let openai_compatible_api_key =
         if want_enhance && llm_provider == "openai_compatible" && !llm_api_key_id.is_empty() {
             read_secret(&llm_api_key_id)
@@ -198,11 +194,8 @@ pub(super) fn enhance_config_from_settings(
             None
         };
 
-    // 润色 enablement: explicit triggers (force_enabled — compose / rewrite / History
-    // 重试) always run, so a missing key surfaces as a failure instead of silence.
-    // Otherwise 润色 runs only when the user's 「AI 润色」 toggle is on AND the LLM is
-    // configured (a key present, or a local endpoint that needs none). Toggle off =
-    // 纯转写 even when a key exists (Disabled, no 去设置 toast) — 给想要原文的人选择权.
+    // 显式调用即使缺配置也执行并反馈失败；自动润色仅在开关开启且配置可用时执行。
+    // 关闭开关就保留纯转写，不应因已有 key 强制润色。
     let enhance_enabled = force_enabled
         || (polish_toggle
             && (openai_compatible_api_key.is_some()

@@ -1,10 +1,24 @@
-use super::*;
-/// Run the (blocking) transcription off the hotkey thread, then drive the
-/// P1 pipeline tail: ASR → `final-transcript` event → optional LLM enhance →
-/// inject at the caret → Success → Idle. Any failure is mapped to `error` and
-/// recovers through the same Idle exit. PROJECT_SPEC.md §3.2 / §3.3 / §4.3.
-#[allow(clippy::too_many_arguments)] // pipeline tail wiring; splitting it would
-                                     // just shuffle the same handles around.
+use super::config::{enhance_config, transcription_config};
+use super::context::{DictationMode, EnhanceOutcome, LastTake, LastTakeSlot, TakeGen};
+use super::events::{EnhanceProgress, FinalTranscript};
+use super::recording::is_digital_silence;
+use super::recovery::{enter_error, spawn_settle_after};
+use super::{SUCCESS_HOLD_MS, TERMINAL_HOLD_MS};
+use crate::asr::{AudioData, TranscriptStream};
+use crate::error::{AppError, AppResult};
+use crate::managers::enhance::{fallback_after_enhance_failure, EnhanceConfig, EnhanceManager};
+use crate::managers::history::HistoryManager;
+use crate::managers::inject::InjectManager;
+use crate::managers::transcription::TranscriptionManager;
+use crate::state::{AppState, StateMachine};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread;
+use tauri::{AppHandle, Emitter, Manager};
+
+/// 转写和润色会阻塞，放到工作线程以免卡住快捷键和系统 UI。
+/// 首次处理与恢复共用尾部：ASR → final 事件 → 可选润色 → 注入 → 终态。
+#[allow(clippy::too_many_arguments)] // 这些句柄来自同一条链路，另加容器只会转移接线。
 pub(super) fn spawn_transcription(
     app: AppHandle,
     state: Arc<StateMachine>,
@@ -26,8 +40,7 @@ pub(super) fn spawn_transcription(
         let text = match take.transcript.as_ref() {
             Some(text) => text.clone(),
             None => {
-                // Literal zeros indicate a broken/silent device; do not send them
-                // to ASR, which may hallucinate speech from digital silence.
+                // 持续数字静音通常意味着设备异常；送进 ASR 可能产生幻觉文字。
                 if duration_ms >= 200 && is_digital_silence(&take.audio) {
                     enter_no_content(app, state, duration_ms, take.mode, my_gen);
                     return;
@@ -43,8 +56,7 @@ pub(super) fn spawn_transcription(
             }
         };
 
-        // A cancelled take may keep its own late transcript for undo, but an old
-        // worker must never fill a resumed/new take or recreate a released one.
+        // 取消的轮次可以缓存晚到的转写用于撤销，但不能填入新轮次或复活已清理的缓存。
         cache_transcript(&last_take, my_gen, &text);
         if take_gen.load(Ordering::SeqCst) != my_gen {
             return;
@@ -64,8 +76,8 @@ pub(super) fn spawn_transcription(
                 duration_ms,
             },
         );
-        // Connection settings remain current so a corrected endpoint/key can be
-        // retried. Only the take's template text and rewrite source stay frozen.
+        // 连接配置取当前值，用户修好 endpoint/key 后才能重试；
+        // 提示词和改写选区仍保持录音开始时的快照。
         let config = if raw_only {
             EnhanceConfig::default()
         } else {
@@ -154,10 +166,8 @@ pub(super) fn resolve_transcript(
     transcription.transcribe(audio, &config)
 }
 
-/// Shared by first processing and every resume. Effects are passed in like the
-/// settings mapper's key reader, so tests can cancel inside a real LLM/inject
-/// boundary without a WebView, credentials, or keystrokes in the user's apps.
-/// None means cancelled; callers must not publish a terminal state in that case.
+/// 首次处理和恢复共用的注入尾部；副作用由调用方传入，测试可在边界模拟取消，
+/// 不需要 WebView、真实凭据或向用户应用发送按键。None 表示已取消，调用方不能发布终态。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn finish_pipeline_tail(
     take: &LastTake,
@@ -187,8 +197,7 @@ pub(super) fn finish_pipeline_tail(
             text.to_string()
         };
         let enhanced = enhance(&input, config);
-        // Cancellation while the blocking provider runs invalidates both its
-        // success and its failure; neither is allowed to initiate a paste.
+        // 阻塞的 provider 返回后再核对轮次；取消后不论成功或失败都不能开始粘贴。
         if take_gen.load(Ordering::SeqCst) != my_gen {
             return Ok(None);
         }
@@ -222,8 +231,7 @@ pub(super) fn finish_pipeline_tail(
     Ok(Some(outcome))
 }
 
-/// Persist one dictation outcome to the History store. Best-effort: a DB error only
-/// logs, never propagates — history is peripheral to the inject hot path.
+/// 历史是附属能力，写库失败只记录诊断，不打断已完成的注入。
 pub(super) fn record_history(
     app: &AppHandle,
     kind: &str,
@@ -238,10 +246,8 @@ pub(super) fn record_history(
     }
 }
 
-/// "No content recognized" outcome: record a `kind=empty` history entry and surface
-/// it on the overlay. Reuses the ERROR toast (which renders as a neutral card with no
-/// action buttons for this category — not the scary red device-error treatment), so
-/// the user gets immediate feedback plus a history row.
+/// 空结果复用 Error 事件并记录 empty 历史；前端按类别展示中性提示，
+/// 让用户知道这次确实执行过，同时不把无内容误报成设备故障。
 pub(super) fn enter_no_content(
     app: AppHandle,
     state: Arc<StateMachine>,
@@ -261,9 +267,7 @@ pub(super) fn enter_no_content(
     );
 }
 
-/// 改写历史的「原文」展示文本：口述指令 + 被改写的引用内容，分两段带小标题。History 原文框
-/// 用 `whitespace-pre-wrap` 渲染、换行保留，这样历史里看得出「对哪段内容、下了什么指令」。
-/// 与喂给 LLM 的 input（`原文/指令` 格式）不同——那个迁就 rewrite prompt，这个给人看。
+/// 历史用「指令 + 引用」让用户看懂改写了什么；与发送给 LLM 的格式分开维护。
 pub(super) fn rewrite_history_raw(instruction: &str, source: &str) -> String {
     format!("指令：{instruction}\n\n引用：\n{source}")
 }
